@@ -31,14 +31,14 @@ export const DEFERRED_COMPANION_OUTREACH_ACTION_KIND = 'notify.companion_outreac
 export type CompanionNotifyParams =
   | {
       mode: 'initiation';
-      action: 'send';
+      action: 'initiate_companion';
       target_kind: 'companion';
       contact_id: string;
       initiation_permit: string;
     }
   | {
       mode: 'continuation';
-      action: 'send';
+      action: 'send_companion';
       target_kind: 'companion';
       dyad_id: string;
       private_intent?: string;
@@ -173,20 +173,25 @@ export function isDeferredCompanionOutreachExecutionAuthorized(
     && isCurrentDeferredExecutionPolicyAuthorized(runtime);
 }
 
+function assertOptionalCompanionTargetKind(value: Record<string, unknown>, context: string): void {
+  if (value.target_kind !== undefined && value.target_kind !== COMPANION_NOTIFY_TARGET_KIND) {
+    throw new Error(`${context} requires target_kind=companion when supplied`);
+  }
+}
+
 function parseCompanionNotifyParams(value: unknown): CompanionNotifyParams {
   if (!isRecord(value)) throw new Error('companion notify params must be an object');
   if (value.action === 'list_dyads') {
     assertNoUnknownKeys(value, ['action', 'target_kind'], 'companion dyad list params');
-    if (value.target_kind !== COMPANION_NOTIFY_TARGET_KIND) {
-      throw new Error('companion dyad list requires target_kind=companion');
-    }
+    assertOptionalCompanionTargetKind(value, 'companion dyad list');
     return { mode: 'list', action: 'list_dyads', target_kind: 'companion' };
   }
   if (value.action === 'dyad_lifecycle') {
     assertNoUnknownKeys(value, [
       'action', 'target_kind', 'dyad_id', 'expected_revision', 'lifecycle_action',
     ], 'companion dyad lifecycle params');
-    if (value.target_kind !== COMPANION_NOTIFY_TARGET_KIND || !isRfc4122Uuid(value.dyad_id)) {
+    assertOptionalCompanionTargetKind(value, 'companion dyad lifecycle');
+    if (!isRfc4122Uuid(value.dyad_id)) {
       throw new Error('companion dyad lifecycle requires an exact dyad_id');
     }
     if (!Number.isSafeInteger(value.expected_revision) || Number(value.expected_revision) < 1) {
@@ -208,7 +213,8 @@ function parseCompanionNotifyParams(value: unknown): CompanionNotifyParams {
   }
   if (value.action === 'relay') {
     assertNoUnknownKeys(value, ['action', 'target_kind', 'dyad_id', 'intent'], 'human relay params');
-    if (value.target_kind !== COMPANION_NOTIFY_TARGET_KIND || !isRfc4122Uuid(value.dyad_id)) {
+    assertOptionalCompanionTargetKind(value, 'human relay');
+    if (!isRfc4122Uuid(value.dyad_id)) {
       throw new Error('human relay requires an exact open dyad_id');
     }
     if (typeof value.intent !== 'string' || !value.intent.trim()
@@ -223,7 +229,7 @@ function parseCompanionNotifyParams(value: unknown): CompanionNotifyParams {
       intent: value.intent,
     };
   }
-  if (value.action === 'send' && value.dyad_id !== undefined) {
+  if (value.action === 'send_companion') {
     const hasMessage = value.message !== undefined;
     const hasPrivateIntent = value.private_intent !== undefined;
     if (hasMessage && !hasPrivateIntent) {
@@ -232,7 +238,8 @@ function parseCompanionNotifyParams(value: unknown): CompanionNotifyParams {
         ['action', 'target_kind', 'dyad_id', 'message'],
         'companion direct message params',
       );
-      if (value.target_kind !== COMPANION_NOTIFY_TARGET_KIND || !isRfc4122Uuid(value.dyad_id)) {
+      assertOptionalCompanionTargetKind(value, 'companion continuation');
+      if (!isRfc4122Uuid(value.dyad_id)) {
         throw new Error('companion continuation requires an exact dyad_id');
       }
       if (typeof value.message !== 'string' || !value.message.trim()
@@ -241,7 +248,7 @@ function parseCompanionNotifyParams(value: unknown): CompanionNotifyParams {
       }
       return {
         mode: 'continuation',
-        action: 'send',
+        action: 'send_companion',
         target_kind: 'companion',
         dyad_id: value.dyad_id,
         message: value.message.trim(),
@@ -252,7 +259,8 @@ function parseCompanionNotifyParams(value: unknown): CompanionNotifyParams {
       ['action', 'target_kind', 'dyad_id', 'private_intent'],
       'companion continuation params',
     );
-    if (value.target_kind !== COMPANION_NOTIFY_TARGET_KIND || !isRfc4122Uuid(value.dyad_id)) {
+    assertOptionalCompanionTargetKind(value, 'companion continuation');
+    if (!isRfc4122Uuid(value.dyad_id)) {
       throw new Error('companion continuation requires an exact dyad_id');
     }
     if (typeof value.private_intent !== 'string' || !value.private_intent.trim()
@@ -261,7 +269,7 @@ function parseCompanionNotifyParams(value: unknown): CompanionNotifyParams {
     }
     return {
       mode: 'continuation',
-      action: 'send',
+      action: 'send_companion',
       target_kind: 'companion',
       dyad_id: value.dyad_id,
       private_intent: value.private_intent,
@@ -272,9 +280,10 @@ function parseCompanionNotifyParams(value: unknown): CompanionNotifyParams {
     ['action', 'target_kind', 'contact_id', 'initiation_permit'],
     'companion notify params',
   );
-  if (value.action !== 'send' || value.target_kind !== COMPANION_NOTIFY_TARGET_KIND) {
-    throw new Error('companion notify requires action=send and target_kind=companion');
+  if (value.action !== 'initiate_companion') {
+    throw new Error('companion initiation requires action=initiate_companion');
   }
+  assertOptionalCompanionTargetKind(value, 'companion initiation');
   if (typeof value.contact_id !== 'string'
     || !value.contact_id
     || value.contact_id.trim() !== value.contact_id) {
@@ -285,7 +294,7 @@ function parseCompanionNotifyParams(value: unknown): CompanionNotifyParams {
   }
   return {
     mode: 'initiation',
-    action: 'send',
+    action: 'initiate_companion',
     target_kind: 'companion',
     contact_id: value.contact_id,
     initiation_permit: value.initiation_permit,

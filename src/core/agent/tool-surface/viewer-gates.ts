@@ -81,10 +81,12 @@ export const TOOL_VIEWER_GATE_DECISIONS: Readonly<Record<string, Readonly<Record
     values_list: PERSONAL,
     values_add: write('values journal'),
     values_update: write('values journal'),
-    create_concern: write('concern'),
-    list_concerns: inTool('filterConcernsForViewer (trust x room sensitivity, contact scope)'),
-    resolve_concern: write('concern'),
-    transition_concern: write('concern'),
+  },
+  concerns: {
+    create: write('concern'),
+    list: inTool('filterConcernsForViewer (trust x room sensitivity, contact scope)'),
+    resolve: write('concern'),
+    transition: write('concern'),
   },
   identity: {
     list_layers: na('companion prompt configuration (identity by design)'),
@@ -178,8 +180,8 @@ export const TOOL_VIEWER_GATE_DECISIONS: Readonly<Record<string, Readonly<Record
     rollback: write('skill'),
   },
   wiki: {
-    // The personal wiki, wishes, projects, wardrobe and world notes are
-    // companion-wide and carry material from many conversations.
+    // The personal wiki and world notes are companion-wide and carry material
+    // from many conversations.
     list: PERSONAL,
     read: PERSONAL,
     search: PERSONAL,
@@ -187,6 +189,11 @@ export const TOOL_VIEWER_GATE_DECISIONS: Readonly<Record<string, Readonly<Record
     write: write('wiki'),
     import: write('wiki'),
     propose_shared_world: write('shared world proposal'),
+    world_notes_read: PERSONAL,
+    world_note: write('world note'),
+  },
+  projects: {
+    // Personal wishes, projects, and wardrobe looks are companion-wide.
     wish_list: PERSONAL,
     wish_read: PERSONAL,
     wish_create: write('wish'),
@@ -200,8 +207,6 @@ export const TOOL_VIEWER_GATE_DECISIONS: Readonly<Record<string, Readonly<Record
     wardrobe_read: PERSONAL,
     wardrobe_save: write('wardrobe'),
     wardrobe_revise: write('wardrobe'),
-    world_notes_read: PERSONAL,
-    world_note: write('world note'),
   },
   schedule: {
     list: inTool('follow-ups and reminders gated by their conversation (schedule-visibility)'),
@@ -224,6 +229,11 @@ export const TOOL_VIEWER_GATE_DECISIONS: Readonly<Record<string, Readonly<Record
   notify: {
     brief: write('notification'),
     send: write('notification'),
+    initiate_companion: write('notification'),
+    send_companion: write('notification'),
+    list_dyads: na('owned dyad authorization metadata only; no conversation content'),
+    dyad_lifecycle: write('dyad lifecycle'),
+    relay: write('human relay'),
     consider: write('notification'),
     approval_request: write('approval request'),
     clarify: write('clarification'),

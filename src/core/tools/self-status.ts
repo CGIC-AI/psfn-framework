@@ -583,7 +583,7 @@ export function createSelfStatusTool(runtime: SelfStatusToolRuntime): SubstrateA
     label: 'self_status',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.self_status,
     parameters: Type.Object({
-      action: Type.Optional(Type.Union(
+      action: Type.Union(
         [
           Type.Literal('capabilities'),
           Type.Literal('snapshot'),
@@ -593,9 +593,9 @@ export function createSelfStatusTool(runtime: SelfStatusToolRuntime): SubstrateA
           ...SELF_AVAILABILITY_ACTIONS.map(action => Type.Literal(action)),
         ],
         {
-          description: 'capabilities returns only the current tier and effective grant; snapshot (default) returns the broader runtime snapshot; diagnose returns the Kubernetes self-diagnosis report; logs returns redacted recent diagnostics; conformance runs the tool-surface sweep.',
+          description: 'Required self_status action: capabilities, snapshot, diagnose, logs, conformance, or availability_*.',
         },
-      )),
+      ),
       recentChannelLimit: Type.Optional(Type.Number({
         minimum: 1,
         maximum: 20,

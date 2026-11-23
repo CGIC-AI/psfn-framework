@@ -286,12 +286,13 @@ describe('capability tool gating', () => {
     expect(resolveToolRequiredCapabilities(createTool('self_status').tool, { action: 'availability_list_peers' })).toEqual(['internal.read']);
     expect(resolveToolRequiredCapabilities(createTool('self_status').tool, { action: 'availability_publish' })).toEqual(['external.companion']);
     expect(resolveToolRequiredCapabilities(createTool('notify').tool, {
-      action: 'send',
-      target_kind: 'companion',
+      action: 'initiate_companion',
+    })).toEqual(['external.companion']);
+    expect(resolveToolRequiredCapabilities(createTool('notify').tool, {
+      action: 'send_companion',
     })).toEqual(['external.companion']);
     expect(resolveToolRequiredCapabilities(createTool('notify').tool, {
       action: 'consider',
-      target_kind: 'companion',
     })).toEqual(['external.companion']);
     expect(resolveToolRequiredCapabilities(createTool('notify').tool, {
       action: 'send',
@@ -720,27 +721,34 @@ describe('capability tool gating', () => {
     await memoryReadOnly.execute('mem-shared-bg', { action: 'shared_background', contact_a: 'a', contact_b: 'b' });
     expect(memory.executeSpy).toHaveBeenCalledTimes(2);
 
-    const orient = createTool('orient');
-    const orientReadOnly = gateToolWithCapabilities(
-      orient.tool,
+    const concerns = createTool('concerns');
+    const concernsReadOnly = gateToolWithCapabilities(
+      concerns.tool,
       () => accessForTier('custom', ['identity.read']),
     );
-    await orientReadOnly.execute('orient-list-concerns', { action: 'list_concerns' });
-    expect(orient.executeSpy).toHaveBeenCalledTimes(1);
+    await concernsReadOnly.execute('concerns-list', { action: 'list' });
+    expect(concerns.executeSpy).toHaveBeenCalledTimes(1);
 
-    const concernCreateDenied = await orientReadOnly.execute('orient-create-concern-denied', {
-      action: 'create_concern',
+    const concernCreateDenied = await concernsReadOnly.execute('concerns-create-denied', {
+      action: 'create',
     });
-    expect(orient.executeSpy).toHaveBeenCalledTimes(1);
+    expect(concerns.executeSpy).toHaveBeenCalledTimes(1);
     expect(fromAny(concernCreateDenied.content[0]).text).toContain('identity.write.runtime');
 
+    const concernsWriteOnly = gateToolWithCapabilities(
+      concerns.tool,
+      () => accessForTier('custom', ['identity.write.runtime']),
+    );
+    await concernsWriteOnly.execute('concerns-create', { action: 'create' });
+    expect(concerns.executeSpy).toHaveBeenCalledTimes(2);
+
+    const orient = createTool('orient');
     const orientWriteOnly = gateToolWithCapabilities(
       orient.tool,
       () => accessForTier('custom', ['identity.write.runtime']),
     );
-    await orientWriteOnly.execute('orient-create-concern', { action: 'create_concern' });
     await orientWriteOnly.execute('orient-append', { action: 'append' });
-    expect(orient.executeSpy).toHaveBeenCalledTimes(3);
+    expect(orient.executeSpy).toHaveBeenCalledTimes(1);
 
     const automataBus = createTool('automata_bus');
     const busWriteOnly = gateToolWithCapabilities(

@@ -72,7 +72,8 @@ const SYSTEM_APPROVAL_REQUEST_SENDER = Object.freeze({
 
 export type { NotificationPort } from '../../boundary/gateway/notification-port.js';
 
-export type NotifyAction = 'brief' | 'send' | 'approval_request' | 'clarify' | 'list_dyads'
+export type NotifyAction = 'brief' | 'send' | 'initiate_companion' | 'send_companion'
+  | 'approval_request' | 'clarify' | 'list_dyads'
   | 'dyad_lifecycle' | 'relay' | SocialOutreachNotifyAction;
 export type NotifyDeliveryChannel = 'discord' | 'email';
 export type NotifyDelivery = 'ntfy' | NotifyDeliveryChannel;
@@ -564,8 +565,8 @@ function buildNotifyToolRequest(params: NotifyToolParams): NotifyRequest {
         budgetChannel: params.budget_channel,
       };
     case 'send':
-      if (params.target_kind === COMPANION_NOTIFY_TARGET_KIND) {
-        throw new Error('companion notify requests must use the companion handoff');
+      if ((params as { target_kind?: string }).target_kind === COMPANION_NOTIFY_TARGET_KIND) {
+        throw new Error('use action=initiate_companion or action=send_companion for companion outreach');
       }
       return {
         action: 'send',
@@ -697,6 +698,8 @@ function normalizeAction(value: string): NotifyAction {
     case 'brief':
       return 'brief';
     case 'send':
+    case 'initiate_companion':
+    case 'send_companion':
     case 'approval_request':
     case 'clarify': case 'list_dyads': case 'dyad_lifecycle': case 'relay':
     case 'outreach_send': case 'outreach_later':
@@ -982,7 +985,7 @@ const notifyToolParameters = Type.Union([
   }, { additionalProperties: false }),
   Type.Object({
     action: Type.Literal('relay'),
-    target_kind: Type.Literal(COMPANION_NOTIFY_TARGET_KIND),
+    target_kind: Type.Optional(Type.Literal(COMPANION_NOTIFY_TARGET_KIND)),
     dyad_id: Type.String({
       description: 'Exact already-authorized open dyad UUID returned by action=list_dyads.',
     }),
@@ -992,8 +995,8 @@ const notifyToolParameters = Type.Union([
     }),
   }, { additionalProperties: false }),
   Type.Object({
-    action: Type.Literal('send'),
-    target_kind: Type.Literal(COMPANION_NOTIFY_TARGET_KIND),
+    action: Type.Literal('initiate_companion'),
+    target_kind: Type.Optional(Type.Literal(COMPANION_NOTIFY_TARGET_KIND)),
     contact_id: Type.String({
       minLength: 1,
       description: 'Exact canonical contact ID from contact lookup.',
@@ -1005,7 +1008,7 @@ const notifyToolParameters = Type.Union([
   }, { additionalProperties: false }),
   Type.Object({
     action: Type.Literal('consider'),
-    target_kind: Type.Literal(COMPANION_NOTIFY_TARGET_KIND),
+    target_kind: Type.Optional(Type.Literal(COMPANION_NOTIFY_TARGET_KIND)),
     contact_id: Type.String({
       minLength: 1,
       description: 'Exact canonical contact ID from contact lookup.',
@@ -1017,8 +1020,8 @@ const notifyToolParameters = Type.Union([
     }),
   }, { additionalProperties: false }),
   Type.Object({
-    action: Type.Literal('send'),
-    target_kind: Type.Literal(COMPANION_NOTIFY_TARGET_KIND),
+    action: Type.Literal('send_companion'),
+    target_kind: Type.Optional(Type.Literal(COMPANION_NOTIFY_TARGET_KIND)),
     dyad_id: Type.String({
       description: 'Exact dyad UUID returned by action=list_dyads.',
     }),
@@ -1028,8 +1031,8 @@ const notifyToolParameters = Type.Union([
     }),
   }, { additionalProperties: false }),
   Type.Object({
-    action: Type.Literal('send'),
-    target_kind: Type.Literal(COMPANION_NOTIFY_TARGET_KIND),
+    action: Type.Literal('send_companion'),
+    target_kind: Type.Optional(Type.Literal(COMPANION_NOTIFY_TARGET_KIND)),
     dyad_id: Type.String({
       description: 'Exact already-approved open dyad UUID returned by action=list_dyads.',
     }),
@@ -1040,11 +1043,11 @@ const notifyToolParameters = Type.Union([
   }, { additionalProperties: false }),
   Type.Object({
     action: Type.Literal('list_dyads'),
-    target_kind: Type.Literal(COMPANION_NOTIFY_TARGET_KIND),
+    target_kind: Type.Optional(Type.Literal(COMPANION_NOTIFY_TARGET_KIND)),
   }, { additionalProperties: false }),
   Type.Object({
     action: Type.Literal('dyad_lifecycle'),
-    target_kind: Type.Literal(COMPANION_NOTIFY_TARGET_KIND),
+    target_kind: Type.Optional(Type.Literal(COMPANION_NOTIFY_TARGET_KIND)),
     dyad_id: Type.String({ description: 'Exact dyad UUID returned by action=list_dyads.' }),
     expected_revision: Type.Integer({ minimum: 1 }),
     lifecycle_action: Type.Union([
@@ -1097,6 +1100,8 @@ const notifyModelParameters = Type.Object({
   action: Type.Union([
     Type.Literal('brief'),
     Type.Literal('send'),
+    Type.Literal('initiate_companion'),
+    Type.Literal('send_companion'),
     Type.Literal('consider'),
     Type.Literal('approval_request'),
     Type.Literal('clarify'),
@@ -1109,7 +1114,7 @@ const notifyModelParameters = Type.Object({
     description: 'Required notify action. Supply every field required for the selected action.',
   }),
   message: Type.Optional(Type.String({
-    description: 'Body text for action=brief, action=send (external or approved companion dyad_id), or action=outreach_send.',
+    description: 'Body text for action=brief, action=send (external), action=send_companion (direct DM on open dyad), or action=outreach_send.',
   })),
   title: Type.Optional(Type.String({ description: 'Optional title for action=brief.' })),
   priority: Type.Optional(Type.Integer({
@@ -1128,29 +1133,29 @@ const notifyModelParameters = Type.Object({
     Type.Literal('external'),
     Type.Literal(COMPANION_NOTIFY_TARGET_KIND),
   ], {
-    description: 'For action=send, use external or companion. Required for companion send and consider.',
+    description: 'Optional explicit target kind (external for action=send; companion for companion actions).',
   })),
   delivery_channel: Type.Optional(Type.Union([
     Type.Literal('discord'),
     Type.Literal('email'),
   ], {
-    description: 'Required for action=send with an external target.',
+    description: 'Required for action=send (external delivery).',
   })),
   delivery_target: Type.Optional(Type.String({
-    description: 'Required for action=send with an external target.',
+    description: 'Required for action=send (external delivery).',
   })),
   contact_id: Type.Optional(Type.String({
-    description: 'Required for companion action=send or action=consider.',
+    description: 'Required for action=initiate_companion or action=consider.',
   })),
   initiation_permit: Type.Optional(Type.String({
-    description: 'Required broker-issued permit for companion action=send.',
+    description: 'Required broker-issued one-use UUID for action=initiate_companion.',
   })),
   dyad_id: Type.Optional(Type.String({
-    description: 'Required for permit-free continuation of an established open dyad.',
+    description: 'Required open dyad UUID for action=send_companion, action=relay, or action=dyad_lifecycle.',
   })),
   private_intent: Type.Optional(Type.String({
     maxLength: COMPANION_PRIVATE_INTENT_MAX_LENGTH,
-    description: 'Optional private target-turn instruction for an open-dyad continuation (use message instead to send directly).',
+    description: 'Optional local instruction for action=send_companion (use message instead to send directly).',
   })),
   expected_revision: Type.Optional(Type.Integer({ minimum: 1 })),
   lifecycle_action: Type.Optional(Type.Union([
@@ -1249,10 +1254,11 @@ export function createNotifyTool(
       }
 
       if (
-        (action === 'send' || action === 'relay' || rawParams.action === 'list_dyads'
-          || rawParams.action === 'dyad_lifecycle')
-        && 'target_kind' in rawParams
-        && rawParams.target_kind === COMPANION_NOTIFY_TARGET_KIND
+        action === 'initiate_companion'
+        || action === 'send_companion'
+        || action === 'relay'
+        || action === 'list_dyads'
+        || action === 'dyad_lifecycle'
       ) {
         if (!options.companionOutreach) {
           return textResultWithError('notify: companion outreach is not wired in this runtime.', true);
@@ -1265,6 +1271,12 @@ export function createNotifyTool(
       }
 
       if (action === 'send') {
+        if ('target_kind' in rawParams && rawParams.target_kind === COMPANION_NOTIFY_TARGET_KIND) {
+          return textResultWithError(
+            'notify: failure (use action=initiate_companion or action=send_companion for companion outreach; action=send is for external delivery only).',
+            true,
+          );
+        }
         const blockedContext = buildExternalSendContextBlockReason();
         if (blockedContext) {
           return textResultWithError(
@@ -1307,9 +1319,6 @@ export function createNotifyTool(
       case 'brief':
         return 'external.web';
       case 'send': {
-        if (params.target_kind === COMPANION_NOTIFY_TARGET_KIND) {
-          return 'external.companion';
-        }
         const channel = typeof params.delivery_channel === 'string'
           ? params.delivery_channel.trim()
           : '';
@@ -1321,8 +1330,9 @@ export function createNotifyTool(
         }
         return ['external.discord', 'external.email'] as const;
       }
+      case 'initiate_companion':
+      case 'send_companion':
       case 'consider':
-        return 'external.companion';
       case 'list_dyads':
       case 'dyad_lifecycle':
       case 'relay':

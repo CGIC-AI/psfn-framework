@@ -497,10 +497,10 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
     label: 'schedule',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.schedule,
     parameters: Type.Object({
-      action: Type.Optional(Type.Union(
+      action: Type.Union(
         SCHEDULE_TOOL_ACTIONS.map(action => Type.Literal(action)),
-        { description: 'Schedule action. Defaults to list.' },
-      )),
+        { description: 'Required schedule action.' },
+      ),
       limit: Type.Optional(Type.Integer({
         minimum: 1,
         maximum: MAX_LIST_LIMIT,
@@ -590,7 +590,7 @@ export function createScheduleTool(options: ScheduleToolOptions): SubstrateAgent
     ...tool,
     execute: async (
       _toolCallId: string,
-      params: ScheduleToolParams = {},
+      params: Partial<ScheduleToolParams> = {},
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<ScheduleToolResultDetails>> => {
       let action: ScheduleToolAction;

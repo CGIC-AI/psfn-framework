@@ -91,6 +91,7 @@ import {
 import { createAnalysisWorkbenchTool } from '../../../core/tools/analysis-workbench/tools.js';
 import { CoreMemoryStore } from '../../../faculties/core-memory/store.js';
 import { createOrientTool } from '../../../faculties/core-memory/tools.js';
+import { createConcernsTool } from '../../../core/intention/concerns-tool.js';
 import { resolveCurrentInternalStateConcernVAD } from '../../../core/intention/concern-grooming.js';
 import { ValuesJournalStore } from '../../../faculties/values/store.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../core/tools/analysis-workbench/types.js';
@@ -658,16 +659,19 @@ export function wireCoreMemoryRuntime(options: CoreMemoryRuntimeOptions): CoreMe
   options.sessionManager.setCoreMemoryProvider(store);
   options.agentLoop.registerTool(createOrientTool(store, {
     valuesJournal,
-    concernStore: options.concernStore ?? null,
-    eventBus: options.eventBus ?? null,
-    // Resolution-as-appraisal (vw3w.1): snapshot the agent's live VAD when the
-    // companion decides to resolve/terminally-transition a concern.
-    resolutionVadProvider: concern => resolveCurrentInternalStateConcernVAD(
-      concern,
-      options.agentLoop.getCurrentInternalState(),
-      new Date().toISOString(),
-    ),
   }));
+  if (options.concernStore) {
+    options.agentLoop.registerTool(createConcernsTool(options.concernStore, {
+      eventBus: options.eventBus ?? null,
+      // Resolution-as-appraisal (vw3w.1): snapshot the agent's live VAD when the
+      // companion decides to resolve/terminally-transition a concern.
+      resolutionVadProvider: concern => resolveCurrentInternalStateConcernVAD(
+        concern,
+        options.agentLoop.getCurrentInternalState(),
+        new Date().toISOString(),
+      ),
+    }), 'core');
+  }
   return store;
 }
 

@@ -537,13 +537,12 @@ export function createIdentityTool(
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.identity,
     label: 'identity',
     parameters: Type.Object({
-      action: Type.Optional(Type.Unsafe<IdentityAction>({
+      action: Type.Unsafe<IdentityAction>({
         type: 'string',
         enum: [...IDENTITY_ACTIONS],
         pattern: IDENTITY_ACTION_PATTERN,
-        description:
-          'Identity action. Required for all actions except empty-argument calls, which default to list_layers.',
-      })),
+        description: 'Required identity action.',
+      }),
       layer_id: Type.Optional(Type.String({ description: 'Prompt layer ID. Prefer the full layer id from list_layers; prefix match is accepted.' })),
       content: Type.Optional(Type.String({ description: 'Replacement prompt-layer content for update_layer.' })),
       version: Type.Optional(Type.Number({ description: 'Historical prompt-layer version for diff_layer or rollback_layer.', minimum: 1 })),

@@ -72,9 +72,9 @@ describe('full callable catalog schema token cost', () => {
       parameterSchemaHash: sha256(parameterSchemas),
     }).toEqual({
       fixture: 'agent-state-tools-provider-v2',
-      coreTools: 24,
-      extendedTools: 5,
-      totalTools: 29,
+      coreTools: 25,
+      extendedTools: 6,
+      totalTools: 31,
       includesLibrary: false,
       // n66dn.3 (Eidoverse plane: world move/perceive/act) +1440 bytes / +383 tokens pre, +2096 / +545 post.
       // psfn-framework-lpxg3.3 added the optional skill `base_version` binding:
@@ -109,13 +109,18 @@ describe('full callable catalog schema token cost', () => {
       // psfn-framework-b3h5p.1 retired vault, letter, and companion beads tools
       // and removed standalone introspection consent actions from orient:
       // -6700 bytes / -1500 tokens before, -7544 bytes / -1682 tokens after.
-      beforeTokens: 18_861,
-      afterTokens: 22_975,
-      deltaTokens: 4_114,
-      beforeBytes: 88_369,
-      afterBytes: 106_627,
-      providerSchemaHash: 'a6773d0734b18daef28299150d94e8eb3f52872c0cc9e14990dddf7d4c0b78fe',
-      parameterSchemaHash: '544415d80d9716186a90ba408b5ddeba4eee8ded7b0ddec8d53659c3f25bcec9',
+      // psfn-framework-b3h5p.2 split concerns out of orient, split projects out
+      // of wiki, un-overloaded notify send into send/initiate_companion/send_companion,
+      // marked action required on all action-multiplexed tools, and compacted
+      // descriptions into scannable bulleted contracts:
+      // -226 bytes / -104 tokens before, -2897 bytes / -212 tokens after.
+      beforeTokens: 18_757,
+      afterTokens: 22_763,
+      deltaTokens: 4_006,
+      beforeBytes: 88_143,
+      afterBytes: 103_730,
+      providerSchemaHash: '8fe703fa667f306267c21565a7d14f46b5016d8cf1e16b02d0830e6c80760bef',
+      parameterSchemaHash: '567ff7a54c2949232239ed1306589b5a39b6a49fc998fa73473a1bee8bf9f7e7',
     });
 
     // The additional description tokens affect an uncached request. A stable

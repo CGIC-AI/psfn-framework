@@ -940,15 +940,15 @@ export function createWorldTool(ops: WorldOperations, deps: WorldToolDeps): Subs
     label: 'world',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.world,
     parameters: Type.Object({
-      action: Type.Optional(Type.Union([
+      action: Type.Union([
         Type.Literal('perceive'),
         Type.Literal('list'),
         Type.Literal('control'),
         Type.Literal('move'),
         Type.Literal('act'),
       ], {
-        description: 'World action: perceive, list, control, move, or act.',
-      })),
+        description: 'Required world action: perceive, list, control, move, or act.',
+      }),
       placeId: Type.Optional(Type.String({
         description: 'Target place id, matched exactly against places.json as authored. Ids are arbitrary '
           + 'operator-defined strings with no guaranteed "place." prefix (e.g. "bedroom"); do not guess. '

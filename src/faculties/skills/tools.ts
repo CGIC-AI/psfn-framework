@@ -682,10 +682,9 @@ export function createSkillTool(
     label: 'skill',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.skill,
     parameters: Type.Object({
-      action: Type.Optional(Type.Union(SKILL_TOOL_ACTION_NAMES.map((action) => Type.Literal(action)), {
-        description:
-          'Skill action. Defaults to list when omitted and no action-specific parameters are provided.',
-      })),
+      action: Type.Union(SKILL_TOOL_ACTION_NAMES.map((action) => Type.Literal(action)), {
+        description: 'Required skill action: list, view, stats, create, update, history, or rollback.',
+      }),
       includeSkipped: Type.Optional(Type.Boolean({
         description: 'Optional for action=list. Include filtered/omitted skills with reasons.',
       })),

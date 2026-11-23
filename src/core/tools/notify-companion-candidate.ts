@@ -47,8 +47,9 @@ export function parseCompanionCandidateParams(value: unknown): CompanionCandidat
     ['action', 'target_kind', 'contact_id', 'reason_summary'],
     'companion candidate params',
   );
-  if (value.action !== 'consider' || value.target_kind !== 'companion') {
-    throw new Error('companion candidate requires action=consider and target_kind=companion');
+  if (value.action !== 'consider'
+    || (value.target_kind !== undefined && value.target_kind !== 'companion')) {
+    throw new Error('companion candidate requires action=consider');
   }
   return {
     action: 'consider',

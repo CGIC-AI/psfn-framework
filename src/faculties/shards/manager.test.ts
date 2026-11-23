@@ -2136,6 +2136,7 @@ describe('ShardManager', () => {
     const auditTrail = { append: vi.fn() };
     const memory = makeTestTool('memory');
     const orient = makeTestTool('orient');
+    const concerns = makeTestTool('concerns');
 
     const manager = createTestShardManager({
       eventBus,
@@ -2147,7 +2148,7 @@ describe('ShardManager', () => {
       parentSystemPrompt: 'test',
       auditTrail,
       toolCatalogProvider: () => ({
-        core: [memory.tool],
+        core: [memory.tool, concerns.tool],
         extended: [orient.tool],
       }),
     });
@@ -2156,7 +2157,9 @@ describe('ShardManager', () => {
 
     const injectedTools = agentRunConfigs.at(-1)?.tools ?? [];
     const injectedOrient = injectedTools.find(tool => tool.name === 'orient');
+    const injectedConcerns = injectedTools.find(tool => tool.name === 'concerns');
     expect(injectedOrient).toBeDefined();
+    expect(injectedConcerns).toBeDefined();
 
     // Read passes through to the underlying tool.
     orient.execute.mockClear();
@@ -2179,14 +2182,14 @@ describe('ShardManager', () => {
     expect((valuesMutation.details as { isError?: boolean }).isError).toBe(true);
     expect((valuesMutation.details as { errorClass?: string }).errorClass).toBe('policy_blocked');
 
-    // Concern mutation is denied too.
-    orient.execute.mockClear();
-    const concernMutation = await injectedOrient!.execute(
-      'call-orient-concern',
-      { action: 'create_concern', text: 'shard planted concern' } as never,
+    // Concern mutation is denied too (now on dedicated concerns surface).
+    concerns.execute.mockClear();
+    const concernMutation = await injectedConcerns!.execute(
+      'call-concerns-create',
+      { action: 'create', text: 'shard planted concern' } as never,
       undefined,
     );
-    expect(orient.execute).not.toHaveBeenCalled();
+    expect(concerns.execute).not.toHaveBeenCalled();
     expect((concernMutation.details as { isError?: boolean }).isError).toBe(true);
 
     expect(auditTrail.append).toHaveBeenCalledWith('shard.tool.mutation.denied', expect.objectContaining({
@@ -2195,8 +2198,8 @@ describe('ShardManager', () => {
       reason: 'mutation_not_permitted',
     }));
     expect(auditTrail.append).toHaveBeenCalledWith('shard.tool.mutation.denied', expect.objectContaining({
-      toolName: 'orient',
-      action: 'create_concern',
+      toolName: 'concerns',
+      action: 'create',
       reason: 'mutation_not_permitted',
     }));
   });

@@ -6476,17 +6476,17 @@
     },
     {
       "file": "src/core/tools/ntfy.ts",
-      "name": "notifyToolParameters.contact_id.minLength@L1010",
+      "name": "notifyToolParameters.contact_id.minLength@L1001",
       "value": "1",
       "form": "object-member",
-      "note": "Existing mutable policy candidate notifyToolParameters.contact_id.minLength@L998; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "TypeBox non-empty string schema guard (line-shifted after b3h5p.2 megatool split)"
     },
     {
       "file": "src/core/tools/ntfy.ts",
-      "name": "notifyToolParameters.contact_id.minLength@L998",
+      "name": "notifyToolParameters.contact_id.minLength@L1013",
       "value": "1",
       "form": "object-member",
-      "note": "Existing mutable policy candidate notifyToolParameters.contact_id.minLength@L986; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+      "note": "TypeBox non-empty string schema guard (line-shifted after b3h5p.2 megatool split)"
     },
     {
       "file": "src/core/tools/ntfy.ts",
@@ -6789,94 +6789,10 @@
     },
     {
       "file": "src/faculties/core-memory/tools.ts",
-      "name": "CONCERN_EVIDENCE_REF_SCHEMA.hash.maxLength",
-      "value": "240",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract CONCERN_EVIDENCE_REF_SCHEMA.hash.maxLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/core-memory/tools.ts",
-      "name": "CONCERN_EVIDENCE_REF_SCHEMA.hash.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract CONCERN_EVIDENCE_REF_SCHEMA.hash.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/core-memory/tools.ts",
-      "name": "CONCERN_EVIDENCE_REF_SCHEMA.ref.maxLength",
-      "value": "240",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract CONCERN_EVIDENCE_REF_SCHEMA.ref.maxLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/core-memory/tools.ts",
-      "name": "CONCERN_EVIDENCE_REF_SCHEMA.ref.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract CONCERN_EVIDENCE_REF_SCHEMA.ref.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/core-memory/tools.ts",
-      "name": "createOrientTool.parameters.concernId.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createOrientTool.parameters.concernId.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/core-memory/tools.ts",
-      "name": "createOrientTool.parameters.concernIds.maxItems",
-      "value": "20",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createOrientTool.parameters.concernIds.maxItems; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/core-memory/tools.ts",
-      "name": "createOrientTool.parameters.concernIds.minItems",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createOrientTool.parameters.concernIds.minItems; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/core-memory/tools.ts",
-      "name": "createOrientTool.parameters.concernIds.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createOrientTool.parameters.concernIds.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/core-memory/tools.ts",
-      "name": "createOrientTool.parameters.contactId.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createOrientTool.parameters.contactId.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/core-memory/tools.ts",
       "name": "createOrientTool.parameters.context.minLength",
       "value": "1",
       "form": "object-member",
       "note": "Immutable parser/wire/schema contract createOrientTool.parameters.context.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/core-memory/tools.ts",
-      "name": "createOrientTool.parameters.evidenceRefs.maxItems",
-      "value": "20",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createOrientTool.parameters.evidenceRefs.maxItems; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/core-memory/tools.ts",
-      "name": "createOrientTool.parameters.nextReviewAt.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createOrientTool.parameters.nextReviewAt.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/core-memory/tools.ts",
-      "name": "createOrientTool.parameters.outcome.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createOrientTool.parameters.outcome.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
     },
     {
       "file": "src/faculties/core-memory/tools.ts",
@@ -8355,7 +8271,7 @@
     {
       "file": "src/faculties/subagents/tool-governance.ts",
       "name": "ORIENT_POLICY",
-      "value": "{ readActionsHelp: 'values_list, list_concerns', classify(params) { return classifyByActionSets( resolveExplicitAction(params), ORIENT_READ_ACTIONS, ORIENT_MUTATION_ACTIONS, ); }, }",
+      "value": "{ readActionsHelp: 'values_list', classify(params) { return classifyByActionSets( resolveExplicitAction(params), ORIENT_READ_ACTIONS, ORIENT_MUTATION_ACTIONS, ); }, }",
       "form": "object",
       "note": "Existing mutable policy candidate ORIENT_POLICY; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
@@ -8365,6 +8281,13 @@
       "value": "{ readActionsHelp: 'list, view, stats', classify(params) { const explicit = resolveExplicitAction(params); if (explicit !== null || !isRecord(params)) { return classifyByActionSets(explicit, SKILL_READ_ACTIONS, SKILL_MUTATION_ACTIONS); } // Mirrors normalizeSkillAction in faculties/skills/tools.ts: an omitted // action is the list read only when no action-specific params are set. const hasNonListParams = Object.entries(params).some(([key, value]) => ( key !== 'action' && key !== 'includeSkipped' && key !== 'includeContent' && value !== undefined )); if (!hasNonListParams) return { action: 'list', kind: 'read' }; return { action: null, kind: 'unresolved' }; }, }",
       "form": "object",
       "note": "Existing mutable policy candidate SKILL_POLICY; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
+    },
+    {
+      "file": "src/faculties/subagents/tool-governance.ts",
+      "name": "WIKI_POLICY",
+      "value": "{ readActionsHelp: 'list, read, search, semantic_search, world_notes_read', classify(params) { const explicit = resolveExplicitAction(params); if (explicit !== null || !isRecord(params)) { return classifyByActionSets(explicit, WIKI_READ_ACTIONS, WIKI_MUTATION_ACTIONS); } // Mirrors normalizeAction in faculties/wiki/tools.ts: an omitted action // only ever resolves to a read (search/read/list) or an error, so the // read defaults keep working from an automaton context. const hasQuery = typeof params.query === 'string' && params.query.trim().length > 0; const hasId = typeof params.id === 'string' && params.id.trim().length > 0; const hasWriteFields = typeof params.title === 'string' || typeof params.body === 'string'; if (hasQuery) return { action: 'search', kind: 'read' }; if (hasId && !hasWriteFields) return { action: 'read', kind: 'read' }; if (!hasId && !hasWriteFields) return { action: 'list', kind: 'read' }; return { action: null, kind: 'unresolved' }; }, }",
+      "form": "object",
+      "note": "Static subagent read/mutation governance table for canonical wiki actions (trimmed after b3h5p.2 split)"
     },
     {
       "file": "src/faculties/subagents/tools.ts",
@@ -8633,20 +8556,6 @@
     },
     {
       "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.artifact_label.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.artifact_label.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.artifact_ref.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.artifact_ref.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/wiki/tools.ts",
       "name": "createWikiTool.tool.parameters.body.minLength",
       "value": "1",
       "form": "object-member",
@@ -8658,41 +8567,6 @@
       "value": "1",
       "form": "object-member",
       "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.id.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.look_id.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.look_id.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.look_name.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.look_name.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.look_prompt.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.look_prompt.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.look_ref.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.look_ref.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.next_step.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.next_step.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
     },
     {
       "file": "src/faculties/wiki/tools.ts",
@@ -8724,31 +8598,17 @@
     },
     {
       "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.project_id.minLength",
+      "name": "createWikiTool.tool.parameters.provenance_refs.minLength@L243",
       "value": "1",
       "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.project_id.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
+      "note": "TypeBox non-empty string schema guard (line-shifted after b3h5p.2 megatool split)"
     },
     {
       "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.project_ref.minLength",
+      "name": "createWikiTool.tool.parameters.provenance_refs.minLength@L244",
       "value": "1",
       "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.project_ref.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.provenance_refs.minLength@L336",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.provenance_refs.minLength@L336; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.provenance_refs.minLength@L337",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.provenance_refs.minLength@L337; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
+      "note": "TypeBox non-empty string schema guard (line-shifted after b3h5p.2 megatool split)"
     },
     {
       "file": "src/faculties/wiki/tools.ts",
@@ -8780,24 +8640,17 @@
     },
     {
       "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.supersedes_ref.minLength",
+      "name": "createWikiTool.tool.parameters.tags.minLength@L233",
       "value": "1",
       "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.supersedes_ref.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
+      "note": "TypeBox non-empty string schema guard (line-shifted after b3h5p.2 megatool split)"
     },
     {
       "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.tags.minLength@L326",
+      "name": "createWikiTool.tool.parameters.tags.minLength@L234",
       "value": "1",
       "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.tags.minLength@L326; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.tags.minLength@L327",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.tags.minLength@L327; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
+      "note": "TypeBox non-empty string schema guard (line-shifted after b3h5p.2 megatool split)"
     },
     {
       "file": "src/faculties/wiki/tools.ts",
@@ -8805,27 +8658,6 @@
       "value": "1",
       "form": "object-member",
       "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.title.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.wish_context.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.wish_context.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.wish_ref.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.wish_ref.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.wish_text.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createWikiTool.tool.parameters.wish_text.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
     },
     {
       "file": "src/faculties/wiki/tools.ts",

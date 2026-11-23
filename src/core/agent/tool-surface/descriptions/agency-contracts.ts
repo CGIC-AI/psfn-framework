@@ -9,23 +9,23 @@ const IMAGE_RENDER_FIELDS = [
 
 export const AGENCY_TOOL_CONTRACTS = {
   notify: {
-    purpose: 'Send bounded notifications, request explicit review, initiate governed outreach outside an ordinary same-channel reply, or ask the person a short structured question when a few clear options would settle real uncertainty.',
+    purpose: 'Send bounded notifications, request explicit review, message governed companion peers, or ask the person a short structured question when a few clear options would settle real uncertainty.',
     actions: [
       action('brief', ['message'], ['title', 'priority', 'topic', 'budget_channel']),
-      action('send', ['message', 'delivery_channel', 'delivery_target'], ['target_kind'], { id: 'send_external', rule: 'this is the explicit external-delivery form' }),
-      action('send', ['target_kind', 'contact_id', 'initiation_permit'], [], { id: 'send_companion', rule: 'target_kind must be companion and peer-visible message content is forbidden' }),
-      action('list_dyads', ['target_kind'], [], { id: 'list_companion_dyads', rule: 'returns only owned open dyad authorization metadata and never conversation content' }),
-      action('dyad_lifecycle', ['target_kind', 'dyad_id', 'expected_revision', 'lifecycle_action'], [], { id: 'companion_dyad_lifecycle', rule: 'pause, resume, close, block, or unblock an owned dyad without revealing why; unblock does not reopen a closed dyad' }),
-      action('send', ['target_kind', 'dyad_id', 'private_intent'], [], { id: 'continue_companion_dyad', rule: 'target_kind must be companion; private_intent stays local while an ordinary destination turn authors peer-visible content' }),
-      action('relay', ['target_kind', 'dyad_id', 'intent'], [], { id: 'relay_human_intent', rule: 'only an exact human-stated question or instruction may enter an already-authorized open dyad; no adjacent source context crosses' }),
-      action('consider', ['target_kind', 'contact_id', 'reason_summary'], [], { id: 'consider', rule: 'target_kind must be companion and the reason is never shared externally' }),
-      action('outreach_send', ['message'], [], { id: 'outreach_send', rule: 'only inside an outreach moment about one person: message is exactly what you want to say to them; the runtime delivers it to your one-to-one conversation with them or through companion messaging, never to a group' }),
-      action('outreach_later', [], [], { id: 'outreach_later', rule: 'only inside an outreach moment: not now, ask me again later; to decline, simply do not call notify' }),
+      action('send', ['message', 'delivery_channel', 'delivery_target'], ['target_kind'], { id: 'send_external', rule: 'external Discord or email delivery only' }),
+      action('initiate_companion', ['contact_id', 'initiation_permit'], ['target_kind'], { id: 'initiate_companion', rule: 'first-contact companion initiation bound to initiation_permit; message content is forbidden' }),
+      action('send_companion', ['dyad_id'], ['target_kind'], { id: 'send_companion', requiredAnyOf: [['message'], ['private_intent']], rule: 'open-dyad companion DM: supply message to send directly or private_intent for a local destination turn, never both' }),
+      action('list_dyads', [], ['target_kind'], { id: 'list_companion_dyads', rule: 'returns only owned open dyad authorization metadata and never conversation content' }),
+      action('dyad_lifecycle', ['dyad_id', 'expected_revision', 'lifecycle_action'], ['target_kind'], { id: 'companion_dyad_lifecycle', rule: 'pause, resume, close, block, or unblock an owned dyad without revealing why; unblock does not reopen a closed dyad' }),
+      action('relay', ['dyad_id', 'intent'], ['target_kind'], { id: 'relay_human_intent', rule: 'only an exact human-stated question or instruction may enter an already-authorized open dyad; no adjacent source context crosses' }),
+      action('consider', ['contact_id', 'reason_summary'], ['target_kind'], { id: 'consider', rule: 'local companion candidate consideration evaluated after turn idle; reason_summary is never shared externally' }),
+      action('outreach_send', ['message'], [], { id: 'outreach_send', rule: 'only inside an outreach moment about one person: delivers message to your one-to-one channel, never a group' }),
+      action('outreach_later', [], [], { id: 'outreach_later', rule: 'only inside an outreach moment: defer and ask again later; to decline, do not call notify' }),
       action('approval_request', ['approval_id', 'approval_method', 'approval_action', 'approval_scope', 'approval_reason'], ['approval_expires_at', 'review_path']),
-      action('clarify', ['question', 'choices'], [], { id: 'clarify', rule: 'two to five distinct options for the person you are already with; the answer returns on its own, and it is never a substitute for an ordinary reply' }),
+      action('clarify', ['question', 'choices'], [], { id: 'clarify', rule: 'two to five distinct options for the person you are already with; never a substitute for an ordinary reply' }),
     ],
     output: 'It returns delivery, review, pending-clarification, or outreach-answer state, never chooses an implicit target, and companion initiation lets the destination turn author its message.',
-    guidance: 'Keep brief, send, and approval_request off your current channel — resolve an exact contact first or reply normally; clarify is the one action that speaks to the person you are already with, and only when a couple of concrete options would genuinely resolve your uncertainty, never for open-ended conversation.',
+    guidance: 'Keep brief, send, and approval_request off your current channel — resolve an exact contact first or reply normally. Use initiate_companion for first contact, send_companion for open dyads, and send strictly for external Discord/email delivery. Only clarify speaks to the person you are already with.',
     example: { action: 'brief', message: 'The overnight validation completed.', priority: 3 },
   },
   generate_image: {
@@ -72,7 +72,7 @@ export const AGENCY_TOOL_CONTRACTS = {
     example: { action: 'spawn', name: 'log-check', task: 'Compare the two bounded error excerpts.' },
   },
   journal: {
-    purpose: 'Read and write durable companion-authored markdown notes, personal reflections, introspection, and topic journals.',
+    purpose: 'Read and write durable companion-authored personal reflections, introspection, and lived thoughts about what happened.',
     actions: [
       action('list'),
       action('read', [], ['offset_bytes'], { id: 'read', requiredAnyOf: [['path'], ['title']] }),
@@ -81,7 +81,7 @@ export const AGENCY_TOOL_CONTRACTS = {
       action('search', ['query'], ['limit']),
     ],
     output: 'It returns note paths or bounded markdown and writes only journal documents.',
-    guidance: 'Use journal for personal reflections, introspection, and lived thoughts about what happened. Read long notes page by page using each next_offset_bytes value. Prefer a bounded automaton or the analysis workbench for lengthy multi-note analysis so the primary channel stays responsive. Do not use journal for same-day scratch work, follow-ups, typed facts, or reference knowledge; use their semantic tools.',
+    guidance: 'Use journal for personal lived experience, reflections, and introspection, not atomic memory fragments (use memory), structured plans or reference docs (use wiki), same-day working notes (use scratchpad), or active commitments (use concerns). Read long notes page by page using each next_offset_bytes value.',
     example: { action: 'write', title: 'Garden observations', content: 'The basil recovered after moving into indirect light.' },
   },
 } as const satisfies Record<string, CanonicalToolSurfaceContract>;

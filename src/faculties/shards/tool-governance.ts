@@ -31,13 +31,13 @@ export interface ShardToolGovernanceContext {
   auditTrail: { append(event: string, details?: Record<string, unknown>): unknown } | null;
 }
 
-function requireOrientPolicy(): SubagentToolGovernancePolicy {
-  const policy = GOVERNED_SUBAGENT_TOOL_POLICIES.get('orient');
+function requireGovernancePolicy(toolName: 'orient' | 'concerns'): SubagentToolGovernancePolicy {
+  const policy = GOVERNED_SUBAGENT_TOOL_POLICIES.get(toolName);
   if (!policy) {
     throw new Error(
-      'Shard tool governance requires the canonical orient read/mutation policy (p0le) to be '
+      `Shard tool governance requires the canonical ${toolName} read/mutation policy (p0le) to be `
       + 'present; the shard seam reuses it to stay in lockstep with the subagent seam. Its absence '
-      + 'would let a shard mutate orientation blocks, values, and concerns live (fail closed).',
+      + 'would let a shard mutate orientation blocks, values, or concerns live (fail closed).',
     );
   }
   return policy;
@@ -45,11 +45,14 @@ function requireOrientPolicy(): SubagentToolGovernancePolicy {
 
 /**
  * Canonical multiplexed tools that reach a shard loop only behind a read-only
- * governance wrapper. `orient` is the only such surface for shards; identity,
- * north_star, and contact are blocked at injection instead.
+ * governance wrapper. `orient` and `concerns` carry core-authoritative reads;
+ * identity, north_star, and contact are blocked at injection instead.
  */
 export const GOVERNED_SHARD_TOOL_POLICIES: ReadonlyMap<string, SubagentToolGovernancePolicy> =
-  new Map([['orient', requireOrientPolicy()]]);
+  new Map([
+    ['orient', requireGovernancePolicy('orient')],
+    ['concerns', requireGovernancePolicy('concerns')],
+  ]);
 
 /**
  * Wraps a core-authoritative multiplexed tool for injection into a shard loop:

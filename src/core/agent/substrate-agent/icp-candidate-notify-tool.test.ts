@@ -23,12 +23,12 @@ describe('ICP candidate-scoped unified notify surface', () => {
     expect(tool.description).toBe(
       getCanonicalToolSurfaceDescription('notify', 'companion_candidate'),
     );
-    expect(tool.description).toContain('action=send');
+    expect(tool.description).toContain('action=initiate_companion');
     expect(tool.description).toContain('initiation_permit');
     expect(tool.description).not.toMatch(/action=(?:brief|consider|approval_request)/u);
   });
 
-  it('exposes only the canonical companion-send schema and capability', () => {
+  it('exposes only the canonical companion-initiation schema and capability', () => {
     const tool = createIcpCandidateScopedNotifyTool({
       notifyTool: makeNotifyTool(vi.fn()),
       authorizeExecution: () => true,
@@ -39,15 +39,13 @@ describe('ICP candidate-scoped unified notify surface', () => {
     expect(tool.parameters).toMatchObject({
       type: 'object',
       additionalProperties: false,
-      required: ['action', 'target_kind', 'contact_id', 'initiation_permit'],
+      required: ['action', 'contact_id', 'initiation_permit'],
       properties: {
-        action: { const: 'send' },
-        target_kind: { const: 'companion' },
+        action: { const: 'initiate_companion' },
       },
     });
     expect(resolveToolRequiredCapabilities(tool, {
-      action: 'send',
-      target_kind: 'companion',
+      action: 'initiate_companion',
     })).toEqual(['external.companion']);
   });
 
@@ -107,8 +105,7 @@ describe('ICP candidate-scoped unified notify surface', () => {
       authorizeExecution,
     });
     const params = {
-      action: 'send',
-      target_kind: 'companion',
+      action: 'initiate_companion',
       contact_id: 'peer-contact-b',
       initiation_permit: '44444444-4444-4444-8444-444444444444',
     } as const;

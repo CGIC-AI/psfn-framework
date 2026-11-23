@@ -7,6 +7,7 @@ import {
   type WikiRetrievalConfigLike,
 } from '../../shared/context-budget.js';
 import { createWikiTool } from './tools.js';
+import { createProjectsTool } from './projects-tool.js';
 import { WorldNotesLibrary } from './world-notes.js';
 import type { SelfAuthoredMutationIntakeRuntime } from '../../core/session/intake-sink-gating.js';
 import { SharedWorldWikiStore, WikiStore } from './store.js';
@@ -439,10 +440,12 @@ export async function wireWikiRuntime(
       ...(admissionGate ? { admissionGate } : {}),
       intake: deps.intake,
       ...(sharedWorldProposal ? { sharedWorldProposal } : {}),
-      personalProjects,
-      personalWishlist,
       worldNotes,
     }), 'core');
+    target.registerTool(createProjectsTool({
+      personalProjects,
+      personalWishlist,
+    }), 'extended');
   } catch (error) {
     await closeWikiRuntimeAfterFailure(error, resources);
   }

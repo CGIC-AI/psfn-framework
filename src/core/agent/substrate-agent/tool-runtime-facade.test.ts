@@ -437,8 +437,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       );
       const notify = facade.getActiveTurnTools().find(tool => tool.name === 'notify')!;
       const params = {
-        action: 'send',
-        target_kind: 'companion',
+        action: 'initiate_companion',
         contact_id: 'peer-contact-b',
         initiation_permit: '44444444-4444-4444-8444-444444444444',
       };
@@ -501,7 +500,6 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
         'action',
         'contact_id',
         'initiation_permit',
-        'target_kind',
       ]);
       const candidateDescription = getCanonicalToolSurfaceDescription('notify', 'companion_candidate');
       expect(catalogNotify.description).toBe(candidateDescription);
@@ -526,10 +524,9 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
         }>;
       };
       expect(describedPayload.tools?.[0]?.description).toBe(candidateDescription);
-      expect(describedPayload.tools?.[0]?.schema?.actions?.map(action => action.name)).toEqual(['send']);
+      expect(describedPayload.tools?.[0]?.schema?.actions?.map(action => action.name)).toEqual(['initiate_companion']);
       expect(describedPayload.tools?.[0]?.schema?.requiredParameters).toEqual([
         'action',
-        'target_kind',
         'contact_id',
         'initiation_permit',
       ]);
@@ -913,13 +910,13 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
   it('rejects widened drift-guard aliases for concerns, north_star, and lifecycle', () => {
     const { facade } = createFacade(null);
     expect(() => facade.registerTool(makeTool('create_concern'), 'core')).toThrow(
-      'core tool registration includes retired first-party tool aliases: create_concern->orient',
+      'core tool registration includes retired first-party tool aliases: create_concern->concerns',
     );
     expect(() => facade.registerTool(makeTool('list_concerns'), 'core')).toThrow(
-      'core tool registration includes retired first-party tool aliases: list_concerns->orient',
+      'core tool registration includes retired first-party tool aliases: list_concerns->concerns',
     );
     expect(() => facade.registerTool(makeTool('resolve_concern'), 'core')).toThrow(
-      'core tool registration includes retired first-party tool aliases: resolve_concern->orient',
+      'core tool registration includes retired first-party tool aliases: resolve_concern->concerns',
     );
     for (const alias of [
       'north_star_list',

@@ -1080,11 +1080,9 @@ export function createContactTool(
     label: 'contact',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.contact,
     parameters: Type.Object({
-      action: Type.Optional(Type.Union(CONTACT_ACTION_NAMES.map((action) => Type.Literal(action)), {
-        description:
-          'Contact action. Defaults to list when omitted with no other params. '
-          + 'Defaults to lookup when omitted with only contactId.',
-      })),
+      action: Type.Union(CONTACT_ACTION_NAMES.map((action) => Type.Literal(action)), {
+        description: 'Required contact action: list, search, lookup, note, set_trust, propose_trust, set_relationship, propose_relationship, link_identity, set_channel_privacy, set_machine_intelligence, block, or unblock.',
+      }),
       contactId: Type.Optional(Type.String({
         minLength: 1,
         description: 'Canonical contact ID, Discord account ID, or channel identity (channel:userId) for lookup.',

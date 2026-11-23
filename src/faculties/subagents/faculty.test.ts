@@ -2402,7 +2402,7 @@ describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
     // Every reproduced escalation from the bead is denied and audit-trailed.
     const deniedCalls: Array<[string, Record<string, unknown>]> = [
       ['orient', { action: 'values_update', values: 'rewritten', version: 1 }],
-      ['orient', { action: 'create_concern', content: 'planted concern' }],
+      ['orient', { action: 'append', block: 'goals', text: 'planted goal' }],
       ['journal', { action: 'write', path: 'p', content: 'x' }],
       ['wiki', { action: 'write', title: 't', body: 'b' }],
       ['skill', { action: 'update', name: 's', content: 'x' }],

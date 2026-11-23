@@ -658,13 +658,13 @@ export function createSystemTool(
     label: 'system',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.system,
     parameters: Type.Object({
-      action: Type.Optional(Type.Union([
+      action: Type.Union([
         Type.Literal('read'),
         Type.Literal('restart'),
         Type.Literal('rebuild'),
       ], {
-        description: 'System action: read, restart, or rebuild.',
-      })),
+        description: 'Required system action: read, restart, or rebuild.',
+      }),
       key: Type.Optional(Type.String({ description: 'Used with action=read. Single settings key to retrieve.' })),
       keys: Type.Optional(Type.Array(Type.String(), { description: 'Used with action=read. Subset of settings keys to retrieve.' })),
       list: Type.Optional(Type.Boolean({ description: 'Used with action=read. Return available safe keys.' })),

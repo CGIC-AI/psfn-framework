@@ -195,10 +195,6 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
       'values_list',
       'values_add',
       'values_update',
-      'create_concern',
-      'list_concerns',
-      'resolve_concern',
-      'transition_concern',
     ],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -208,9 +204,19 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
       retiredAlias('values_list', 'orient', 'hidden', 'values_list', 'Values reads belong on orient.'),
       retiredAlias('values_add', 'orient', 'retired', 'values_add', 'Values journaling belongs on orient.'),
       retiredAlias('values_update', 'orient', 'retired', 'values_update', 'Values revision belongs on orient.'),
-      retiredAlias('create_concern', 'orient', 'hidden', 'create_concern', 'Active concerns belong on orient.'),
-      retiredAlias('list_concerns', 'orient', 'hidden', 'list_concerns', 'Active concerns belong on orient.'),
-      retiredAlias('resolve_concern', 'orient', 'hidden', 'resolve_concern', 'Active concerns belong on orient.'),
+    ],
+  },
+  {
+    name: 'concerns',
+    domain: 'orientation',
+    exposure: 'core',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.concerns,
+    actions: ['list', 'create', 'resolve', 'transition'],
+    capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
+    retiredAliases: [
+      retiredAlias('create_concern', 'concerns', 'hidden', 'create', 'Active concerns belong on concerns.'),
+      retiredAlias('list_concerns', 'concerns', 'hidden', 'list', 'Active concerns belong on concerns.'),
+      retiredAlias('resolve_concern', 'concerns', 'hidden', 'resolve', 'Active concerns belong on concerns.'),
     ],
   },
   {
@@ -351,11 +357,21 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.wiki,
     actions: [
       'list', 'read', 'search', 'semantic_search', 'write', 'import', 'propose_shared_world',
+      'world_notes_read', 'world_note',
+    ],
+    capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
+    retiredAliases: [],
+  },
+  {
+    name: 'projects',
+    domain: 'self_expression',
+    exposure: 'extended',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.projects,
+    actions: [
       'wish_list', 'wish_read', 'wish_create',
       'project_list', 'project_read', 'project_create', 'project_update',
       'project_add_artifact', 'project_share',
       'wardrobe_list', 'wardrobe_read', 'wardrobe_save', 'wardrobe_revise',
-      'world_notes_read', 'world_note',
     ],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [],
@@ -403,8 +419,9 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     exposure: 'extended',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.notify,
     actions: [
-      'brief', 'send', 'consider', 'approval_request', 'clarify',
-      'outreach_send', 'outreach_later',
+      'brief', 'send', 'initiate_companion', 'send_companion',
+      'list_dyads', 'dyad_lifecycle', 'relay', 'consider',
+      'approval_request', 'clarify', 'outreach_send', 'outreach_later',
     ],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [

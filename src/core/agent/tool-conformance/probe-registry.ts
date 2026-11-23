@@ -48,12 +48,13 @@ export const TOOL_CONFORMANCE_PROBE_REGISTRY: Readonly<Record<string, ToolProbeS
   toolset: { kind: 'read_only', action: 'list', args: { action: 'list' } },
 
   // ── System / orientation / identity ──
-  self_status: { kind: 'read_only', args: { recentChannelLimit: 1 } },
+  self_status: { kind: 'read_only', action: 'snapshot', args: { action: 'snapshot', recentChannelLimit: 1 } },
   // system.read shares a surface with restart/rebuild and its read semantics
   // depend on a settings key we cannot safely assume here; validate schema only.
   // The required-action rejection_check still covers system.
   system: { kind: 'schema_only' },
-  orient: { kind: 'read_only', action: 'list_concerns', args: { action: 'list_concerns' } },
+  orient: { kind: 'read_only', action: 'values_list', args: { action: 'values_list' } },
+  concerns: { kind: 'read_only', action: 'list', args: { action: 'list' } },
   identity: { kind: 'read_only', action: 'list_layers', args: { action: 'list_layers' } },
 
   // ── Memory family ──
@@ -80,6 +81,7 @@ export const TOOL_CONFORMANCE_PROBE_REGISTRY: Readonly<Record<string, ToolProbeS
   // ── Knowledge / scheduling / orientation-extended ──
   skill: { kind: 'read_only', action: 'list', args: { action: 'list' } },
   wiki: { kind: 'read_only', action: 'list', args: { action: 'list' } },
+  projects: { kind: 'read_only', action: 'project_list', args: { action: 'project_list' } },
   schedule: { kind: 'read_only', action: 'list', args: { action: 'list' } },
   north_star: { kind: 'read_only', action: 'list', args: { action: 'list' } },
 
@@ -261,10 +263,12 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
     values_list: safeRead({ action: 'values_list' }),
     values_add: SCHEMA_ASSERT,
     values_update: SCHEMA_ASSERT,
-    create_concern: SCHEMA_ASSERT,
-    list_concerns: safeRead({ action: 'list_concerns' }),
-    resolve_concern: SCHEMA_ASSERT,
-    transition_concern: SCHEMA_ASSERT,
+  },
+  concerns: {
+    list: safeRead({ action: 'list' }),
+    create: SCHEMA_ASSERT,
+    resolve: SCHEMA_ASSERT,
+    transition: SCHEMA_ASSERT,
   },
   identity: {
     list_layers: safeRead({ action: 'list_layers' }),
@@ -375,6 +379,11 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
     write: SCHEMA_ASSERT,
     import: SCHEMA_ASSERT,
     propose_shared_world: SCHEMA_ASSERT,
+    // Per-world notes (psfn-framework-2nsfo): the read lists worlds; the note is a bounded write.
+    world_notes_read: safeRead({ action: 'world_notes_read' }),
+    world_note: SCHEMA_ASSERT,
+  },
+  projects: {
     wish_list: safeRead({ action: 'wish_list' }),
     wish_read: SCHEMA_ASSERT,
     wish_create: SCHEMA_ASSERT,
@@ -388,9 +397,6 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
     wardrobe_read: SCHEMA_ASSERT,
     wardrobe_save: SCHEMA_ASSERT,
     wardrobe_revise: SCHEMA_ASSERT,
-    // Per-world notes (psfn-framework-2nsfo): the read lists worlds; the note is a bounded write.
-    world_notes_read: safeRead({ action: 'world_notes_read' }),
-    world_note: SCHEMA_ASSERT,
   },
   schedule: {
     list: safeRead({ action: 'list' }),
@@ -413,6 +419,11 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
   notify: {
     brief: SCHEMA_ASSERT,
     send: SCHEMA_ASSERT,
+    initiate_companion: SCHEMA_ASSERT,
+    send_companion: SCHEMA_ASSERT,
+    list_dyads: SCHEMA_ASSERT,
+    dyad_lifecycle: SCHEMA_ASSERT,
+    relay: SCHEMA_ASSERT,
     consider: SCHEMA_ASSERT,
     approval_request: SCHEMA_ASSERT,
     clarify: SCHEMA_ASSERT,

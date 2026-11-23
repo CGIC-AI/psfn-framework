@@ -63,11 +63,10 @@ function classifyByActionSets(
   return { action, kind: 'unknown' };
 }
 
-// orient multiplexes core-memory block edits, the global values journal, and
-// the companion concern ledger — every one of those is core-authoritative truth.
+// orient multiplexes core-memory block edits and the global values journal —
+// both are core-authoritative truth.
 const ORIENT_READ_ACTIONS: ReadonlySet<string> = new Set([
   'values_list',
-  'list_concerns',
 ]);
 const ORIENT_MUTATION_ACTIONS: ReadonlySet<string> = new Set([
   'append',
@@ -75,22 +74,38 @@ const ORIENT_MUTATION_ACTIONS: ReadonlySet<string> = new Set([
   'reorient',
   'values_add',
   'values_update',
-  'create_concern',
-  'resolve_concern',
-  'transition_concern',
+]);
+
+// concerns owns the companion concern ledger — core-authoritative truth.
+const CONCERNS_READ_ACTIONS: ReadonlySet<string> = new Set(['list']);
+const CONCERNS_MUTATION_ACTIONS: ReadonlySet<string> = new Set([
+  'create',
+  'resolve',
+  'transition',
 ]);
 
 // journal notes are companion-voice durable content.
 const JOURNAL_READ_ACTIONS: ReadonlySet<string> = new Set(['list', 'read', 'search']);
 const JOURNAL_MUTATION_ACTIONS: ReadonlySet<string> = new Set(['write', 'append']);
 
-// wiki documents, wishes, projects, and wardrobe looks are companion-voice
-// durable content; propose_shared_world additionally has external reach.
+// wiki documents and world notes are companion-voice durable content;
+// propose_shared_world additionally has external reach.
 const WIKI_READ_ACTIONS: ReadonlySet<string> = new Set([
   'list',
   'read',
   'search',
   'semantic_search',
+  'world_notes_read',
+]);
+const WIKI_MUTATION_ACTIONS: ReadonlySet<string> = new Set([
+  'write',
+  'import',
+  'propose_shared_world',
+  'world_note',
+]);
+
+// personal projects, wishes, and wardrobe looks are companion-voice durable content.
+const PROJECTS_READ_ACTIONS: ReadonlySet<string> = new Set([
   'wish_list',
   'wish_read',
   'project_list',
@@ -98,10 +113,7 @@ const WIKI_READ_ACTIONS: ReadonlySet<string> = new Set([
   'wardrobe_list',
   'wardrobe_read',
 ]);
-const WIKI_MUTATION_ACTIONS: ReadonlySet<string> = new Set([
-  'write',
-  'import',
-  'propose_shared_world',
+const PROJECTS_MUTATION_ACTIONS: ReadonlySet<string> = new Set([
   'wish_create',
   'project_create',
   'project_update',
@@ -129,7 +141,7 @@ const SKILL_MUTATION_ACTIONS: ReadonlySet<string> = new Set([
 ]);
 
 const ORIENT_POLICY: SubagentToolGovernancePolicy = {
-  readActionsHelp: 'values_list, list_concerns',
+  readActionsHelp: 'values_list',
   classify(params) {
     return classifyByActionSets(
       resolveExplicitAction(params),
@@ -138,6 +150,19 @@ const ORIENT_POLICY: SubagentToolGovernancePolicy = {
     );
   },
 };
+
+function buildActionSetGovernance(
+  readActionsHelp: string,
+  reads: ReadonlySet<string>,
+  mutations: ReadonlySet<string>,
+): SubagentToolGovernancePolicy {
+  return {
+    readActionsHelp,
+    classify(params) {
+      return classifyByActionSets(resolveExplicitAction(params), reads, mutations);
+    },
+  };
+}
 
 const JOURNAL_POLICY: SubagentToolGovernancePolicy = {
   readActionsHelp: 'list, read, search',
@@ -151,9 +176,7 @@ const JOURNAL_POLICY: SubagentToolGovernancePolicy = {
 };
 
 const WIKI_POLICY: SubagentToolGovernancePolicy = {
-  readActionsHelp:
-    'list, read, search, semantic_search, wish_list, wish_read, project_list, project_read, '
-    + 'wardrobe_list, wardrobe_read',
+  readActionsHelp: 'list, read, search, semantic_search, world_notes_read',
   classify(params) {
     const explicit = resolveExplicitAction(params);
     if (explicit !== null || !isRecord(params)) {
@@ -199,8 +222,17 @@ const SKILL_POLICY: SubagentToolGovernancePolicy = {
 export const GOVERNED_SUBAGENT_TOOL_POLICIES: ReadonlyMap<string, SubagentToolGovernancePolicy> =
   new Map([
     ['orient', ORIENT_POLICY],
+    ['concerns', buildActionSetGovernance('list', CONCERNS_READ_ACTIONS, CONCERNS_MUTATION_ACTIONS)],
     ['journal', JOURNAL_POLICY],
     ['wiki', WIKI_POLICY],
+    [
+      'projects',
+      buildActionSetGovernance(
+        'wish_list, wish_read, project_list, project_read, wardrobe_list, wardrobe_read',
+        PROJECTS_READ_ACTIONS,
+        PROJECTS_MUTATION_ACTIONS,
+      ),
+    ],
     ['skill', SKILL_POLICY],
   ]);
 

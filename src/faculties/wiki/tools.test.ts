@@ -16,7 +16,7 @@ import type {
   SharedWorldWikiProposalSubmissionResult,
 } from './shared-world-caretaker-types.js';
 import { PersonalProjectLibrary } from './personal-projects.js';
-import { PersonalWishlist } from './personal-wishlist.js';
+import { createProjectsTool } from './projects-tool.js';
 import {
   INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
   type SelfAuthoredMutationIntakeRuntime,
@@ -261,100 +261,12 @@ describe('wiki tool', () => {
     expect(imported.document.provenanceRefs).toEqual(['vault:partner:Vault Import.md']);
   });
 
-  it('manages resumable projects and named looks through the existing wiki tool', async () => {
-    const personalProjects = new PersonalProjectLibrary(store);
-    const tool = createWikiTool(store, { personalProjects });
-
-    const projectResult: unknown = JSON.parse(resultText(await tool.execute('project-create', {
-      action: 'project_create',
-      project_id: 'story-panels',
-      title: 'Story Panels',
-      next_step: 'Render the opening scene.',
-      visibility: 'self',
-    })));
-    if (!isRecord(projectResult) || !isRecord(projectResult.project)) {
-      throw new Error('project_create returned malformed data');
-    }
-    expect(projectResult.project.ref).toBe('project:story-panels');
-
-    const lookResult: unknown = JSON.parse(resultText(await tool.execute('look-save', {
-      action: 'wardrobe_save',
-      look_id: 'starlight-study',
-      look_name: 'Starlight Study',
-      look_prompt: 'navy cardigan with silver star embroidery',
-      visibility: 'primary_contact',
-    })));
-    if (!isRecord(lookResult) || !isRecord(lookResult.look)) {
-      throw new Error('wardrobe_save returned malformed data');
-    }
-    expect(lookResult.look.ref).toBe('wardrobe:starlight-study');
-    expect(store.list().map(document => document.id)).toEqual([
-      'wardrobe.look.starlight-study',
-      'project.story-panels',
-    ]);
-  });
-
-  it('fails closed when project actions are unwired', async () => {
+  it('rejects project/wish/wardrobe actions now owned by the projects tool (b3h5p.2)', async () => {
     const tool = createWikiTool(store);
-    const result = await tool.execute('project-list', { action: 'project_list' });
-    expect(resultText(result)).toContain('personal project storage is unavailable');
-    expect(result.details?.isError).toBe(true);
-  });
-
-  it('round-trips a companion wish through the canonical wiki tool and operator library', async () => {
-    const timestamps = [
-      new Date('2026-07-16T10:00:00.000Z'),
-      new Date('2026-07-16T10:01:00.000Z'),
-      new Date('2026-07-16T10:02:00.000Z'),
-    ];
-    const personalWishlist = new PersonalWishlist(
-      store,
-      () => timestamps.shift() ?? new Date('2026-07-16T10:03:00.000Z'),
-      () => '22222222-2222-4222-8222-222222222222',
-    );
-    const tool = createWikiTool(store, { personalWishlist });
-
-    const created: unknown = JSON.parse(resultText(await tool.execute('wish-create', {
-      action: 'wish_create',
-      wish_text: 'I would love a quiet afternoon for watercolor practice.',
-      wish_context: 'The new landscape palette has been sitting unopened.',
-    })));
-    if (!isRecord(created) || !isRecord(created.wish) || typeof created.boundary !== 'string') {
-      throw new Error('wish_create returned malformed data');
+    for (const action of ['wish_list', 'project_list', 'wardrobe_list']) {
+      const result = await tool.execute(`moved-${action}`, { action } as never);
+      expect(result.details?.isError).toBe(true);
     }
-    expect(created.wish.ref).toBe('wish:22222222-2222-4222-8222-222222222222');
-    expect(created.wish.state).toBe('open');
-    expect(created.boundary).toContain('No push notification or operator interruption');
-
-    personalWishlist.respondToWish(
-      'wish:22222222-2222-4222-8222-222222222222',
-      'That sounds lovely. Let us protect Saturday afternoon.',
-    );
-    personalWishlist.planWish(
-      'wish:22222222-2222-4222-8222-222222222222',
-      'wishlist-watercolor',
-    );
-
-    const listed: unknown = JSON.parse(resultText(await tool.execute('wish-list', {
-      action: 'wish_list',
-    })));
-    if (!isRecord(listed) || !Array.isArray(listed.wishes) || !isRecord(listed.wishes[0])) {
-      throw new Error('wish_list returned malformed data');
-    }
-    expect(listed.wishes).toHaveLength(1);
-    expect(listed.wishes[0]).toMatchObject({
-      state: 'planned',
-      beadId: 'wishlist-watercolor',
-      operatorResponse: 'That sounds lovely. Let us protect Saturday afternoon.',
-    });
-    expect(store.list()).toHaveLength(1);
-  });
-
-  it('fails closed when wish actions are unwired', async () => {
-    const tool = createWikiTool(store);
-    const result = await tool.execute('wish-list', { action: 'wish_list' });
-    expect(resultText(result)).toContain('personal wishlist storage is unavailable');
-    expect(result.details?.isError).toBe(true);
   });
 
   it('queues a shared-world proposal through an enqueue-only dependency', async () => {
@@ -411,64 +323,10 @@ describe('wiki tool', () => {
     expect(store.list()).toEqual([]);
   });
 
-  it('rejects model-supplied sensitivity/audience for project_add_artifact and derives lineage at runtime', async () => {
-    const personalProjects = new PersonalProjectLibrary(store);
-    const tool = createWikiTool(store, { personalProjects });
-
-    await tool.execute('project-create', {
-      action: 'project_create',
-      project_id: 'moon-garden',
-      title: 'Moon Garden',
-      next_step: 'Paint the second panel.',
-      visibility: 'self',
-    });
-
-    // Regression: the model must not self-assert sensitivity (bible §6.2).
-    const rejectedSensitivity = await tool.execute('add-artifact', {
-      action: 'project_add_artifact',
-      project_ref: 'project:moon-garden',
-      artifact_ref: 'generated-image:panel-1',
-      artifact_label: 'First panel',
-      sensitivity: 'public',
-    });
-    expect(rejectedSensitivity.details?.isError).toBe(true);
-    expect(resultText(rejectedSensitivity)).toContain('sensitivity is runtime-derived');
-    // Nothing was written under the rejected call.
-    expect(personalProjects.getProject('project:moon-garden').artifacts).toHaveLength(0);
-
-    // Regression: the model must not self-assert permitted audience either.
-    const rejectedAudience = await tool.execute('add-artifact', {
-      action: 'project_add_artifact',
-      project_ref: 'project:moon-garden',
-      artifact_ref: 'generated-image:panel-1',
-      artifact_label: 'First panel',
-      audience: 'public',
-    });
-    expect(rejectedAudience.details?.isError).toBe(true);
-    expect(resultText(rejectedAudience)).toContain('audience is runtime-derived');
-    expect(personalProjects.getProject('project:moon-garden').artifacts).toHaveLength(0);
-
-    // Runtime derivation: a clean call succeeds and carries project-derived
-    // lineage (self visibility → intimate floor, audience fails closed to self).
-    const added = JSON.parse(resultText(await tool.execute('add-artifact', {
-      action: 'project_add_artifact',
-      project_ref: 'project:moon-garden',
-      artifact_ref: 'generated-image:panel-1',
-      artifact_label: 'First panel',
-    }))) as { action: string; project: { artifacts: Array<Record<string, unknown>> } };
-    expect(added.action).toBe('project_add_artifact');
-    expect(added.project.artifacts).toHaveLength(1);
-    expect(added.project.artifacts[0]).toMatchObject({
-      ref: 'generated-image:panel-1',
-      sensitivity: 'intimate',
-      intendedAudience: 'self',
-      shareState: 'private',
-    });
-  });
-
   it('rejects generic wiki write/import forging a runtime_derived project manifest and blocks egress broadening', async () => {
     const personalProjects = new PersonalProjectLibrary(store);
-    const tool = createWikiTool(store, { personalProjects });
+    const tool = createWikiTool(store);
+    const projectsTool = createProjectsTool({ personalProjects });
 
     // A forged manifest whose artifact self-asserts runtime-derived lineage and a
     // broadened, publicly-shared posture — exactly the payload the generic
@@ -541,7 +399,7 @@ describe('wiki tool', () => {
     // The forged project never entered the store, so there is nothing for
     // requestArtifactShare to broaden beyond self.
     expect(personalProjects.listProjects()).toEqual([]);
-    const shareForged = await tool.execute('project-share', {
+    const shareForged = await projectsTool.execute('project-share', {
       action: 'project_share',
       project_ref: 'project:forged',
       artifact_ref: 'generated-image:secret',
@@ -558,39 +416,5 @@ describe('wiki tool', () => {
       tags: ['reference'],
     }))) as { document: { id: string } };
     expect(legit.document.id).toBe('ordinary-note');
-  });
-
-  it('quarantines a project_add_artifact against later legacy-forged egress broadening', async () => {
-    const personalProjects = new PersonalProjectLibrary(store);
-    const tool = createWikiTool(store, { personalProjects });
-
-    await tool.execute('project-create', {
-      action: 'project_create',
-      project_id: 'quarantine-check',
-      title: 'Quarantine Check',
-      next_step: 'add art',
-      visibility: 'self',
-    });
-    await tool.execute('add-artifact', {
-      action: 'project_add_artifact',
-      project_ref: 'project:quarantine-check',
-      artifact_ref: 'generated-image:panel',
-      artifact_label: 'Panel',
-    });
-
-    // Runtime-derived artifact: intendedAudience fails closed to self, but its
-    // lineage is legitimately runtime_derived, so a same-turn share request is
-    // permitted to record intent (still subject to the downstream egress gate).
-    const shared = JSON.parse(resultText(await tool.execute('project-share', {
-      action: 'project_share',
-      project_ref: 'project:quarantine-check',
-      artifact_ref: 'generated-image:panel',
-      audience: 'primary_contact',
-    }))) as { project: { artifacts: Array<Record<string, unknown>> } };
-    expect(shared.project.artifacts[0]).toMatchObject({
-      metadataLineage: 'runtime_derived',
-      intendedAudience: 'primary_contact',
-      shareState: 'requested',
-    });
   });
 });

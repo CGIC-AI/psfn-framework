@@ -743,8 +743,8 @@ class InMemoryTranscriptSearch {
     expect(tool.name).toBe('session');
     expect(tool.label).toBe('session');
     expect(tool.description).toBe(CANONICAL_TOOL_SURFACE_DESCRIPTIONS.session);
-    expect(tool.description).toMatch(/action=new[^.]*optional: metadata/u);
-    expect(tool.description).not.toMatch(/action=new[^.]*\breason\b/u);
+    expect(tool.description).toMatch(/action=new\s*\(\[metadata\]\)/u);
+    expect(tool.description).not.toMatch(/action=new[^\n]*\breason\b/u);
     expect(Value.Check((fromAny(tool)).parameters, { action: 'session_resume', sessionId: 'api:session-two' })).toBe(false);
     expect(Value.Check((fromAny(tool)).parameters, { action: 'focus_start', scope: 'diagnose' })).toBe(false);
 

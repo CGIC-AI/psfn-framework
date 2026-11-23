@@ -1,4 +1,3 @@
-import { SystemMonitorPage } from './system-monitor-page.js';
 import {
   Menu,
   Heart,
@@ -608,8 +607,6 @@ export function App() {
       </section>
 
       <CompanionViewLayout
-        system={<SystemMonitorPage key={`${fleet.activeCompanionId}:${access.state === 'signed_in' ? access.displayStateBinding : access.state}`}
-          companionId={fleet.activeCompanionId} companionLabel={identityLabel} authorized={access.state === 'signed_in'} active={activeView === 'system'} />}
         activeView={activeView}
         onViewChange={setActiveView}
         thread={(

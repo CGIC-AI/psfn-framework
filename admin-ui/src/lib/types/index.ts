@@ -117,7 +117,6 @@ import type {
 
 export type {
   DashboardCostWindow,
-  DashboardCostWindowUsage,
   DashboardSessionContextPressure,
 } from '../../../../src/operator/garden/types.js';
 export type {

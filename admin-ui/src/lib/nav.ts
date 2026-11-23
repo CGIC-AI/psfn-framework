@@ -26,8 +26,7 @@ function navGroup(id: string, defaultLabel: string, items: NavItemInput[]): NavG
 export const navGroups: NavGroup[] = [
   navGroup('operate', 'Live Operations', [
     { id: 'dashboard', path: '/', defaultLabel: 'Dashboard', icon: '\u{1F333}' },
-    { id: 'chat', path: '/chat', defaultLabel: 'Chat', icon: '\u{1F4AC}' },
-    { id: 'sessions', path: '/sessions', defaultLabel: 'Sessions', icon: '\u{1F332}' },
+    { id: 'chat', path: '/chat', defaultLabel: 'Conversations', icon: '\u{1F4AC}' },
     { id: 'scheduler', path: '/scheduler', defaultLabel: 'Scheduler', icon: '\u{23F0}' },
     { id: 'automata', path: '/automata', defaultLabel: 'Automata', icon: '\u{2699}\u{FE0F}' },
     { id: 'places', path: '/places', defaultLabel: 'Places', icon: '\u{1F5FA}\u{FE0F}' },
@@ -64,7 +63,6 @@ export const navGroups: NavGroup[] = [
   navGroup('review', 'Review & Safety', [
     { id: 'prompts', path: '/prompts', defaultLabel: 'Prompts', icon: '\u{1FAB4}' },
     { id: 'prompt-monitor', path: '/prompt-monitor', defaultLabel: 'Prompt Monitor', icon: '\u{1F9F5}' },
-    { id: 'session-recovery', path: '/session-recovery', defaultLabel: 'Session Recovery', icon: '\u{26A0}\u{FE0F}' },
     { id: 'evals-emotion-sidecar', path: '/evals/emotion-sidecar', defaultLabel: 'Evals', icon: '\u{1F4CA}' },
     { id: 'confirmations', path: '/confirmations', defaultLabel: 'Confirmations', icon: '\u{1F512}' },
     { id: 'escalations', path: '/escalations', defaultLabel: 'Escalations', icon: '\u{1F6A8}' },

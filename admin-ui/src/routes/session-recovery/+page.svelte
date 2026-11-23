@@ -19,6 +19,8 @@
     ChannelInfo,
   } from '$lib/types';
 
+  let { embedded = false } = $props<{ embedded?: boolean }>();
+
   let routes = $state<AdminSessionRouteView[]>([]);
   let channels = $state<ChannelInfo[]>([]);
   let selectedSourceChannelId = $state('');
@@ -81,7 +83,7 @@
   });
 
   onMount(() => {
-    void loadRoutes();
+    if (embedded) void loadRoutes();
   });
 
   async function resetSession(): Promise<void> {
@@ -121,20 +123,14 @@
   }
 </script>
 
-<svelte:head>
-  <title>Session Recovery</title>
-</svelte:head>
-
-<div class="garden-page flex w-full flex-col gap-5">
-    <GardenPageHeader
-      eyebrow="Review & Safety · Session routing"
-      title="Session Recovery"
-      description="Cut a fresh logical lane without deleting prior L0 history. Retired sessions remain available for explicit audit and search."
-    >
-      {#snippet actions()}
-        <a class="rounded-xl border border-bark-300 bg-surface px-3 py-2 text-sm font-medium text-shadow-700 shadow-sm transition-colors hover:border-gold-300 hover:text-shadow-900" href={scopeGardenPath('/cognitive-security/remediation')}>Open remediation</a>
-      {/snippet}
-    </GardenPageHeader>
+<div class={embedded ? 'flex w-full flex-col gap-5' : 'garden-page flex w-full flex-col gap-5'}>
+  {#if embedded}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">
+        Cut a fresh logical lane without deleting prior L0 history. Retired sessions remain available for explicit audit and search.
+      </p>
+      <a class="rounded-xl border border-bark-300 bg-surface px-3 py-2 text-sm font-medium text-shadow-700 shadow-sm transition-colors hover:border-gold-300 hover:text-shadow-900" href={scopeGardenPath('/cognitive-security/remediation')}>Open remediation</a>
+    </div>
 
     {#if error}
       <div class="garden-error rounded border border-wilt-300 bg-wilt-50 px-4 py-3 text-sm text-wilt-800">
@@ -274,4 +270,11 @@
         </button>
       </form>
     </section>
+  {:else}
+    <GardenPageHeader
+      eyebrow="Live Operations"
+      title="Conversations"
+      description="Session recovery now lives under Conversations. Redirecting…"
+    />
+  {/if}
 </div>

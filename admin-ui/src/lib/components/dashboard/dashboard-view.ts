@@ -6,9 +6,7 @@ export type DashboardToolFilter = 'issues' | 'all';
 export const DASHBOARD_SECTIONS = [
   { id: 'overview', label: 'Overview', href: '#overview' },
   { id: 'health', label: 'Health', href: '#health' },
-  { id: 'memory', label: 'Memory', href: '#memory' },
-  { id: 'cost', label: 'Cost', href: '#cost' },
-  { id: 'traces', label: 'Traces', href: '#traces' },
+  { id: 'runtime', label: 'Runtime', href: '#runtime' },
 ] as const;
 
 export type DashboardSectionId = (typeof DASHBOARD_SECTIONS)[number]['id'];
@@ -63,9 +61,4 @@ export function filterDashboardTools(
       .toLocaleLowerCase()
       .includes(normalizedQuery);
   });
-}
-
-export function memorySharePercent(count: number, total: number): number {
-  if (!Number.isFinite(count) || !Number.isFinite(total) || count <= 0 || total <= 0) return 0;
-  return Math.min(100, (count / total) * 100);
 }

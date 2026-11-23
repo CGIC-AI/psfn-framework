@@ -1,6 +1,7 @@
 <script lang="ts">
   import { base } from '$app/paths';
   import { setContext } from 'svelte';
+  import ContextAllocationWidget from '$lib/components/garden/ContextAllocationWidget.svelte';
   import BackgroundMaintenanceControl from '$lib/components/settings/BackgroundMaintenanceControl.svelte';
   import SettingAuthorityHint from '$lib/components/settings/SettingAuthorityHint.svelte';
   import SettingFieldLabel from '$lib/components/settings/SettingFieldLabel.svelte';
@@ -142,9 +143,9 @@
         <p class="text-sm text-shadow-500 mt-1">% of context window for memory retrieval (default: 2%). Runtime keeps whole memories within this token budget.</p>
       </div>
     </div>
-    <div class="rounded-xl border border-bark-200 bg-bark-50 p-3 text-sm text-shadow-700">
-      The context window allocation preview lives on the Dashboard.
-      <a href={`${base}/`} class="ml-1 font-medium text-gold-700 hover:text-gold-800">Open Dashboard</a>
+    <div class="border-t border-bark-200 pt-4">
+      <p class="mb-3 text-sm font-medium text-shadow-800">Context Window Allocation Preview</p>
+      <ContextAllocationWidget />
     </div>
   </div>
 </section>

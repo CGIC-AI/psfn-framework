@@ -133,7 +133,7 @@ describe('resolveActiveTools', () => {
 
   it('prunes per-companion disabledTools up front across core and extended catalogs and records skip telemetry', () => {
     const result = resolveActiveTools({
-      coreTools: [makeTool('memory'), makeTool('web'), makeTool('fs')],
+      coreTools: [makeTool('memory'), makeTool('web'), makeTool('file_editor')],
       extendedTools: [makeTool('shell'), makeTool('world'), makeTool('group_chat')],
       promotedResolution: {
         activeNames: new Set<string>(),
@@ -143,10 +143,10 @@ describe('resolveActiveTools', () => {
       disabledTools: new Set(['web', 'shell', 'group_chat']),
     });
 
-    expect(result.tools.map(tool => tool.name)).toEqual(['memory', 'fs', 'world']);
+    expect(result.tools.map(tool => tool.name)).toEqual(['memory', 'file_editor', 'world']);
     expect(result.snapshotTools).toEqual([
       { toolName: 'memory', source: 'core' },
-      { toolName: 'fs', source: 'core' },
+      { toolName: 'file_editor', source: 'core' },
       { toolName: 'world', source: 'extended' },
     ]);
     expect(result.counts).toEqual({ core: 2, extended: 1, total: 3 });

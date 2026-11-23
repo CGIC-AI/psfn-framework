@@ -607,6 +607,29 @@ describe('executeShellCommandWithPolicy', () => {
       await expectNoSandboxProcesses(`sleep ${orphanSleepSeconds}`);
     }, 30_000);
 
+    it('supports git/repo operations and workspace session cwd continuity inside the Personal Workspace (b3h5p.3)', async () => {
+      const { workspace } = workspaceFixture();
+      mkdirSync(join(workspace, 'project', 'sub'), { recursive: true });
+
+      const gitResult = await executeShellCommandWithPolicy(
+        {
+          command: 'bash',
+          args: [
+            '-lc',
+            'cd project && git init -q && git config user.name "Test" && git config user.email "test@example.com" '
+              + '&& printf "hello\\n" > README.md && git add README.md && git commit -qm "init" '
+              + '&& printf "updated\\n" >> README.md && git status --short && git diff --stat',
+          ],
+          cwd: workspace,
+        },
+        { workspacePath: workspace, policy: enabledPolicy(workspace) },
+      );
+
+      expect(gitResult.exitCode).toBe(0);
+      expect(gitResult.stdout).toContain('M README.md');
+      expect(gitResult.stdout).toContain('1 file changed, 1 insertion(+)');
+    });
+
     it('does not expose a host path through a symlink inside the workspace', async () => {
       const { workspace, outside } = workspaceFixture();
       const link = join(workspace, 'outside-link');

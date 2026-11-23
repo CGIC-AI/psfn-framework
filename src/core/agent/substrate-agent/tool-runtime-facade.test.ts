@@ -834,7 +834,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
   it('rejects high-risk retired first-party aliases at the model-facing registration boundary', () => {
     const { facade } = createFacade(null);
     expect(() => facade.registerTool(makeTool('fs_read'), 'core')).toThrow(
-      'core tool registration includes retired first-party tool aliases: fs_read->fs',
+      'core tool registration includes retired first-party tool aliases: fs_read->file_editor',
     );
     expect(() => facade.registerTool(makeTool('session_new'), 'core')).toThrow(
       'core tool registration includes retired first-party tool aliases: session_new->session',
@@ -880,7 +880,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
   it('presents social/expressive tools before admin and boundary tools', () => {
     const { facade, agent, correlation } = createFacade(null);
     facade.registerTool(makeTool('system'), 'core');
-    facade.registerTool(makeTool('fs'), 'core');
+    facade.registerTool(makeTool('file_editor'), 'core');
     facade.registerTool(makeTool('memory'), 'core');
     facade.registerTool(makeTool('generate_image'), 'core');
     facade.registerTool(makeTool('contact'), 'core');
@@ -902,7 +902,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       'contact',
       'selfie_create',
       'generate_image',
-      'fs',
+      'file_editor',
       'system',
     ]);
   });

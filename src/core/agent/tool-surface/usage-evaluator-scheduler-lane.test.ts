@@ -56,16 +56,16 @@ describe('registerToolUsageEvaluatorTask', () => {
   it('registers an every-task wired to the agent ranking + durable turn records when enabled', async () => {
     const { scheduler, tasks } = fakeScheduler();
     const setToolUsageRanking = vi.fn();
-    // Deterministic tool (repo) invoked in a real turn record — the whole point:
+    // Deterministic tool (projects) invoked in a real turn record — the whole point:
     // the old model_usage source never saw this; the turn-record source does.
     // Fixed time a minute ago: safely inside the 'month' window and strictly
     // before the evaluator's now (untilMs = now + 1), avoiding read-time drift.
     const recordTime = Date.now() - 60_000;
     const readRecentTurnRecords = vi.fn((): TurnRecord[] => [
-      turnRecordWithTools(recordTime, [{ toolName: 'repo' }, { toolName: 'repo' }]),
+      turnRecordWithTools(recordTime, [{ toolName: 'projects' }, { toolName: 'projects' }]),
     ]);
     const agent = {
-      getToolCatalog: () => ({ core: [], extended: [{ name: 'repo' }] }),
+      getToolCatalog: () => ({ core: [], extended: [{ name: 'projects' }] }),
       getPromotedExtendedTools: () => [],
       getPromotedExtendedToolsLimit: () => 4,
       setToolUsageRanking,
@@ -93,8 +93,8 @@ describe('registerToolUsageEvaluatorTask', () => {
       rankedToolNames: string[];
       stats: Map<string, { successes: number }>;
     };
-    expect(applied.rankedToolNames).toEqual(['repo']);
-    expect(applied.stats.get('repo')?.successes).toBe(2);
+    expect(applied.rankedToolNames).toEqual(['projects']);
+    expect(applied.stats.get('projects')?.successes).toBe(2);
   });
 
   it('does not double-register if the task already exists', () => {

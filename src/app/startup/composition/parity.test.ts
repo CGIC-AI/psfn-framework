@@ -212,7 +212,7 @@ describe('wireFilesystemToolsRuntime', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('registers fs as a core tool with the settings-owned read default', () => {
+  it('registers file_editor as a core tool with the settings-owned read default', () => {
     const target = {
       registerTool: vi.fn(),
     };
@@ -220,7 +220,7 @@ describe('wireFilesystemToolsRuntime', () => {
     wireFilesystemToolsRuntime(fromPartial<FilesystemToolRuntimeTarget>(target), tempDir, { fsReadMaxBytes: 125_000 });
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
-    expect(calls.map(([tool]) => tool.name)).toEqual(['fs']);
+    expect(calls.map(([tool]) => tool.name)).toEqual(['file_editor']);
     expect(calls.every(([, category]) => category === 'core')).toBe(true);
     expect(calls[0]?.[0].parameters).toMatchObject({
       properties: {

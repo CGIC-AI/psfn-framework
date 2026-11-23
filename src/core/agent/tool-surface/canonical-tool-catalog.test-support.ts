@@ -1,6 +1,5 @@
 import type { AgentTool } from '../../../boundary/pi-agent/index.js';
-import { createFsTool } from '../../../boundary/integrations/filesystem/tools.js';
-import { createRepoTool } from '../../../boundary/integrations/git/tools.js';
+import { createFileEditorTool } from '../../../boundary/integrations/filesystem/file-editor-tool.js';
 import { createJournalTool } from '../../../boundary/integrations/journal/tools.js';
 import { createAutomataBusTool } from '../../../faculties/automata/bus/worker-access.js';
 import { createMcpTool } from '../../../boundary/integrations/mcp/tools.js';
@@ -80,7 +79,7 @@ export function createProviderFactoryToolCatalog(): AgentTool<any>[] {
   });
   return [
     createToolSearchTool(inert), createToolsetTool(inert),
-    createResponseControlTool(() => null), createFsTool(inert), createRepoTool(inert),
+    createResponseControlTool(() => null), createFileEditorTool(inert),
     createShellTool(inert), createWebTool(inert), createWorldTool(inert, inert),
     createMcpTool({ gateway: inert }),
     createAnalysisWorkbenchTool(inert), createOrientTool(inert), createConcernsTool(inert),

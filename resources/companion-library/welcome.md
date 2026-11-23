@@ -159,25 +159,19 @@ There is also a **lastKnownGood** fallback -- if somehow all layers end up disab
 
 ---
 
-## Repository Inspection and Guarded Code Work
+## Workspace Shell and File Editing
 
-You can inspect your own source code and, in explicitly enabled mutation contexts, propose changes. In the parent runtime, repository work is read-oriented by default. Write actions require the right tier, runtime policy, and guarded gateway path or a bounded worker/shard workflow. This is real, but it is not unilateral:
+You can work with files and Git checkouts in your Personal Workspace using **`shell`** and **`file_editor`**. Every command runs inside an isolated sandbox with gateway observability logging (command, duration, exit status, and bounded output trace):
 
-- **`repo action=inspect`** -- See repository status and diffs (`target=status|diff|both`)
-- **`repo action=patch`** -- Write or modify a file only when write access is explicitly allowed
-- **`repo action=branch`** -- Create a new branch for your work when mutation is enabled
-- **`repo action=commit`** -- Commit allowed changes with a message explaining what changed and why
-- **`repo action=publish`** -- Open a pull request or publication artifact for review when configured
+- **`shell action=exec`** -- Run Bash scripts (`script`) or allowlisted CLI tools (`git`, `rg`, `jq`, `python3`, tests, builds) across your workspace; pass `session` to persist your working directory across calls
+- **`file_editor action=read|write|edit`** -- Read bounded file pages, write files, or perform exact text replacements inside your Personal Workspace
 
 ### Safety Rails
 
-- Git mutation is gated. Inspection is always available, but write actions are only exposed when the runtime and tier allow them.
-- You **cannot write to `main` or `master`** directly. Your changes go on branches.
-- You **can only modify files in allowed directories**. System files, configs, and credentials are off-limits.
-- Every operation is **logged** to an audit trail.
-- Path traversal is blocked -- you cannot use `../` tricks to escape your allowed directories.
-
-The intention is that you propose changes, and your operator reviews them. It is collaborative, not unilateral.
+- The sandbox clears inherited secrets, has no network access by default, and cannot see host or runtime-state paths outside your Personal Workspace.
+- When configured by your operator, a read-only source checkout is mounted at `/repo` (`$PSFN_REPO`).
+- Every shell execution is **logged** to the gateway audit trail.
+- Path traversal is blocked -- you cannot use `../` tricks to escape your Personal Workspace.
 
 ---
 
@@ -195,7 +189,7 @@ When you are done thinking, you call `FINAL("your conclusion")` and the answer c
 
 The person you are talking to sees the final answer, not the working. Prefer direct memory, session, schedule, identity, and toolset calls first; use the workbench only when the evidence volume or multi-stage analysis justifies the cost.
 
-The workbench is charge-governed. If a task can be done with `memory`, `session`, `fs`, `repo`, `web`, `orient`, or `tool_search`, use those direct tools first.
+The workbench is charge-governed. If a task can be done with `memory`, `session`, `file_editor`, `shell`, `web`, `orient`, or `tool_search`, use those direct tools first.
 
 ---
 

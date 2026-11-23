@@ -74,29 +74,29 @@ describe('turn-record tool usage source (durable, real store)', () => {
     const todayStart = Date.UTC(2026, 6, 15, 1, 0, 0);
     const longAgo = now - 40 * 24 * 60 * 60 * 1000;
 
-    // In-window: a deterministic tool (memory) + repo success + repo failure.
+    // In-window: a deterministic tool (memory) + projects success + projects failure.
     store.appendTurnRecord(buildTurnRecord({
       startedAt: todayStart,
       requestId: 'req-in-1',
-      tools: [{ toolName: 'memory' }, { toolName: 'repo', isError: false }],
+      tools: [{ toolName: 'memory' }, { toolName: 'projects', isError: false }],
     }));
     store.appendTurnRecord(buildTurnRecord({
       startedAt: todayStart + 5,
       requestId: 'req-in-2',
-      // Non-canonical must be filtered; repo failure is the correction signal.
+      // Non-canonical must be filtered; projects failure is the correction signal.
       tools: [
-        { toolName: 'repo', outcome: 'execution_failure', isError: true },
+        { toolName: 'projects', outcome: 'execution_failure', isError: true },
         {
-          toolName: 'repo',
+          toolName: 'projects',
           isError: true,
           resultText: DUPLICATE_TOOL_CALL_SKIP_RESULT,
         },
         {
-          toolName: 'repo',
+          toolName: 'projects',
           isError: true,
           resultText: SEQUENTIAL_DEPENDENCY_SKIP_RESULT,
         },
-        { toolName: 'repo', outcome: 'policy_denial', isError: true },
+        { toolName: 'projects', outcome: 'policy_denial', isError: true },
         { toolName: 'definitely_not_a_tool' },
       ],
     }));
@@ -120,8 +120,8 @@ describe('turn-record tool usage source (durable, real store)', () => {
     expect(aggregate.sourceId).toBe('turn_records');
     // memory: one in-window success (the two out-of-window ones excluded).
     expect(byName.get('memory')).toEqual({ toolName: 'memory', invocations: 1, successes: 1, failures: 0 });
-    // repo: skips/denials remain visible invocations but do not inflate failures.
-    expect(byName.get('repo')).toEqual({ toolName: 'repo', invocations: 5, successes: 1, failures: 1 });
+    // projects: skips/denials remain visible invocations but do not inflate failures.
+    expect(byName.get('projects')).toEqual({ toolName: 'projects', invocations: 5, successes: 1, failures: 1 });
     // Non-canonical excluded.
     expect(byName.has('definitely_not_a_tool')).toBe(false);
     expect(aggregate.toolsWithData).toBe(2);
@@ -138,7 +138,7 @@ describe('turn-record tool usage source (durable, real store)', () => {
       store.appendTurnRecord(buildTurnRecord({
         startedAt: todayStart + i,
         requestId: `req-${i}`,
-        tools: [{ toolName: 'memory' }, { toolName: 'repo' }],
+        tools: [{ toolName: 'memory' }, { toolName: 'projects' }],
       }));
     }
 
@@ -153,7 +153,7 @@ describe('turn-record tool usage source (durable, real store)', () => {
     const events: ToolUsageEvaluatorEvent[] = [];
     const evaluator = createToolUsageEvaluator({
       getUsageAggregateSource: () => source,
-      getExtendedToolNames: () => ['repo', 'shell', 'vault'],
+      getExtendedToolNames: () => ['projects', 'world', 'north_star'],
       getCatalogToolCount: () => 12,
       getPromotedExtendedTools: () => [],
       getPromotedExtendedToolsLimit: () => 4,
@@ -170,9 +170,9 @@ describe('turn-record tool usage source (durable, real store)', () => {
     expect(ranking).toBeDefined();
     // The deterministic tools invoked in real durable turns are now ranked.
     expect(appliedRankedNames).toContain('memory');
-    expect(appliedRankedNames).toContain('repo');
+    expect(appliedRankedNames).toContain('projects');
     expect(ranking!.stats.get('memory')).toMatchObject({ successes: 6 });
-    expect(ranking!.stats.get('repo')).toMatchObject({ successes: 6 });
+    expect(ranking!.stats.get('projects')).toMatchObject({ successes: 6 });
 
     const evaluated = events[0];
     expect(evaluated.outcome).toBe('evaluated');
@@ -182,8 +182,8 @@ describe('turn-record tool usage source (durable, real store)', () => {
       expect(evaluated.catalogToolCount).toBe(12);
     }
 
-    // repo has 6 successful in-window invocations >= threshold 5 → pin suggestion.
-    expect(result.suggestions.map(s => s.toolName)).toContain('repo');
+    // projects has 6 successful in-window invocations >= threshold 5 → pin suggestion.
+    expect(result.suggestions.map(s => s.toolName)).toContain('projects');
   });
 
   it('flags truncation when the per-channel scan cap is smaller than the in-window history', () => {
@@ -193,7 +193,7 @@ describe('turn-record tool usage source (durable, real store)', () => {
       store.appendTurnRecord(buildTurnRecord({
         startedAt: todayStart + i,
         requestId: `req-${i}`,
-        tools: [{ toolName: 'repo' }],
+        tools: [{ toolName: 'projects' }],
       }));
     }
 
@@ -209,7 +209,7 @@ describe('turn-record tool usage source (durable, real store)', () => {
     // Only the newest 2 records read, all in-window → possibly more older → truncated.
     expect(aggregate.turnRecordsScanned).toBe(2);
     expect(aggregate.truncated).toBe(true);
-    expect(aggregate.stats.find(s => s.toolName === 'repo')?.successes).toBe(2);
+    expect(aggregate.stats.find(s => s.toolName === 'projects')?.successes).toBe(2);
   });
 
   it('keeps the implicit synchronous scan inside the agent readiness budget', () => {

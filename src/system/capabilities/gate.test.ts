@@ -824,64 +824,54 @@ describe('capability tool gating', () => {
     expect(session.executeSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('gates unified fs actions using git read/write capability requirements', async () => {
-    const fsTool = createTool('fs');
+  it('gates file_editor actions using git read/write capability requirements and fails closed on retired fs/repo', async () => {
+    const editorTool = createTool('file_editor');
     const readGated = gateToolWithCapabilities(
-      fsTool.tool,
+      editorTool.tool,
       () => accessForTier('custom', ['memory.write']),
     );
-    const readDenied = await readGated.execute('fs-read', { action: 'read', path: 'src/agent-main.ts' });
-    expect(fsTool.executeSpy).not.toHaveBeenCalled();
+    const readDenied = await readGated.execute('editor-read', { action: 'read', path: 'notes.md' });
+    expect(editorTool.executeSpy).not.toHaveBeenCalled();
     expect(fromAny(readDenied.content[0]).text).toContain('git.read');
 
     const writeGated = gateToolWithCapabilities(
-      fsTool.tool,
+      editorTool.tool,
       () => accessForTier('custom', ['git.read']),
     );
-    const writeDenied = await writeGated.execute('fs-write', {
+    const writeDenied = await writeGated.execute('editor-write', {
       action: 'write',
       path: 'notes.txt',
       content: 'hello',
     });
-    expect(fsTool.executeSpy).not.toHaveBeenCalled();
+    expect(editorTool.executeSpy).not.toHaveBeenCalled();
     expect(fromAny(writeDenied.content[0]).text).toContain('git.write');
 
-    const allowedRead = gateToolWithCapabilities(
-      fsTool.tool,
-      () => accessForTier('nursery'),
-    );
-    await allowedRead.execute('fs-list', {});
-    expect(fsTool.executeSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it('gates unified repo actions using git read/write capability requirements', async () => {
-    const repoTool = createTool('repo');
-    const readGated = gateToolWithCapabilities(
-      repoTool.tool,
-      () => accessForTier('custom', ['memory.write']),
-    );
-    const inspectDenied = await readGated.execute('repo-inspect', { action: 'inspect', target: 'status' });
-    expect(repoTool.executeSpy).not.toHaveBeenCalled();
-    expect(fromAny(inspectDenied.content[0]).text).toContain('git.read');
-
-    const writeGated = gateToolWithCapabilities(
-      repoTool.tool,
-      () => accessForTier('custom', ['git.read']),
-    );
-    const patchDenied = await writeGated.execute('repo-patch', {
-      action: 'patch',
-      file_path: 'src/agent-main.ts',
-      content: 'patched',
+    const editDenied = await writeGated.execute('editor-edit', {
+      action: 'edit',
+      path: 'notes.txt',
+      old_text: 'a',
+      new_text: 'b',
     });
-    expect(repoTool.executeSpy).not.toHaveBeenCalled();
-    expect(fromAny(patchDenied.content[0]).text).toContain('git.write');
+    expect(editorTool.executeSpy).not.toHaveBeenCalled();
+    expect(fromAny(editDenied.content[0]).text).toContain('git.write');
 
     const allowedRead = gateToolWithCapabilities(
-      repoTool.tool,
+      editorTool.tool,
       () => accessForTier('nursery'),
     );
-    await allowedRead.execute('repo-allowed', {});
-    expect(repoTool.executeSpy).toHaveBeenCalledTimes(1);
+    await allowedRead.execute('editor-read-ok', { action: 'read', path: 'notes.md' });
+    expect(editorTool.executeSpy).toHaveBeenCalledTimes(1);
+
+    for (const retired of ['fs', 'repo']) {
+      const retiredTool = createTool(retired);
+      const retiredGated = gateToolWithCapabilities(
+        retiredTool.tool,
+        () => accessForTier('autonomous'),
+      );
+      const denied = await retiredGated.execute(`retired-${retired}`, {});
+      expect(retiredTool.executeSpy).not.toHaveBeenCalled();
+      expect(fromAny(denied.details).capabilityUndeclared).toBe(true);
+    }
   });
 
   it('evaluates toolset capability requirements by action', async () => {

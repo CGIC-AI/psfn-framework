@@ -15,7 +15,7 @@ Use this skill when changes require repository operations.
 - Keep commits scoped and descriptive.
 
 ## Tooling
-- Use `repo` with `action="inspect"` and `target="status"` for branch and dirty state.
-- Use `repo` with `action="inspect"` and `target="diff"` to inspect changes.
-- Use `repo` with `action="patch"` for targeted edits when mutation is available.
-- Use `repo` with `action="commit"` when the change is verified and mutation is available.
+- Use `shell` (`action="exec"`, `script="git status --short"`) for branch and dirty state.
+- Use `shell` (`action="exec"`, `script="git diff"`) to inspect changes.
+- Use `file_editor` (`action="edit"` or `action="write"`) for targeted workspace file edits.
+- Use `shell` (`action="exec"`, `script="git commit -m '...'"`) when changes inside a workspace checkout are verified.

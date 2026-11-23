@@ -86,8 +86,7 @@ export const TOOL_CONFORMANCE_PROBE_REGISTRY: Readonly<Record<string, ToolProbeS
   north_star: { kind: 'read_only', action: 'list', args: { action: 'list' } },
 
   // ── Boundary / external / side-effecting → schema-only ──
-  fs: { kind: 'schema_only' },
-  repo: { kind: 'schema_only' },
+  file_editor: { kind: 'schema_only' },
   shell: { kind: 'schema_only' },
   web: { kind: 'schema_only' },
   mcp: { kind: 'schema_only' },
@@ -221,19 +220,10 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
   response_control: {
     no_reply: SCHEMA_ASSERT,
   },
-  fs: {
+  file_editor: {
     read: SCHEMA_ASSERT,
-    list: SCHEMA_ASSERT,
-    search: SCHEMA_ASSERT,
     write: SCHEMA_ASSERT,
     edit: SCHEMA_ASSERT,
-  },
-  repo: {
-    inspect: SCHEMA_ASSERT,
-    patch: SCHEMA_ASSERT,
-    commit: SCHEMA_ASSERT,
-    branch: SCHEMA_ASSERT,
-    publish: SCHEMA_ASSERT,
   },
   shell: {
     exec: SCHEMA_ASSERT,

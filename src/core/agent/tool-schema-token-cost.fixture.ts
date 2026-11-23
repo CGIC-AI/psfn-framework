@@ -42,4 +42,6 @@ export const PRE_DESCRIPTION_REWRITE_TOOL_DESCRIPTIONS: Readonly<Partial<Record<
   // concerns and projects were split out of orient and wiki in psfn-framework-b3h5p.2.
   concerns: 'Track active commitments, open threads, and care items that need follow-through. Use action=list|create|resolve|transition. Copy exact concernId values from create or list.',
   projects: 'Manage companion-owned personal projects, asynchronous wishes, and named wardrobe looks. Use action=wish_list|wish_read|wish_create|project_list|project_read|project_create|project_update|project_add_artifact|project_share|wardrobe_list|wardrobe_read|wardrobe_save|wardrobe_revise.',
+  // file_editor replaced the wider fs wrapper in psfn-framework-b3h5p.3.
+  file_editor: 'Read, write, and perform exact text edits on files within the Personal Workspace. Use action=read|write|edit with a required path. Use shell for directory listing, search, and git operations.',
 };

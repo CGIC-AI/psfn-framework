@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount, type Component } from 'svelte';
   import { goto } from '$app/navigation';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
   import LazyGardenPage from '$lib/components/garden/LazyGardenPage.svelte';
@@ -19,7 +19,7 @@
     type InboxTabId,
   } from '$lib/nav/canonical-routes';
 
-  const activeTab = $derived(resolveInboxTab($page.url.searchParams));
+  const activeTab = $derived(resolveInboxTab(page.url.searchParams));
   let tabCounts = $state<InboxTabCounts>(emptyInboxTabCounts());
   let unsubscribeCounts: (() => void) | null = null;
 
@@ -76,7 +76,6 @@
     const tab = INBOX_TABS.find(candidate => candidate.id === id)?.id;
     if (!tab || tab === activeTab) return;
     void goto(scopeGardenPath(canonicalInboxPath(tab)), {
-      keepFocus: true,
       noScroll: true,
     });
   }

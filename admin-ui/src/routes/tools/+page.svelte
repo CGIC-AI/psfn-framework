@@ -1,7 +1,8 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { base } from '$app/paths';
-  import { page } from '$app/stores';
+  import { resolve } from '$app/paths';
+  const base = resolve('/').replace(/\/$/, '');
+  import { page } from '$app/state';
   import FailureRow from '$lib/components/tools/FailureRow.svelte';
   import ServiceHealthPanel from '$lib/components/tools/ServiceHealthPanel.svelte';
   import ToolCard from '$lib/components/tools/ToolCard.svelte';
@@ -208,7 +209,7 @@
   }
 
   const toolsHubTabs: GardenTabItem[] = TOOLS_TABS.map(tab => ({ ...tab }));
-  const activeHubTab = $derived(resolveToolsTab($page.url.searchParams));
+  const activeHubTab = $derived(resolveToolsTab(page.url.searchParams));
   const loadSkillsPage = () => import('../skills/+page.svelte');
   const loadWorkbenchPage = () => import('../analysis-workbench/+page.svelte');
   const loadShardsPage = () => import('../shards/+page.svelte');
@@ -218,7 +219,6 @@
     const tab = TOOLS_TABS.find(candidate => candidate.id === id)?.id;
     if (!tab || tab === activeHubTab) return;
     void goto(scopeGardenPath(canonicalToolsPath(tab)), {
-      keepFocus: true,
       noScroll: true,
     });
   }

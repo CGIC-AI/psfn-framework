@@ -1,7 +1,8 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { base } from '$app/paths';
-  import { page } from '$app/stores';
+  import { resolve } from '$app/paths';
+  const base = resolve('/').replace(/\/$/, '');
+  import { page } from '$app/state';
   import {
     getModelsConfigRaw,
     getProvidersConfigRaw,
@@ -903,7 +904,7 @@
   }
 
   const modelsTabs: GardenTabItem[] = MODELS_TABS.map(tab => ({ ...tab }));
-  const activeHubTab = $derived(resolveModelsTab($page.url.searchParams));
+  const activeHubTab = $derived(resolveModelsTab(page.url.searchParams));
   const loadChargeBudgetPage = () => import('../charge-budget/LazyPageContent.svelte');
   const loadFleetCostsPage = () => import('../fleet-costs/LazyPageContent.svelte');
   let modelsLoadStarted = false;
@@ -912,7 +913,6 @@
     const tab = MODELS_TABS.find(candidate => candidate.id === id)?.id;
     if (!tab || tab === activeHubTab) return;
     void goto(scopeGardenPath(canonicalModelsPath(tab)), {
-      keepFocus: true,
       noScroll: true,
     });
   }

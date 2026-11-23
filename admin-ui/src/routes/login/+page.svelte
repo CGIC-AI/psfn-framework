@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { base } from '$app/paths';
+  import { resolve } from '$app/paths';
+  const base = resolve('/').replace(/\/$/, '');
   import { setToken } from '$lib/stores/auth.svelte';
   import { getCompanionName } from '$lib/stores/companion.svelte';
 

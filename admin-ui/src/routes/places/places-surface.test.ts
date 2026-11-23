@@ -12,7 +12,7 @@ describe('canonical Places surface', () => {
     const source = readFileSync(PLACES_PAGE, 'utf8');
 
     expect(source).toContain('PLACES_TABS');
-    expect(source).toContain('resolvePlacesTab($page.url.searchParams)');
+    expect(source).toContain('resolvePlacesTab(page.url.searchParams)');
     expect(source).toContain('canonicalPlacesPath(tab)');
     expect(source).toContain('<GardenTabBar');
     expect(source).toContain('<RoomsPage embedded />');

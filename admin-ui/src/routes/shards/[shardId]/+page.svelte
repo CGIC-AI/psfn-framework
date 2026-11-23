@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { page } from '$app/stores';
-  import { base } from '$app/paths';
+  import { page } from '$app/state';
+  import { resolve } from '$app/paths';
+  const base = resolve('/').replace(/\/$/, '');
   import { ApiError } from '$lib/api/client';
   import {
     getShardConfiguration,
@@ -21,7 +22,7 @@
   import type { ShardFoldReviewRecord } from '../../../../../src/faculties/shards/fold-review.js';
   import type { ShardConfigurationSnapshot } from '../../../../../src/faculties/shards/types.js';
 
-  const shardId = $derived($page.params.shardId ?? '');
+  const shardId = $derived(page.params.shardId ?? '');
   let snapshot = $state<ShardConfigurationSnapshot | null>(null);
   let review = $state<ShardFoldReviewRecord | null>(null);
   let loading = $state(true);

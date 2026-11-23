@@ -1,6 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import {
     getIdentity,
     importIdentity,
@@ -41,7 +41,7 @@
   } from '$lib/nav/canonical-routes';
 
   const identityTabs: GardenTabItem[] = IDENTITY_TABS.map(tab => ({ ...tab }));
-  const activeTab = $derived(resolveIdentityTab($page.url.searchParams));
+  const activeTab = $derived(resolveIdentityTab(page.url.searchParams));
   const loadPromptsPage = () => import('../prompts/+page.svelte');
   const loadPromptMonitorPage = () => import('../prompt-monitor/+page.svelte');
   const loadValuesPage = () => import('../values/+page.svelte');
@@ -51,7 +51,6 @@
     const tab = IDENTITY_TABS.find(candidate => candidate.id === id)?.id;
     if (!tab || tab === activeTab) return;
     void goto(scopeGardenPath(canonicalIdentityPath(tab)), {
-      keepFocus: true,
       noScroll: true,
     });
   }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import {
     getPlaces,
     rebindSatellite,
@@ -24,7 +24,7 @@
 
   const loadRoomArbiterPage = () => import('../room-arbiter/+page.svelte');
   const placesTabs: GardenTabItem[] = PLACES_TABS.map(tab => ({ ...tab }));
-  const activeTab = $derived(resolvePlacesTab($page.url.searchParams));
+  const activeTab = $derived(resolvePlacesTab(page.url.searchParams));
 
   let data = $state<AdminPlacesData | null>(null);
   let loading = $state(true);
@@ -147,7 +147,6 @@
     const tab = PLACES_TABS.find(candidate => candidate.id === id)?.id;
     if (!tab || tab === activeTab) return;
     void goto(scopeGardenPath(canonicalPlacesPath(tab)), {
-      keepFocus: true,
       noScroll: true,
     });
   }

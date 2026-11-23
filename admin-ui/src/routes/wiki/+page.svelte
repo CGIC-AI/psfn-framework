@@ -1,6 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import {
     getSharedWorldWikiDocument,
     getWikiDocument,
@@ -34,7 +34,7 @@
   } from '../../../../src/faculties/wiki/personal-project-contracts';
 
   const knowledgeTabs: GardenTabItem[] = KNOWLEDGE_TABS.map(tab => ({ ...tab }));
-  const activeTab = $derived(resolveKnowledgeTab($page.url.searchParams));
+  const activeTab = $derived(resolveKnowledgeTab(page.url.searchParams));
   const loadConcernsPage = () => import('../concerns/+page.svelte');
   const loadWishlistPage = () => import('../wishlist/+page.svelte');
   const loadImagesPage = () => import('../images/LazyPageContent.svelte');
@@ -44,7 +44,6 @@
     const tab = KNOWLEDGE_TABS.find(candidate => candidate.id === id)?.id;
     if (!tab || tab === activeTab) return;
     void goto(scopeGardenPath(canonicalKnowledgePath(tab)), {
-      keepFocus: true,
       noScroll: true,
     });
   }

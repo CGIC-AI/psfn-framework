@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, tick } from 'svelte';
   import { goto } from '$app/navigation';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { getChatBootstrap, updateChatBootstrap } from '$lib/api/endpoints/chat';
   import { getModelRoomBootstrap } from '$lib/api/endpoints/model-room';
   import { applyIdentityOnboardingAction } from '$lib/api/endpoints/identity';
@@ -44,14 +44,13 @@
   import SessionRecoveryPage from '../session-recovery/+page.svelte';
 
   const conversationsTabs: GardenTabItem[] = CONVERSATIONS_TABS.map(tab => ({ ...tab }));
-  const activeTab = $derived(resolveConversationsTab($page.url.searchParams));
+  const activeTab = $derived(resolveConversationsTab(page.url.searchParams));
   let liveChatLoadStarted = false;
 
   function selectConversationsTab(id: string): void {
     const tab = CONVERSATIONS_TABS.find(candidate => candidate.id === id)?.id;
     if (!tab || tab === activeTab) return;
     void goto(scopeGardenPath(canonicalConversationsPath(tab)), {
-      keepFocus: true,
       noScroll: true,
     });
   }

@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import FleetCostUsage from '$lib/components/fleet/FleetCostUsage.svelte';
   import { parseCompanionGardenScope } from '$lib/fleet/companion-scope';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
 
   let { embedded = false }: { embedded?: boolean } = $props();
 
-  const companionScope = $derived(parseCompanionGardenScope($page.url.pathname));
+  const companionScope = $derived(parseCompanionGardenScope(page.url.pathname));
 </script>
 
 {#if companionScope}

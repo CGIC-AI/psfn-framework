@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
   import LazyGardenPage from '$lib/components/garden/LazyGardenPage.svelte';
@@ -161,7 +161,7 @@
   });
 
   const safetyTabs: GardenTabItem[] = SAFETY_TABS.map(tab => ({ ...tab }));
-  const activeTab = $derived(resolveSafetyTab($page.url.searchParams));
+  const activeTab = $derived(resolveSafetyTab(page.url.searchParams));
   const loadTelemetryPage = () => import('../telemetry/LazyPageContent.svelte');
   const loadFirewallPage = () => import('../cognitive-security/firewall/+page.svelte');
   const loadDriftPage = () => import('../cognitive-security/drift/+page.svelte');
@@ -172,7 +172,6 @@
     const tab = SAFETY_TABS.find(candidate => candidate.id === id)?.id;
     if (!tab || tab === activeTab) return;
     void goto(scopeGardenPath(canonicalSafetyPath(tab)), {
-      keepFocus: true,
       noScroll: true,
     });
   }

@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import '../app.css';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { goto } from '$app/navigation';
-  import { base } from '$app/paths';
+  import { resolve } from '$app/paths';
+  const base = resolve('/').replace(/\/$/, '');
   import { navGroups } from '$lib/nav';
   import OperatorNavigation from '$lib/components/navigation/OperatorNavigation.svelte';
   import FleetNavigation from '$lib/components/navigation/FleetNavigation.svelte';
@@ -67,7 +68,7 @@
   let fleetProjection = $state<FleetPortalProjection | null>(null);
   let fleetProjectionController: AbortController | null = null;
   let fleetProjectionError = $state('');
-  const gardenPathname = $derived(resolveGardenBrowserPathname($page.url.pathname));
+  const gardenPathname = $derived(resolveGardenBrowserPathname(page.url.pathname));
   const companionScope = $derived(parseCompanionGardenScope(gardenPathname));
   const activeCompanionId = $derived(companionScope?.companionId ?? null);
   const companionName = $derived(getCompanionName());
@@ -183,19 +184,19 @@
   })) as ConsoleNavigationGroup[]);
 
   // Check if current path is the login page
-  // SvelteKit strips the base path from $page.url.pathname, so we check for '/login'
+  // SvelteKit strips the base path from page.url.pathname, so we check for '/login'
   let isLoginPage = $derived(
     gardenPathname === '/login' || companionScope?.innerPath === '/login',
   );
   let isFleetPage = $derived(isFleetOverviewPath(gardenPathname));
-  const activeFleetView = $derived(resolveFleetView($page.url.search, $page.url.hash));
+  const activeFleetView = $derived(resolveFleetView(page.url.search, page.url.hash));
 
   // Redirect to login if not authenticated (except on login page itself)
   $effect(() => {
     const destination = canonicalGardenDestination(
       gardenPathname,
-      $page.url.search,
-      $page.url.hash,
+      page.url.search,
+      page.url.hash,
     );
     if (destination && typeof window !== 'undefined') {
       window.location.replace(destination);

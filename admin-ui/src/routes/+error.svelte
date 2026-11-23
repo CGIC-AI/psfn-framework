@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { base } from '$app/paths';
+  import { resolve } from '$app/paths';
+  const base = resolve('/').replace(/\/$/, '');
 
   let { error, status } = $props<{
     error: Error & { message?: string };

@@ -1,8 +1,9 @@
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
-import type { LLMContext } from '../../shared/contracts/runtime.js';
 import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../shared/telemetry/model-usage.js';
-import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
-import { isRecord } from '../../shared/utils/types.js';
+import {
+  boundedSealedText,
+  completeSealedJsonObject,
+} from '../../primitives/llm/sealed-json-runner.js';
 import type { IntrospectionAuditConfig } from '../../system/config/scheduler-config.js';
 import type {
   BlindedAuditorPort,
@@ -20,50 +21,11 @@ const AUDITOR_SYSTEM_PROMPT = [
   'Return exactly one JSON object and no markdown.',
 ].join(' ');
 
-function stripJsonFence(content: string): string {
-  const trimmed = content.trim();
-  const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n?```\s*$/iu.exec(trimmed);
-  return fenced?.[1] !== undefined ? fenced[1].trim() : trimmed;
-}
-
-function parseJsonObject(content: string, label: string): Record<string, unknown> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stripJsonFence(content));
-  } catch {
-    throw new Error(`${label} returned malformed JSON`);
-  }
-  if (!isRecord(parsed)) {
-    throw new Error(`${label} must return a JSON object`);
-  }
-  return parsed;
-}
-
-function assertExactKeys(value: Record<string, unknown>, keys: readonly string[], label: string): void {
-  const expected = new Set(keys);
-  const actual = Object.keys(value);
-  if (actual.length !== expected.size || actual.some(key => !expected.has(key))) {
-    throw new Error(`${label} returned an invalid response shape`);
-  }
-}
-
-function boundedText(value: unknown, field: string, maximum: number): string {
-  if (typeof value !== 'string') {
-    throw new Error(`${field} must be a string`);
-  }
-  const normalized = value.trim();
-  if (normalized.length === 0 || normalized.length > maximum || /\0/.test(normalized)) {
-    throw new Error(`${field} must be 1-${maximum} characters`);
-  }
-  return normalized;
-}
-
-function context(systemPrompt: string, content: string): LLMContext {
-  return {
-    systemPrompt,
-    messages: [{ role: 'user', content }],
-  };
-}
+const BACKGROUND_AUDIT_WORK_SPEC = {
+  purpose: 'background' as const,
+  durable: false as const,
+  correlation: COMPANION_PRIVATE_BACKGROUND_TELEMETRY,
+};
 
 export function createLLMIntrospectionAuditor(
   llmProvider: LLMProviderPort,
@@ -71,31 +33,31 @@ export function createLLMIntrospectionAuditor(
 ): BlindedAuditorPort {
   return {
     estimateStableReply: async (candidate): Promise<StableReplyEstimate> => {
-      const response = await completeWithWorkSpec(
+      const { parsed, response } = await completeSealedJsonObject({
         llmProvider,
-        context(AUDITOR_SYSTEM_PROMPT, JSON.stringify({
+        label: 'stable reply estimator',
+        systemPrompt: AUDITOR_SYSTEM_PROMPT,
+        payload: {
           task: 'Estimate the stable, ordinary reply to this public stimulus.',
           outputSchema: { stableReply: 'string' },
           publicStimulus: blindPublicStimulus(candidate.publicStimulus),
-        })),
-        buildLLMWorkSpec({
-          purpose: 'background',
-          durable: false,
-          correlation: COMPANION_PRIVATE_BACKGROUND_TELEMETRY,
-        }),
-        { modelHint: { maxTokens: config.estimatorMaxTokens, temperature: 0 } },
-      );
-      const parsed = parseJsonObject(response.content, 'stable reply estimator');
-      assertExactKeys(parsed, ['stableReply'], 'stable reply estimator');
+        },
+        workSpec: BACKGROUND_AUDIT_WORK_SPEC,
+        exactKeys: ['stableReply'],
+        allowMarkdownFence: true,
+        modelHint: { maxTokens: config.estimatorMaxTokens, temperature: 0 },
+      });
       return {
-        stableReply: boundedText(parsed.stableReply, 'stableReply', config.maxSourceChars),
+        stableReply: boundedSealedText(parsed.stableReply, 'stableReply', config.maxSourceChars),
         model: response.model,
       };
     },
     compareReplies: async (candidate, stableReply): Promise<DivergenceComparison> => {
-      const response = await completeWithWorkSpec(
+      const { parsed, response } = await completeSealedJsonObject({
         llmProvider,
-        context(AUDITOR_SYSTEM_PROMPT, JSON.stringify({
+        label: 'divergence comparator',
+        systemPrompt: AUDITOR_SYSTEM_PROMPT,
+        payload: {
           task: 'Compare the stable estimate with the actual public reply. Classify only meaningful divergence.',
           outputSchema: {
             diverged: 'boolean',
@@ -105,16 +67,12 @@ export function createLLMIntrospectionAuditor(
           },
           stableReply,
           actualReply: candidate.actualReply,
-        })),
-        buildLLMWorkSpec({
-          purpose: 'background',
-          durable: false,
-          correlation: COMPANION_PRIVATE_BACKGROUND_TELEMETRY,
-        }),
-        { modelHint: { maxTokens: config.comparisonMaxTokens, temperature: 0 } },
-      );
-      const parsed = parseJsonObject(response.content, 'divergence comparator');
-      assertExactKeys(parsed, ['diverged', 'type', 'observation', 'confidence'], 'divergence comparator');
+        },
+        workSpec: BACKGROUND_AUDIT_WORK_SPEC,
+        exactKeys: ['diverged', 'type', 'observation', 'confidence'],
+        allowMarkdownFence: true,
+        modelHint: { maxTokens: config.comparisonMaxTokens, temperature: 0 },
+      });
       if (typeof parsed.diverged !== 'boolean') {
         throw new Error('divergence comparator diverged must be boolean');
       }
@@ -131,7 +89,7 @@ export function createLLMIntrospectionAuditor(
       return {
         diverged: parsed.diverged,
         type: parsed.type,
-        observation: boundedText(parsed.observation, 'observation', 1_000),
+        observation: boundedSealedText(parsed.observation, 'observation', 1_000),
         confidence: parsed.confidence,
         model: response.model,
       };
@@ -146,27 +104,22 @@ export function createLLMCompanionLandmarkReflector(
 ): CompanionLandmarkReflectorPort {
   return {
     reflect: async (input) => {
-      const response = await completeWithWorkSpec(
+      const { parsed, response } = await completeSealedJsonObject({
         llmProvider,
-        context(
-          companionSystemPrompt,
-          JSON.stringify({
-            task: 'Privately reflect on this typed introspection landmark in your own voice. You are not speaking to the auditor.',
-            landmark: input,
-            outputSchema: { reflection: 'string' },
-          }),
-        ),
-        buildLLMWorkSpec({
-          purpose: 'background',
-          durable: false,
-          correlation: COMPANION_PRIVATE_BACKGROUND_TELEMETRY,
-        }),
-        { modelHint: { maxTokens: config.reflectionMaxTokens } },
-      );
-      const parsed = parseJsonObject(response.content, 'companion landmark reflection');
-      assertExactKeys(parsed, ['reflection'], 'companion landmark reflection');
+        label: 'companion landmark reflection',
+        systemPrompt: companionSystemPrompt,
+        payload: {
+          task: 'Privately reflect on this typed introspection landmark in your own voice. You are not speaking to the auditor.',
+          landmark: input,
+          outputSchema: { reflection: 'string' },
+        },
+        workSpec: BACKGROUND_AUDIT_WORK_SPEC,
+        exactKeys: ['reflection'],
+        allowMarkdownFence: true,
+        modelHint: { maxTokens: config.reflectionMaxTokens },
+      });
       return {
-        reflection: boundedText(parsed.reflection, 'reflection', 2_000),
+        reflection: boundedSealedText(parsed.reflection, 'reflection', 2_000),
         model: response.model,
       };
     },

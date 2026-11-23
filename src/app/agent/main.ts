@@ -14,19 +14,16 @@ import { resolveMemoryRetrievalPolicy } from '../../system/config/memory-retriev
 // Runs inside an isolated container. Connects to gateway via the configured RPC endpoint.
 // Run: npx tsx src/app/agent/main.ts
 
-import { join } from 'node:path';
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { createComponentLogger, configureOperationalLogPersistence, closeOperationalLogPersistence } from '../../shared/logger.js';
 import { requireOperationalMetadataRetentionDays } from '../../shared/diagnostics/retention-policy.js';
 import { GatewayClient } from '../../boundary/gateway/client.js';
 import { resolveCoreCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import { formatGatewayRpcEndpoint } from '../../boundary/gateway/transport.js';
-import { attachCompanionEventForwarder } from '../../channels/backplane/companion-relay/agent-forwarder.js';
 import { createPolicyGovernedShardParentIcpDelivery } from '../../channels/backplane/shard-parent-icp-ingress.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { MemoryWriter } from '../../faculties/memory/writer.js';
 import { createCompanionRoomMembershipAuthority } from '../../faculties/memory/companion-provenance.js';
-import { resolveDocumentIngestLimits } from '../../faculties/file-ingest/index.js';
 import {
   EpisodicSynthesizer,
   EPISODE_SEARCH_DOCUMENT_SCHEMA,
@@ -39,23 +36,7 @@ import { EpisodeArcWeaver } from '../../faculties/memory/episodic/arc-formation.
 import { DreamMeaningPass } from '../../faculties/memory/episodic/dream-meaning-pass.js';
 import { SleeptimeWikiPass } from '../../faculties/wiki/sleeptime-wiki-pass.js';
 import { WikiStore } from '../../faculties/wiki/store.js';
-import {
-  createApprovedPrimaryChannelPolicy,
-  ProactiveOutboundDispatcher,
-} from '../../core/intention/proactive-outbound.js';
 import type { SocialImpulseOutreachRuntime } from '../../core/emotion/social-impulse-outreach.js';
-import {
-  registerTemporalWakeupLane,
-} from './startup/temporal-wakeup-lane.js';
-import {
-  registerFreeTimeLane,
-} from './startup/free-time-lane.js';
-import {
-  registerSocialDesireLane,
-} from './startup/social-desire-lane.js';
-import {
-  wireSpeakingArbiterLane,
-} from './startup/speaking-arbiter-lane.js';
 import {
   wireDriftReviewLanes,
 } from './startup/drift-review-lanes.js';
@@ -65,15 +46,8 @@ import {
 import {
   wireBlindReviewLane,
 } from './startup/blind-review-lane.js';
-import {
-  registerWeightedThoughtOutreachLane,
-} from './startup/weighted-thought-outreach-lane.js';
 import { trustOrd } from '../../system/trust/types.js';
 import { recordWeightedThought } from '../../core/intention/weighted-thought-store-port.js';
-import {
-  RunChargeLedger,
-  readRunChargeRollingWindowFromLedger,
-} from '../../shared/telemetry/charge-ledger.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { openFileOutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
 import { registerMemoryTools } from '../../faculties/memory/runtime-wiring.js';
@@ -143,8 +117,6 @@ import {
   attachToolAvailability,
 } from '../../core/agent/companion-availability.js';
 import {
-  resolveChargeLedgerPath,
-  resolveIntakeQuarantinePath,
   resolveOutreachOutboxLedgerPath,
   resolvePendingContactApprovalsPath,
   resolveSocialGraphProposalsPath,
@@ -161,11 +133,8 @@ import { ModuleLoader } from '../../system/modules/loader.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from '../../core/agent/tool-wiring-validator.js';
 import { registerGatewayMessageHandlers } from './gateway-message-handlers.js';
 import { registerIcpTargetChannelInitiationCommand } from './icp-target-channel-command.js';
-import { OutboundReplyDeduper } from '../../system/lifecycle/outbound-reply-dedupe.js';
 import { resolveGatewayConnectFailureExitCode } from './gateway-connect-failure.js';
 import { createGatewayDisconnectRecovery } from './gateway-disconnect-recovery.js';
-import { ObservedGroupMemoryScheduler } from '../../faculties/memory/extraction/group-observed-scheduler.js';
-import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
 import { createNoopSatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
 import { createRequestCapabilityVerifier } from '../../boundary/fleet-auth/request-capability.js';
 import {
@@ -177,23 +146,16 @@ import { buildAgentControlPlane } from './control-plane.js';
 import type { AgentControlPlaneShutdownTargets } from './control-plane.js';
 import { createLLMProviderPort } from '../../core/agent/contracts.js';
 import { wireIcpInitiationSources } from './icp-initiation-source-wiring.js';
-import { reconcileIcpAppraisalFailureClosures } from './icp-appraisal-failure-reconciliation.js';
 import { createIcpTestInitiationTrigger } from './icp-test-initiation.js';
 import { registerSocialImpulseOutreachLane } from './startup/social-impulse-outreach-lane.js';
 import { createIntentionFollowUpDestinationResolver } from './intention-follow-up-destination.js';
 import { createSocialOutreachDraftRegistry } from '../../core/intention/social-outreach-turn/drafts.js';
-import { registerWorldExplorationLane } from './startup/world-exploration-lane.js';
 import { wireCompanionPresenceContext } from './companion-presence-wiring.js';
 import { createGatewayOpsPortFromClient } from '../../boundary/gateway/gateway-ops-port.js';
 import { installPromotedToolsPersistenceHook } from '../startup/support/bootstrap-helpers.js';
 import {
   bootstrapAgentCoreRuntime,
 } from './core-bootstrap.js';
-import { resolveSharedSatelliteFatigueEligibility } from '../../core/agent/fatigue/shared-satellite-eligibility.js';
-import {
-  buildApiHealthChecks,
-  resolveAgentApiSurfaceBindings,
-} from './api-surface.js';
 import { startOptionalAdminTransportServer } from './admin-surface.js';
 import {
   resolvePlaceDeviceStatus,
@@ -210,26 +172,14 @@ import {
   createSessionActivityTracker,
   writeStartupSessionMetadata,
 } from './session-activity.js';
-import {
-  intakeReceiptTtlMs,
-  loadIntakePolicyConfig,
-} from '../../system/config/intake-policy-config.js';
-import { maybeCreateIntakeScreeningService } from '../../core/cogsec/intake/screening.js';
-import { COGSEC_INTAKE_FIREWALL_ISSUER_ID } from '../../shared/contracts/cogsec-receipt.js';
 import { loadPartnerAffectShadowConfig } from '../../system/config/partner-affect-shadow-config.js';
 import { createPartnerAffectShadowIngestBridge } from '../../core/emotion/partner-affect/shadow-ingest-bridge.js';
-import { createIntakeQuarantineStore } from '../../core/cogsec/intake/quarantine-store.js';
-import {
-  createQuarantineDecisionEscalationObserver,
-  createQuarantineHoldEscalationObserver,
-} from '../../core/cogsec/intake/quarantine-escalation-producer.js';
 import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
 import { enforceNetworkIsolationOnStartup } from './startup-guards.js';
 import {
   DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG,
 } from '../../system/config/scheduler-config.js';
 import { registerToolUsageEvaluatorTask } from '../../core/agent/tool-surface/usage-evaluator-scheduler-lane.js';
-import { registerEmoSimProactivitySampling } from '../../core/scheduler/emosim-proactivity-lane.js';
 import {
   hydrateStartupContinuity,
   requireWikiStartupHydrationTuning,
@@ -239,25 +189,15 @@ import {
   registerMarkdownJournalTools,
 } from './journal-runtime.js';
 import { prepareAgentStartupContext } from './startup-context.js';
-import { AgentApiBackend } from '../../channels/api/agent-backend.js';
-import { resolveActiveHealthProbeConfig } from '../../channels/api/active-health-probe.js';
-import { buildExternalChannelProfiles, resolveDiscordCompanionView } from '../../channels/backplane/config.js';
-import { resolveTestingHarnessDevicesConfig } from '../../channels/backplane/testing-harness-devices.js';
 import { isEidoversePlace } from '../../shared/contracts/places-registry.js';
-import { createAgentFleetPostureProvider } from './fleet-posture.js';
 import { loadGatewayOperatorAlerting } from './startup/operator-alerting.js';
-import { PostgresIcpLocalPolicyAuthority } from '../../persistence/postgres/icp-local-policy-authority.js';
-import { IcpLocalInitiationCapacityAuthority } from '../../core/agent/fatigue/initiation-capacity.js';
-import {
-  startIcpRuntimeAvailability,
-  type AgentIcpRuntimeAvailability,
-  type IcpRuntimeAvailabilityLane,
-} from './icp-runtime-availability.js';
 import { PostgresAdminAutomataBusReadAdapter } from '../../operator/garden/services/automata-bus-read-adapter.js';
 import { createProductionAutomataBusReindexService } from '../../faculties/automata/bus/production-reindex.js';
 import { FoldPackageDoingMirrorSource } from '../../core/doing-mirror/sources.js';
 import { wireLetterMemoryExtraction } from '../../core/letters/memory-extraction.js';
-import { staggerQuietHoursRelease } from '../../core/scheduler/quiet-hours-release-stagger.js';
+import { wireAgentCognitionIntake } from './startup/cognition-intake-wiring.js';
+import { wireAgentApiBackend } from './startup/api-backend-wiring.js';
+import { wireProactiveOutreachLanes } from './startup/proactive-lanes-wiring.js';
 
 const log = createComponentLogger('Agent');
 const postgresPoolOwner = new PostgresPoolOwner('agent');
@@ -824,102 +764,19 @@ async function main(): Promise<void> {
   });
 
   // ── Cognition intake firewall (htm9.2): agent-side L1-only screening ──
-  // Screens tool outputs at session-entry recording time so persisted context
-  // (and its downstream consumers: emotion appraisal, memory extraction)
-  // carries screened/labeled content. Mode 'off' wires nothing; shadow mode
-  // (the default) records envelopes without altering content. The L1.5 ONNX
-  // classifier stays gateway-side; the agent process runs deterministic L1
-  // scanners only.
-  const intakePolicy = loadIntakePolicyConfig(pathSnapshot.systemDataDir);
-  // The canonical CogSec mode is always armed (shadow/boundary/strict), so the
-  // durable quarantine writer is always constructed.
-  // wtw7l: this process holds too (the screening path below), so its holds
-  // reach the same operator surface the gateway's do — raised onto this
-  // companion's own plane and closed when the window shuts on them.
-  const quarantineHoldEscalation = createQuarantineHoldEscalationObserver({
-    plane: humanEscalationControlPlane,
+  const { intakePolicy, intakeScreening } = wireAgentCognitionIntake({
+    systemDataDir: pathSnapshot.systemDataDir,
+    companionDataDir: pathSnapshot.companionDataDir,
     ...(config.companionId ? { companionId: config.companionId } : {}),
-    // Rendered here, never in the producer. Unused while this kind routes
-    // `garden_only`; an operator who reroutes it gets the envelope id and the
-    // page that owns its detail, never the withheld content.
-    renderNotice: entry => ({
-      sender: {
-        kind: 'system' as const,
-        provenance: 'system.cogsec.quarantine_escalation',
-      },
-      title: 'Quarantined item awaiting an operator',
-      message: `Garden: /cognitive-security, item ${entry.id}`,
-    }),
+    eventBus,
+    humanEscalationControlPlane,
+    humanEscalationStore: persistenceRuntime.humanEscalationStore,
+    fleetSystemHumanEscalationStore: persistenceRuntime.fleetSystemHumanEscalationStore,
+    cogSecReceiptStore: persistenceRuntime.cogSecReceiptStore,
+    sessionManager,
+    agentLoop,
+    log,
   });
-  const quarantineExpiryEscalation = createQuarantineDecisionEscalationObserver({
-    ledgers: [
-      persistenceRuntime.humanEscalationStore,
-      ...(persistenceRuntime.fleetSystemHumanEscalationStore
-        ? [persistenceRuntime.fleetSystemHumanEscalationStore]
-        : []),
-    ],
-  });
-  const intakeQuarantineWriter = createIntakeQuarantineStore(
-    resolveIntakeQuarantinePath(pathSnapshot.companionDataDir),
-    {
-      itemTtlHours: intakePolicy.quarantine.itemTtlHours,
-      maxHeldItems: intakePolicy.quarantine.maxHeldItems,
-      onHeld: entry => quarantineHoldEscalation(entry),
-      onExpired: ({ entry, expiredAtMs, reason }) => {
-        quarantineExpiryEscalation(entry);
-        void eventBus.emit('intake.quarantine.expired', {
-          envelopeId: entry.id,
-          ...(entry.sourceChannelId ? { sourceChannelId: entry.sourceChannelId } : {}),
-          heldAtMs: entry.heldAtMs,
-          expiredAtMs,
-          reason,
-        }).catch((error: unknown) => {
-          log.error('Failed to emit intake quarantine expiry alert event', {
-            envelopeId: entry.id,
-            error: String(error),
-          });
-        });
-      },
-    },
-  );
-  const intakeScreening = maybeCreateIntakeScreeningService({
-    policy: intakePolicy,
-    actor: 'agent:intake-screening',
-    onFailClosed: (event) => {
-      void eventBus.emit('intake.screening.fail_closed', event).catch((error: unknown) => {
-        log.error('Failed to emit fail-closed intake screening alert event', {
-          stage: event.stage,
-          error: String(error),
-        });
-      });
-    },
-    // Content-addressed admission receipts (psfn-framework-1fjvm.3): admitted,
-    // fully screened bytes get a durable receipt so a byte-identical durable
-    // artifact (skill body, wiki document) can prove its admission after a
-    // restart instead of re-paying screening. Quarantined, withheld, partially
-    // screened, and clean-bubble content never gets one.
-    receipts: {
-      store: persistenceRuntime.cogSecReceiptStore,
-      issuerId: COGSEC_INTAKE_FIREWALL_ISSUER_ID,
-      ttlMs: intakeReceiptTtlMs(intakePolicy.receipts),
-    },
-    // Durable quarantine hold (htm9.11): agent-side quarantine decisions land
-    // in the same companion-data store the gateway writes and Garden reviews.
-    quarantine: {
-      hold: (input: Parameters<typeof intakeQuarantineWriter.hold>[0]) => {
-        const entry = intakeQuarantineWriter.hold(input);
-        emitGardenQueueChanged(eventBus, 'intake-quarantine');
-        return entry;
-      },
-    },
-  });
-  sessionManager.intakeScreening = intakeScreening;
-  agentLoop.cogSecMode = intakePolicy.mode;
-  if (sessionManager.intakeScreening) {
-    log.info('Intake screening wired to session tool observations', {
-      mode: sessionManager.intakeScreening.mode,
-    });
-  }
 
   // ── Partner Affect shadow observation foundation (docs/partner-affect.md
   // slice 1) ── Shadow-only: the bridge records accepted/suppressed Signal
@@ -1659,204 +1516,42 @@ async function main(): Promise<void> {
   });
   agentLoop.validateToolWiring('gateway', gateway, DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE);
 
-  // ── API backend (gateway-hosted edge) ──
-
+  // ── API backend (gateway-hosted edge) + companion event relay ──
   const {
     apiHost,
     apiPort,
     adminPort,
-  } = resolveAgentApiSurfaceBindings(process.env);
-  const apiHealthChecks = buildApiHealthChecks({
+    discordChannelView,
+    chargeLedger,
+    icpLocalPolicyAuthority,
+    icpRuntimeAvailability,
+    apiBackend,
+    detachCompanionEventForwarder,
+    detachGatewayQueueChange,
+  } = await wireAgentApiBackend({
     config,
-    memoryStore,
+    channelsConfig,
+    schedulerConfig,
+    satelliteRegistryConfig,
+    companionDataDir: pathSnapshot.companionDataDir,
+    workspaceRoot: pathSnapshot.workspaceRoot,
+    env: process.env,
     gateway,
-    scheduler,
-    runtimeStatusMeta,
-  }, resolveActiveHealthProbeConfig(process.env));
-  // Multi-companion (W1-P2): project the discord settings that belong to THIS
-  // companion. Single-account config passes through unchanged; multi-account
-  // config selects this companion's own bot account entry.
-  const discordChannelView = resolveDiscordCompanionView(
-    channelsConfig.discord,
-    resolveCoreCompanionIdFromConfig(config),
-  );
-  // Hydrate and subscribe before any gateway callback can execute. Prompt and
-  // quota decisions must see the canonical rolling 24-hour balance even when
-  // the optional Garden transport is disabled.
-  const chargeLedger = await RunChargeLedger.open(
-    resolveChargeLedgerPath(pathSnapshot.companionDataDir),
-    eventBus,
-    { readLimitSettings: config },
-  );
-  // psfn-framework-h248l.7: this companion's own welfare-grant authority. The
-  // gateway re-verifies a caller-asserted `preemptionProtected` by asking THIS
-  // agent, which answers from its own background-work store over its own
-  // connection — so the gateway holds no sibling background-work privilege and
-  // a job id from another companion is simply not found. Registered for every
-  // posture: single-companion gateways may read their one shared schema
-  // directly, but the local authority is always the truthful answer.
-  gateway.onWelfareGrantAuthority({
-    verify: async (jobId: string): Promise<boolean> => {
-      const job = await backgroundWorkStore.get(jobId);
-      // Both conditions explicitly: a welfare claim is meaningful only while
-      // the job is actually running (the durable CHECK agrees, and this read
-      // must not depend on that agreement).
-      return job !== null && job.state === 'running' && job.welfareClaimed === true;
-    },
-  });
-  let icpLocalPolicyAuthority: PostgresIcpLocalPolicyAuthority | null = null;
-  // psfn-framework-n97hp: only the fleet posture supplies an ICP
-  // runtime-availability lane; the consumer that carries the required
-  // `capability.tier.changed` contract is started for every posture below.
-  let icpRuntimeAvailabilityLane: IcpRuntimeAvailabilityLane | null = null;
-  if (config.multiCompanion === true) {
-    if (!config.chargePolicy) {
-      throw new Error('Multi-companion fleet posture requires chargePolicy');
-    }
-    const databaseUrl = config.postgresDatabaseUrl?.trim();
-    const postgresSchema = config.postgresSchema?.trim();
-    const postgresRole = config.postgresRole?.trim();
-    if (!databaseUrl || !postgresSchema || !postgresRole) {
-      throw new Error('Companion-local ICP policy requires tenant PostgreSQL wiring');
-    }
-    const localCompanionId = resolveCoreCompanionIdFromConfig(config);
-    const chargeLedgerPath = resolveChargeLedgerPath(pathSnapshot.companionDataDir);
-    const capacityAuthority = new IcpLocalInitiationCapacityAuthority(
-      {
-        read: ({ senderCompanionId }) => {
-          if (senderCompanionId !== localCompanionId) {
-            throw new Error('ICP local charge policy requested for another companion');
-          }
-          return config.chargePolicy!;
-        },
-      },
-      {
-        read: ({ senderCompanionId, nowMs }) => {
-          if (senderCompanionId !== localCompanionId) {
-            throw new Error('ICP local charge balance requested for another companion');
-          }
-          return readRunChargeRollingWindowFromLedger(chargeLedgerPath, nowMs, config);
-        },
-      },
-    );
-    icpLocalPolicyAuthority = new PostgresIcpLocalPolicyAuthority(databaseUrl, {
-      companionId: localCompanionId,
-      postgresSchema,
-      postgresRole,
-      companionDataDir: pathSnapshot.companionDataDir,
-      policyHolds: schedulerConfig.icpAutonomy.policyHolds,
-      capacityAuthority,
-    });
-    try {
-      await icpLocalPolicyAuthority.assertReady();
-      gateway.onIcpLocalPolicyAuthority(icpLocalPolicyAuthority);
-      gateway.markIcpLocalPolicyAuthorityReady();
-    } catch (error) {
-      await icpLocalPolicyAuthority.close();
-      throw error;
-    }
-    const fleetPostureProvider = createAgentFleetPostureProvider({
-      companionId: resolveCoreCompanionIdFromConfig(config),
-      chargePolicy: config.chargePolicy,
-      fatigueHistory: coreRuntime.fatigueLedger,
-    });
-    await gateway.startFleetPostureReporting(fleetPostureProvider);
-    // 0eq2x/9rima: re-record pre-fix appraisal-failure closures so they stop
-    // counting as relationship pressure. Idempotent; runs in the background.
-    void reconcileIcpAppraisalFailureClosures({
-      sessions: sessionManager,
-      endEpisodeActivity: endInput => gateway.companionEndIcpEpisodeActivity(endInput),
-      windowMs: config.chargePolicy.fatigue.socialRegulation.relationshipPressureWindowMs,
-      nowMs: Date.now(),
-    }).catch((error: unknown) => {
-      log.error('ICP appraisal-failure closure reconciliation failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-    icpRuntimeAvailabilityLane = {
-      gateway,
-      isEnabled: () => icpRuntimeEnablement.isEnabled()
-        && capabilityRuntime.has('external.companion'),
-      readFatigueState: () => fleetPostureProvider().fatigue.state,
-    };
-  }
-  // psfn-framework-n97hp: started unconditionally. The Garden owner-file
-  // capability mutation delivers `capability.tier.changed` with `emitRequired`
-  // when `external.companion` is withdrawn, and a required event with no
-  // registered consumer throws — which is exactly what a single-companion
-  // release (fleet gateway, one companion: `config.multiCompanion === false`)
-  // used to hit. With a null lane the consumer registers and no-ops; with the
-  // fleet lane it still closes the ICP runtime fence.
-  const icpRuntimeAvailability: AgentIcpRuntimeAvailability = await startIcpRuntimeAvailability({
-    eventBus,
-    lane: icpRuntimeAvailabilityLane,
-  });
-  agentLoop.setDurableChargeRecorder(
-    event => chargeLedger.commitChargeEvent(event).outcome,
-    event => chargeLedger.probeChargeEvent(event),
-  );
-
-  const apiBackend = new AgentApiBackend({
     agentLoop,
     eventBus,
     sessionManager,
     llmProvider,
     contactStore,
-    healthChecks: apiHealthChecks,
-    externalChannelProfiles: buildExternalChannelProfiles(channelsConfig),
-    satelliteRegistry: satelliteRegistryConfig,
-    ...(resolveTestingHarnessDevicesConfig(channelsConfig.api.testingHarness !== undefined, process.env)
-      ? { testingHarnessDevices: { enabled: true as const } }
-      : {}),
-    companionId: resolveCoreCompanionIdFromConfig(config),
-    shardDirectory: shardManager.shardDirectory,
-    ...(config.fleetAuthVerifier
-      ? {
-          requestCapabilityVerifier: createRequestCapabilityVerifier(
-            config.fleetAuthVerifier.requestCapabilities,
-          ),
-        }
-      : {}),
-    onStreamDelta: (requestId, text) => gateway.notifyApiStreamDelta(requestId, text),
-    // htm9.9: OpenAI-compatible `file` content parts run the shared
-    // file-ingest pipeline with the agent-side (L1-only) intake screening.
-    documentIngest: {
-      personalFilesDir: pathSnapshot.workspaceRoot,
-      intakeScreening,
-      // Owner-file backed ingest caps (zet.7).
-      limits: resolveDocumentIngestLimits(config),
-    },
-  });
-  gateway.onApiChatCompletion((params) => apiBackend.handleChatCompletion(params));
-  gateway.onApiChatCancel((params) => apiBackend.cancelChatCompletion(params));
-  gateway.onCompanionUiShardActions({
-    hubAttachment: (params) => apiBackend.handleCompanionUiShardAction(params),
-    operatorKey: (params) => apiBackend.handleCompanionUiKeyShardAction(params),
-  });
-  gateway.onShardOwner((params) => Promise.resolve(apiBackend.handleShardOwner(params)));
-  gateway.onApiTelemetryIngest((params) => apiBackend.handleTelemetryIngest(params));
-  gateway.onApiHealth(() => apiBackend.handleHealth());
-  gateway.onSatelliteResponseEligibility(async ({ canonicalContactId, channelId }) => (
-    resolveSharedSatelliteFatigueEligibility({
-      fatigueLedger: coreRuntime.fatigueLedger,
-      localCompanionId: resolveCoreCompanionIdFromConfig(config),
-      canonicalContactId,
-      channelId,
-    })
-  ));
-  gateway.onTurnPerformance(async (event) => {
-    await eventBus.emit('agent.turn.performance', event);
-  });
-
-  // ── Companion event relay forwarding (w9hj.1) ──
-  // Redacts tool lifecycle + generated-artifact events at emission and
-  // forwards them to the gateway relay for the Satellite Hub SSE stream.
-  const detachCompanionEventForwarder = attachCompanionEventForwarder({
-    eventBus,
-    publisher: gateway,
-  });
-  const detachGatewayQueueChange = gateway.onGardenQueueChanged((queue) => {
-    emitGardenQueueChanged(eventBus, queue);
+    memoryStore,
+    scheduler,
+    shardManager,
+    capabilityRuntime,
+    backgroundWorkStore,
+    fatigueLedger: coreRuntime.fatigueLedger,
+    intakeScreening,
+    icpRuntimeEnablement,
+    runtimeStatusMeta,
+    log,
   });
 
   // ── Admin transport (optional) ──
@@ -2079,187 +1774,57 @@ async function main(): Promise<void> {
   }
   shutdownTargets.sessionTailCache = coreRuntime.sessionTailCache;
   shutdownTargets.skillUsageTelemetry = coreRuntime.skillsRuntime;
-  const gatewaySender = {
-    send: (channelId: string, content: string) => gateway.discordSend(channelId, content),
-  };
-  // Shared outbound-reply dedupe guard (psfn-framework-mdxu): the inbound
-  // Discord reply pump records every delivered reply here, and the
-  // internal continuation consults it to suppress a duplicate of a
-  // reply the operator already received one turn earlier.
-  const outboundReplyGuard = new OutboundReplyDeduper();
-  // First proactive-outreach slice: only the configured primary heartbeat DM
-  // is an approved target. Contact-graph channel resolution arrives with the
-  // durable outbox (1xb.2).
-  const proactiveOutbound = heartbeatChannelId
-    ? new ProactiveOutboundDispatcher({
-      sender: gatewaySender,
-      rateLimiter: externalRateLimiter,
-      isApprovedPrimaryChannel: createApprovedPrimaryChannelPolicy(heartbeatChannelId),
-      eventBus,
-    })
-      : null;
-  // ── Temporal wake-up lanes (E7.1): morning wake + idle refresher, extracted
-  // to startup/temporal-wakeup-lane.ts (charter 12.1 split).
-  // World exploration (S13, 07mw2): the companion's own initiative on a world
-  // plane, off by default; gates on tier, a live body, quiet hours and caps.
-  // One fleet position + owner-file window (scheduler.json fleetStagger) for
-  // every fixed-time lane: each companion fires at a stable, evenly spaced
-  // offset after shared slots. Absent outside a multi-companion fleet.
-  const fleetScheduleStagger = persistenceRuntime.fleetMaintenanceCoordinator
-    ? {
-        manifestOrdinal: persistenceRuntime.fleetMaintenanceCoordinator.manifestOrdinal,
-        fleetSize: persistenceRuntime.fleetMaintenanceCoordinator.fleetSize,
-        windowMs: schedulerConfig.fleetStagger.windowMs,
-      }
-    : undefined;
-  // Outward lanes release held outreach at this companion's fleet offset after
-  // the configured quiet-hours end (psfn-framework-m7jf2); internal rest-window
-  // work keeps the configured window.
-  const outwardQuietHours = staggerQuietHoursRelease(
-    schedulerConfig.episodicProcessing,
-    fleetScheduleStagger,
-  );
-  registerWorldExplorationLane({
-    scheduler,
-    config: schedulerConfig.worldExploration,
-    quietHours: outwardQuietHours,
-    agentLoop,
-    placesRegistry: placesRegistryConfig,
-    worldOps,
-    capabilityRuntime,
-    eventBus,
-    chargePolicy: config.chargePolicy,
-    invitationState: persistenceRuntime.schedulerLaneStateStore,
-  });
-  registerTemporalWakeupLane({
-    scheduler,
-    sessionManager,
-    config: schedulerConfig.temporalWakeup,
-    quietHours: outwardQuietHours,
-    eventBus,
-    agentLoop,
-    llmProvider,
-    promptRegistry: promptState.registry,
-    proactiveOutbound,
-    companionName: card.data.name,
-    postTurnActions,
-    ...(fleetScheduleStagger ? { fleetScheduleStagger } : {}),
-  });
-
-  // ── Free-time lanes (E8.1): self-directed time, extracted to
-  // startup/free-time-lane.ts (charter 12.1 split).
-  registerFreeTimeLane({
-    scheduler,
-    sessionManager,
-    config: schedulerConfig.freeTime,
-    restWindow: schedulerConfig.episodicProcessing,
-    ...(fleetScheduleStagger ? { fleetStagger: fleetScheduleStagger } : {}),
-    chooserSettings: schedulerConfig.socialAutonomy.freeTimeChooser,
-    eventBus,
-    agentLoop,
-    llmProvider,
-    promptRegistry: promptState.registry,
-    companionName: card.data.name,
-    companionId: config.companionId,
-    chargePolicy: config.chargePolicy,
-    personalProjects,
-    contactStore,
-    ...(coreRuntime.automataClassLifecycle
-      ? { automataLifecycle: coreRuntime.automataClassLifecycle }
-      : {}),
-    listPendingConcernCandidates,
-    restSilenceStore: persistenceRuntime.schedulerLaneStateStore,
-    postTurnActions,
-  });
-  // ── Weighted-thought outreach lane (E?/1xb.2) + Law 27 contradiction
-  // dampening: extracted to startup/weighted-thought-outreach-lane.ts.
-  registerWeightedThoughtOutreachLane({
-    ...(fleetScheduleStagger ? { fleetStagger: fleetScheduleStagger } : {}),
-    scheduler,
-    schedulerConfig,
-    eventBus,
-    weightedThoughtStore: persistenceRuntime.weightedThoughtStore,
-    llmProvider,
-    companionName: card.data.name,
-    heartbeatChannelId,
-    contactStore,
-    concernStore: intentionRuntime.concernStore,
-    icpWeightedThoughtCandidateAdapter,
-  });
-
-  // ── Social-desire consent-moment lane (epic oth4, bead oth4.2): extracted
-  // to startup/social-desire-lane.ts (charter 12.1 split).
-  const { socialDesireOutbound, socialDesireHumanDeliveryPolicy, impulseTarget } = registerSocialDesireLane({
-    ...(fleetScheduleStagger ? { fleetStagger: fleetScheduleStagger } : {}),
-    schedulerConfig,
-    scheduler,
-    postTurnActions,
-    eventBus,
-    log,
-    socialDesireStore: persistenceRuntime.socialDesireStore,
-    outreachOutbox,
-    heartbeatChannel,
-    contactStore,
-    icpPeers: coreRuntime.icpAutonomyRuntime,
-    localCompanionId: config.companionId,
-    turns: agentLoop,
-    sessions: sessionStore,
-    readEmotion: () => emotionState.getState(),
-    drafts: socialOutreachDrafts,
-    concernStore: intentionRuntime.concernStore,
-    companionName: card.data.name,
-    // hrmrq.85: compose the accumulation writer into the post-turn
-    // emotion-appraisal path — the lane's single production producer.
-    attachFeltSignalWriter: (writer) => {
-      agentLoop.socialDesireFeltSignals = writer;
-    },
-  });
-  socialImpulseOutreachLane.setDesireTarget(impulseTarget);
-  registerEmoSimProactivitySampling(scheduler, observerEvalSidecar);
-
-  // Journal auto-publisher (for reflections -> markdown journal).
-  // journalAutoPublisher initialized earlier for shared reflection + introspection use.
-
-  // Group-memory observation scheduler doubles as the canonical direct-vs-group
-  // scope classifier for sleeptime cadence, so it is built before the reflection
-  // runtime wiring below.
-  const observedGroupMemoryScheduler = new ObservedGroupMemoryScheduler({
-    channelGroupMemory: discordChannelView.groupMemory,
-    sessionReader: sessionStore,
-    watermarkStore: new JsonGroupMemoryWatermarkStore(
-      join(pathSnapshot.companionDataDir, 'group-memory-watermarks.json'),
-    ),
-    memoryExtractor,
-    contactStore,
-    companionNames: [card.data.name],
-    companionAuthorIds: config.discordBotId ? [config.discordBotId] : [],
-    ...(config.groupMemory ? { groupMemory: config.groupMemory } : {}),
-  });
-
-  // ── Social participation + speaking-arbiter wiring (bible §8, jp36):
-  // extracted to startup/speaking-arbiter-lane.ts (charter 12.1 split).
+  // ── Proactive outreach, autonomy & speaking-arbiter spine ──
   const {
-    passiveNameCandidateBuilder,
-    participationAppraiser,
-    reservationPhase,
-    egressLeasePhase,
-    roomParticipationLease,
-  } = wireSpeakingArbiterLane({
+    gatewaySender,
+    outboundReplyGuard,
+    proactiveOutbound,
+    fleetScheduleStagger,
+    socialDesireOutbound,
+    socialDesireHumanDeliveryPolicy,
+    observedGroupMemoryScheduler,
+    speakingArbiter: {
+      passiveNameCandidateBuilder,
+      participationAppraiser,
+      reservationPhase,
+      egressLeasePhase,
+      roomParticipationLease,
+    },
+  } = wireProactiveOutreachLanes({
     config,
     schedulerConfig,
-    llmProvider,
-    agentLoop,
+    placesRegistry: placesRegistryConfig,
     companionName: card.data.name,
-    observedGroupMemoryScheduler,
+    companionDataDir: pathSnapshot.companionDataDir,
+    heartbeatChannelId,
+    heartbeatChannel,
+    discordChannelView,
+    gateway,
+    worldOps,
+    scheduler,
+    sessionManager,
     sessionStore,
+    agentLoop,
+    llmProvider,
+    promptRegistry: promptState.registry,
+    eventBus,
+    externalRateLimiter,
+    capabilityRuntime,
+    postTurnActions,
+    personalProjects,
+    contactStore,
+    concernStore: intentionRuntime.concernStore,
+    memoryExtractor,
+    emotionState,
+    outreachOutbox,
+    socialOutreachDrafts,
+    socialImpulseOutreachLane,
+    observerEvalSidecar,
     persistenceRuntime,
     coreRuntime,
-    gatewaySender: {
-      send: (channelType, channelId, content) => (channelType === 'discord'
-        ? gateway.discordSend(channelId, content)
-        : gateway.channelSendRoomReply(channelType, channelId, content)),
-    },
-    outboundReplyGuard,
+    listPendingConcernCandidates,
+    icpWeightedThoughtCandidateAdapter,
+    log,
   });
 
   // ── Drift review lanes (htm9.14/htm9.15) + emo_sim dyad advisory (oth4.6):

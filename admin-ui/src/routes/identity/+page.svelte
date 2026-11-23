@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { page } from '$app/stores';
   import {
     getIdentity,
     importIdentity,
@@ -30,7 +31,30 @@
   import { pushToast } from '$lib/stores/toast.svelte';
   import VersionHistoryPanel from './VersionHistoryPanel.svelte';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
-  import { scopeGardenDataPath } from '$lib/fleet/companion-scope';
+  import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
+  import LazyGardenPage from '$lib/components/garden/LazyGardenPage.svelte';
+  import { scopeGardenDataPath, scopeGardenPath } from '$lib/fleet/companion-scope';
+  import {
+    canonicalIdentityPath,
+    IDENTITY_TABS,
+    resolveIdentityTab,
+  } from '$lib/nav/canonical-routes';
+
+  const identityTabs: GardenTabItem[] = IDENTITY_TABS.map(tab => ({ ...tab }));
+  const activeTab = $derived(resolveIdentityTab($page.url.searchParams));
+  const loadPromptsPage = () => import('../prompts/+page.svelte');
+  const loadPromptMonitorPage = () => import('../prompt-monitor/+page.svelte');
+  const loadValuesPage = () => import('../values/+page.svelte');
+  let cardLoadStarted = false;
+
+  function selectIdentityTab(id: string): void {
+    const tab = IDENTITY_TABS.find(candidate => candidate.id === id)?.id;
+    if (!tab || tab === activeTab) return;
+    void goto(scopeGardenPath(canonicalIdentityPath(tab)), {
+      keepFocus: true,
+      noScroll: true,
+    });
+  }
 
   let data = $state<AdminIdentityData | null>(null);
   let loading = $state(true);
@@ -104,7 +128,7 @@
     URL.revokeObjectURL(url);
   }
 
-  onMount(async () => {
+  async function loadIdentityCard(): Promise<void> {
     try {
       const [identity, references] = await Promise.all([
         getIdentity(),
@@ -118,6 +142,12 @@
       loading = false;
       referenceLoading = false;
     }
+  }
+
+  $effect(() => {
+    if (activeTab !== 'card' || cardLoadStarted) return;
+    cardLoadStarted = true;
+    void loadIdentityCard();
   });
 
   async function runImport(path: string) {
@@ -596,12 +626,12 @@
 
 <div class="garden-page space-y-5 pb-8">
   <GardenPageHeader
-    eyebrow="Memory & Identity"
-    title="The Seeds"
-    description="Shape character identity, card metadata, reference images, and version history."
+    eyebrow="Mind & Memory"
+    title="Identity & Prompts"
+    description="Character card, layered prompts, live prompt assembly monitor, and values journal."
   >
     {#snippet actions()}
-    {#if data}
+    {#if activeTab === 'card' && data}
       <div class="flex items-center gap-2">
         <button
           onclick={exportAsJson}
@@ -630,6 +660,36 @@
     {/if}
     {/snippet}
   </GardenPageHeader>
+
+  <GardenTabBar
+    tabs={identityTabs}
+    activeId={activeTab}
+    onSelect={selectIdentityTab}
+    label="Identity and prompt views"
+  />
+
+  {#if activeTab === 'prompts'}
+    <LazyGardenPage
+      loader={loadPromptsPage}
+      componentProps={{ embedded: true }}
+      loadingLabel="Loading prompt layers..."
+      errorLabel="Failed to load prompt layers."
+    />
+  {:else if activeTab === 'monitor'}
+    <LazyGardenPage
+      loader={loadPromptMonitorPage}
+      componentProps={{ embedded: true }}
+      loadingLabel="Loading prompt monitor..."
+      errorLabel="Failed to load prompt monitor."
+    />
+  {:else if activeTab === 'values'}
+    <LazyGardenPage
+      loader={loadValuesPage}
+      componentProps={{ embedded: true }}
+      loadingLabel="Loading values and journal..."
+      errorLabel="Failed to load values and journal."
+    />
+  {:else}
 
   <!-- Error -->
   {#if error}
@@ -1313,5 +1373,6 @@
       onCancel={cancelConfirmation}
       onConfirm={() => { void confirmPendingAction(); }}
     />
+  {/if}
   {/if}
 </div>

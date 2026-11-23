@@ -22,6 +22,8 @@
 
   const PAGE_SIZE = 24;
 
+  let { embedded = false }: { embedded?: boolean } = $props();
+
   let episodeData = $state<AdminEpisodicEpisodeListData | null>(null);
   let threadData = $state<AdminEpisodicThreadSummary[]>([]);
   let selectedEpisode = $state<AdminEpisodicEpisodeDetailData | null>(null);
@@ -201,11 +203,13 @@
 
 <div class="garden-page space-y-5 pb-8">
   <div class="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-    <GardenPageHeader
-      eyebrow="Memory & Identity"
-      title="L0.1 Episodes"
-      description="Inspect canonical episodes, L0 provenance, and woven episode-arc graph threads."
-    />
+    {#if !embedded}
+      <GardenPageHeader
+        eyebrow="Memory & Identity"
+        title="L0.1 Episodes"
+        description="Inspect canonical episodes, L0 provenance, and woven episode-arc graph threads."
+      />
+    {/if}
     <div class="garden-metric-grid grid-cols-3 text-center sm:min-w-[24rem]">
       <div class="garden-metric card-garden p-3">
         <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">episodes</p>

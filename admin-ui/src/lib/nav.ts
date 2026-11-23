@@ -33,20 +33,12 @@ export const navGroups: NavGroup[] = [
     { id: 'places', path: '/places', defaultLabel: 'Places', icon: '\u{1F5FA}\u{FE0F}' },
     { id: 'action-pipe', path: '/action-pipe', defaultLabel: 'Action Pipe', icon: '\u{1F39B}\u{FE0F}' },
     { id: 'autonomy', path: '/autonomy', defaultLabel: 'Autonomy', icon: '\u{1F331}' },
-    { id: 'room-arbiter', path: '/room-arbiter', defaultLabel: 'Cluster Command', icon: '\u{1F5E3}\u{FE0F}' },
   ]),
-  navGroup('memory', 'Memory & Identity', [
+  navGroup('memory', 'Mind & Memory', [
     { id: 'memory', path: '/memory', defaultLabel: 'Memory', icon: '\u{1F33F}' },
-    { id: 'biographical-profile', path: '/biographical-profile', defaultLabel: 'Stable Biography', icon: '\u{1F331}' },
-    { id: 'episodic-memory', path: '/episodic-memory', defaultLabel: 'L0.1 Episodes', icon: '\u{1F9F6}' },
-    { id: 'wiki', path: '/wiki', defaultLabel: 'Wiki', icon: '\u{1F4D8}' },
-    { id: 'wishlist', path: '/wishlist', defaultLabel: 'Wishlist', icon: '\u{1F49B}' },
+    { id: 'identity', path: '/identity', defaultLabel: 'Identity & Prompts', icon: '\u{1F343}' },
+    { id: 'wiki', path: '/wiki', defaultLabel: 'Knowledge & Work', icon: '\u{1F4D8}' },
     { id: 'contacts', path: '/contacts', defaultLabel: 'Contacts', icon: '\u{1F6AA}' },
-    { id: 'enrollment', path: '/enrollment', defaultLabel: 'Enrollment', icon: '\u{1FAAA}' },
-    { id: 'concerns', path: '/concerns', defaultLabel: 'Concerns', icon: '\u{1F4AD}' },
-    { id: 'identity', path: '/identity', defaultLabel: 'Identity', icon: '\u{1F343}' },
-    { id: 'images', path: '/images', defaultLabel: 'Images', icon: '\u{1F5BC}\u{FE0F}' },
-    { id: 'values', path: '/values', defaultLabel: 'Values', icon: '\u{1F4D6}' },
   ]),
   navGroup('runtime', 'Runtime & Tools', [
     { id: 'models', path: '/models', defaultLabel: 'Models', icon: '\u{1F9EA}' },
@@ -58,8 +50,6 @@ export const navGroups: NavGroup[] = [
     { id: 'skills', path: '/skills', defaultLabel: 'Skills', icon: '\u{2728}' },
   ]),
   navGroup('review', 'Review & Safety', [
-    { id: 'prompts', path: '/prompts', defaultLabel: 'Prompts', icon: '\u{1FAB4}' },
-    { id: 'prompt-monitor', path: '/prompt-monitor', defaultLabel: 'Prompt Monitor', icon: '\u{1F9F5}' },
     { id: 'evals-emotion-sidecar', path: '/evals/emotion-sidecar', defaultLabel: 'Evals', icon: '\u{1F4CA}' },
     { id: 'subsystem-health', path: '/subsystem-health', defaultLabel: 'Subsystem Health', icon: '\u{1FAC0}' },
     { id: 'telemetry', path: '/telemetry', defaultLabel: 'Events & Audit', icon: '\u{1F4A7}' },

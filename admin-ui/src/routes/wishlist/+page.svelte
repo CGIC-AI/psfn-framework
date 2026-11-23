@@ -22,6 +22,8 @@
     WISHLIST_STATE_ORDER,
   } from '$lib/wishlist/view';
 
+  let { embedded = false }: { embedded?: boolean } = $props();
+
   let wishes = $state<CompanionWish[]>([]);
   let boundary = $state('');
   let loading = $state(true);
@@ -153,27 +155,34 @@
   onDestroy(() => poller.stop());
 </script>
 
-<div class="garden-page space-y-5 pb-8">
-  <GardenPageHeader
-    eyebrow="Memory & Identity"
-    title="Wishlist"
-    description="A low-pressure queue for things the companion wants, saved without interruption."
+{#snippet wishlistActions()}
+  <label class="flex items-center gap-2 text-sm text-shadow-600">
+    <input type="checkbox" bind:checked={showCompleted} class="accent-moss-600" />
+    Show closed
+  </label>
+  <button
+    type="button"
+    onclick={() => void loadWishes()}
+    disabled={refreshing}
+    class="rounded-lg border border-bark-300 px-3 py-1.5 text-sm font-medium text-shadow-700 hover:bg-bark-100 disabled:opacity-50"
   >
-    {#snippet actions()}
-      <label class="flex items-center gap-2 text-sm text-shadow-600">
-        <input type="checkbox" bind:checked={showCompleted} class="accent-moss-600" />
-        Show closed
-      </label>
-      <button
-        type="button"
-        onclick={() => void loadWishes()}
-        disabled={refreshing}
-        class="rounded-lg border border-bark-300 px-3 py-1.5 text-sm font-medium text-shadow-700 hover:bg-bark-100 disabled:opacity-50"
-      >
-        {refreshing ? 'Refreshing...' : 'Refresh'}
-      </button>
-    {/snippet}
-  </GardenPageHeader>
+    {refreshing ? 'Refreshing...' : 'Refresh'}
+  </button>
+{/snippet}
+
+<div class="garden-page space-y-5 pb-8">
+  {#if !embedded}
+    <GardenPageHeader
+      eyebrow="Memory & Identity"
+      title="Wishlist"
+      description="A low-pressure queue for things the companion wants, saved without interruption."
+      actions={wishlistActions}
+    />
+  {:else}
+    <div class="flex flex-wrap items-center justify-end gap-3">
+      {@render wishlistActions()}
+    </div>
+  {/if}
 
   {#if boundary}
     <p class="rounded-xl border border-bark-200 bg-bark-50 px-4 py-3 text-sm text-shadow-600">{boundary}</p>

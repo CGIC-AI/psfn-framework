@@ -226,7 +226,7 @@ export const ATTENTION_SOURCES: AttentionSource[] = [
     path: '/inbox',
     fetchCount: async () => (await refreshInboxAttentionBreakdown()).total,
   },
-  { path: '/values', fetchCount: journalHealthAttentionCount },
+  { path: '/identity', fetchCount: journalHealthAttentionCount },
 ];
 
 export interface AttentionRefreshBus {

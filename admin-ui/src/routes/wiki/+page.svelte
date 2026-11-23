@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { page } from '$app/stores';
   import {
     getSharedWorldWikiDocument,
     getWikiDocument,
@@ -14,6 +15,14 @@
   import CardGrid from '$lib/components/garden/CardGrid.svelte';
   import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
+  import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
+  import LazyGardenPage from '$lib/components/garden/LazyGardenPage.svelte';
+  import { scopeGardenPath } from '$lib/fleet/companion-scope';
+  import {
+    canonicalKnowledgePath,
+    KNOWLEDGE_TABS,
+    resolveKnowledgeTab,
+  } from '$lib/nav/canonical-routes';
   import WikiScopeTabs from './WikiScopeTabs.svelte';
   import { resolveWikiDeepLink } from './wiki-navigation';
   import type { WikiDocument, WikiDocumentListEntry, WikiSearchMatch } from '../../../../src/faculties/wiki/types';
@@ -23,6 +32,22 @@
     type NamedWardrobeLook,
     type PersonalProjectManifest,
   } from '../../../../src/faculties/wiki/personal-project-contracts';
+
+  const knowledgeTabs: GardenTabItem[] = KNOWLEDGE_TABS.map(tab => ({ ...tab }));
+  const activeTab = $derived(resolveKnowledgeTab($page.url.searchParams));
+  const loadConcernsPage = () => import('../concerns/+page.svelte');
+  const loadWishlistPage = () => import('../wishlist/+page.svelte');
+  const loadImagesPage = () => import('../images/LazyPageContent.svelte');
+  let wikiLoadStarted = false;
+
+  function selectKnowledgeTab(id: string): void {
+    const tab = KNOWLEDGE_TABS.find(candidate => candidate.id === id)?.id;
+    if (!tab || tab === activeTab) return;
+    void goto(scopeGardenPath(canonicalKnowledgePath(tab)), {
+      keepFocus: true,
+      noScroll: true,
+    });
+  }
 
   let data = $state<WikiListResponse | null>(null);
   let selected = $state<WikiDocument | null>(null);
@@ -173,18 +198,21 @@
     return document.summary || document.preview || 'No preview.';
   }
 
-  onMount(() => {
+  $effect(() => {
+    if (activeTab !== 'wiki' || wikiLoadStarted) return;
+    wikiLoadStarted = true;
     void loadDocuments();
   });
 </script>
 
 <div class="garden-page space-y-5 pb-8">
   <GardenPageHeader
-    eyebrow="Memory & Identity"
-    title="The Library"
-    description={`${documents.length} document${documents.length === 1 ? '' : 's'} across personal and shared-world knowledge.`}
+    eyebrow="Mind & Memory"
+    title="Knowledge & Work"
+    description="Personal and shared-world wiki, active concerns, wishlist, and generated images."
   >
     {#snippet actions()}
+      {#if activeTab === 'wiki'}
       <div class="flex w-full min-w-0 flex-wrap items-center justify-end gap-2 sm:w-auto">
       <input
         type="search"
@@ -211,8 +239,39 @@
         {refreshing ? 'Refreshing...' : 'Refresh'}
       </button>
       </div>
+      {/if}
     {/snippet}
   </GardenPageHeader>
+
+  <GardenTabBar
+    tabs={knowledgeTabs}
+    activeId={activeTab}
+    onSelect={selectKnowledgeTab}
+    label="Knowledge and work views"
+  />
+
+  {#if activeTab === 'concerns'}
+    <LazyGardenPage
+      loader={loadConcernsPage}
+      componentProps={{ embedded: true }}
+      loadingLabel="Loading concerns..."
+      errorLabel="Failed to load concerns."
+    />
+  {:else if activeTab === 'wishlist'}
+    <LazyGardenPage
+      loader={loadWishlistPage}
+      componentProps={{ embedded: true }}
+      loadingLabel="Loading wishlist..."
+      errorLabel="Failed to load wishlist."
+    />
+  {:else if activeTab === 'images'}
+    <LazyGardenPage
+      loader={loadImagesPage}
+      componentProps={{ embedded: true }}
+      loadingLabel="Loading generated images..."
+      errorLabel="Failed to load generated images."
+    />
+  {:else}
 
   {#if errorMessage}
     <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4">
@@ -429,4 +488,5 @@
     {/if}
   </section>
   </div>
+  {/if}
 </div>

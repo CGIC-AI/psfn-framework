@@ -61,6 +61,7 @@
   import type { NorthStarDraftItem, StackEntry } from './page-helpers';
 
   // ── State ──
+  let { embedded = false }: { embedded?: boolean } = $props();
   let layers = $state<PromptLayer[]>([]);
   let staticPrompts = $state<PromptRegistryEntry[]>([]);
   let runtimeBlocks = $state<PromptRuntimeBlock[]>([]);
@@ -813,18 +814,30 @@
 </script>
 
 <div class="garden-page space-y-5">
-  <GardenPageHeader
-    eyebrow="Prompts · Composition"
-    title="Prompt Soil"
-    description={`Layered prompt composition across ${layers.length} authored layer${layers.length === 1 ? '' : 's'}, ${runtimeBlocks.length} runtime participants, and ${staticPrompts.length} static prompts.`}
-  >
-    {#snippet actions()}
+  {#if !embedded}
+    <GardenPageHeader
+      eyebrow="Prompts · Composition"
+      title="Prompt Soil"
+      description={`Layered prompt composition across ${layers.length} authored layer${layers.length === 1 ? '' : 's'}, ${runtimeBlocks.length} runtime participants, and ${staticPrompts.length} static prompts.`}
+    >
+      {#snippet actions()}
+        <div class="rounded-xl border border-bark-300 bg-surface px-3 py-2 text-right shadow-sm">
+          <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-shadow-500">Resolved budget</p>
+          <p class="font-mono text-sm font-semibold text-shadow-900">{formatResolvedTokenCount(totalLayerTokenCount)}</p>
+        </div>
+      {/snippet}
+    </GardenPageHeader>
+  {:else}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">
+        {layers.length} authored layer{layers.length === 1 ? '' : 's'}, {runtimeBlocks.length} runtime participants, and {staticPrompts.length} static prompts.
+      </p>
       <div class="rounded-xl border border-bark-300 bg-surface px-3 py-2 text-right shadow-sm">
         <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-shadow-500">Resolved budget</p>
         <p class="font-mono text-sm font-semibold text-shadow-900">{formatResolvedTokenCount(totalLayerTokenCount)}</p>
       </div>
-    {/snippet}
-  </GardenPageHeader>
+    </div>
+  {/if}
 
   <!-- Error -->
   {#if error}

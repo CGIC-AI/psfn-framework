@@ -41,7 +41,10 @@ test('Automata is discoverable beside the scheduler in live operations', () => {
 
 test('Places is the only world-location destination in the operator navigation', () => {
   const locationItems = navItems.filter(item => (
-    item.id === 'places' || item.id === 'satellites' || item.id === 'rooms'
+    item.id === 'places'
+    || item.id === 'satellites'
+    || item.id === 'rooms'
+    || item.id === 'room-arbiter'
   ));
 
   assert.deepEqual(locationItems, [{
@@ -51,6 +54,31 @@ test('Places is the only world-location destination in the operator navigation',
     icon: '\u{1F5FA}\u{FE0F}',
     groupId: 'operate',
   }]);
+});
+
+test('Mind & Memory collapses into 4 canonical tabbed hubs without absorbed sub-routes', () => {
+  const absorbedIds = new Set([
+    'biographical-profile',
+    'episodic-memory',
+    'prompts',
+    'prompt-monitor',
+    'values',
+    'concerns',
+    'wishlist',
+    'images',
+    'enrollment',
+  ]);
+  assert.equal(navItems.some(item => absorbedIds.has(item.id)), false);
+
+  const mindMemory = navItems
+    .filter(item => item.groupId === 'memory')
+    .map(item => ({ id: item.id, path: item.path, defaultLabel: item.defaultLabel }));
+  assert.deepEqual(mindMemory, [
+    { id: 'memory', path: '/memory', defaultLabel: 'Memory' },
+    { id: 'identity', path: '/identity', defaultLabel: 'Identity & Prompts' },
+    { id: 'wiki', path: '/wiki', defaultLabel: 'Knowledge & Work' },
+    { id: 'contacts', path: '/contacts', defaultLabel: 'Contacts' },
+  ]);
 });
 
 test('Conversations is the single chat and session destination in the operator navigation', () => {

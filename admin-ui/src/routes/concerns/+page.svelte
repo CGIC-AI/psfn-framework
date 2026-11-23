@@ -15,6 +15,8 @@
 
   const TRANSITION_STATUSES = ['candidate', 'active', 'watching', 'deferred', 'blocked'] as const;
 
+  let { embedded = false }: { embedded?: boolean } = $props();
+
   let concerns = $state<ConcernView[]>([]);
   let loading = $state(true);
   let refreshing = $state(false);
@@ -145,48 +147,58 @@
   });
 </script>
 
+{#snippet concernActions()}
+  <div class="garden-toolbar flex flex-wrap items-center gap-2">
+    <label class="flex items-center gap-2 text-sm text-shadow-700">
+      <input
+        type="checkbox"
+        bind:checked={includeResolved}
+        onchange={() => void load()}
+        class="h-4 w-4 rounded border-bark-300"
+      />
+      Include resolved / terminal
+    </label>
+    <button
+      type="button"
+      onclick={() => requestAction({
+        key: '__stale__',
+        title: 'Resolve all stale concerns?',
+        context: 'Exact action: resolve stale concern projections',
+        done: 'Stale concerns resolved',
+        run: (reason) => resolveStaleConcerns(reason),
+      })}
+      disabled={actionBusyId !== '' || pendingAction !== null}
+      class="rounded-xl border border-bark-300 px-3 py-1.5 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:opacity-50"
+    >
+      Resolve stale
+    </button>
+    <button
+      type="button"
+      onclick={refresh}
+      disabled={refreshing}
+      class="rounded-xl border border-bark-300 px-3 py-1.5 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:opacity-50"
+    >
+      {refreshing ? 'Refreshing…' : 'Refresh'}
+    </button>
+  </div>
+{/snippet}
+
 <div class="garden-page space-y-5 pb-8">
-  <GardenPageHeader
-    eyebrow="Intention"
-    title="Concerns"
-    description={`${concerns.length} concern${concerns.length === 1 ? '' : 's'} shown · review, transition, or resolve active intentions.`}
-  >
-    {#snippet actions()}
-      <div class="garden-toolbar flex flex-wrap items-center gap-2">
-      <label class="flex items-center gap-2 text-sm text-shadow-700">
-        <input
-          type="checkbox"
-          bind:checked={includeResolved}
-          onchange={() => void load()}
-          class="h-4 w-4 rounded border-bark-300"
-        />
-        Include resolved / terminal
-      </label>
-      <button
-        type="button"
-        onclick={() => requestAction({
-          key: '__stale__',
-          title: 'Resolve all stale concerns?',
-          context: 'Exact action: resolve stale concern projections',
-          done: 'Stale concerns resolved',
-          run: (reason) => resolveStaleConcerns(reason),
-        })}
-        disabled={actionBusyId !== '' || pendingAction !== null}
-        class="rounded-xl border border-bark-300 px-3 py-1.5 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:opacity-50"
-      >
-        Resolve stale
-      </button>
-      <button
-        type="button"
-        onclick={refresh}
-        disabled={refreshing}
-        class="rounded-xl border border-bark-300 px-3 py-1.5 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:opacity-50"
-      >
-        {refreshing ? 'Refreshing…' : 'Refresh'}
-      </button>
-      </div>
-    {/snippet}
-  </GardenPageHeader>
+  {#if !embedded}
+    <GardenPageHeader
+      eyebrow="Intention"
+      title="Concerns"
+      description={`${concerns.length} concern${concerns.length === 1 ? '' : 's'} shown · review, transition, or resolve active intentions.`}
+      actions={concernActions}
+    />
+  {:else}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">
+        {concerns.length} concern{concerns.length === 1 ? '' : 's'} shown · review, transition, or resolve active intentions.
+      </p>
+      {@render concernActions()}
+    </div>
+  {/if}
 
   <section class="garden-section card-garden border-l-4 border-l-gold-400 p-4" aria-labelledby="concern-escalation-title">
     <h2 id="concern-escalation-title" class="font-serif font-semibold text-shadow-900">

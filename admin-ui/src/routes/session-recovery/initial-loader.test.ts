@@ -71,9 +71,9 @@ test('initial session recovery load fetches routes and exits loading', async () 
   assert.equal(state.loading, false);
 });
 
-test('session recovery route wires the initial loader to onMount', () => {
+test('session recovery route wires the initial loader to onMount when embedded', () => {
   const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf-8');
-  assert.match(source, /onMount\(\(\) => \{\s*void loadRoutes\(\);\s*\}\);/s);
+  assert.match(source, /onMount\(\(\) => \{\s*if \(embedded\) void loadRoutes\(\);\s*\}\);/s);
 });
 
 test('session recovery exposes every known channel in a visible selector while retaining manual input', () => {

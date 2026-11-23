@@ -16,19 +16,23 @@
   import { resolveSessionContextPressureView } from '$lib/dashboard/session-context-pressure';
   import { scopeGardenPath } from '$lib/fleet/companion-scope';
   import type { AdminDashboardData, DashboardCostWindow } from '$lib/types';
-  import ActiveConcernsCard from '$lib/components/garden/ActiveConcernsCard.svelte';
   import Sparkline from '$lib/components/accounting/charts/Sparkline.svelte';
-  import AnalysisTracesTable from '$lib/components/dashboard/AnalysisTracesTable.svelte';
-  import ContextAllocationPanel from '$lib/components/dashboard/ContextAllocationPanel.svelte';
   import IntentionFollowUpRoutingCard from '$lib/components/dashboard/IntentionFollowUpRoutingCard.svelte';
   import DashboardHeader from '$lib/components/dashboard/DashboardHeader.svelte';
   import DashboardStatCard from '$lib/components/dashboard/DashboardStatCard.svelte';
-  import LatencyWaterfalls from '$lib/components/dashboard/LatencyWaterfalls.svelte';
-  import MemoryBreakdownPanel from '$lib/components/dashboard/MemoryBreakdownPanel.svelte';
   import RuntimeStrip from '$lib/components/dashboard/RuntimeStrip.svelte';
-  import TokenUsagePanel from '$lib/components/dashboard/TokenUsagePanel.svelte';
   import ToolStatusPanel from '$lib/components/dashboard/ToolStatusPanel.svelte';
   import { resolveDashboardSection } from '$lib/components/dashboard/dashboard-view';
+
+  const QUICK_LINKS = [
+    { label: 'Conversations', hint: 'Live chat, sessions, and lane recovery', path: '/chat' },
+    { label: 'Sessions & Debug', hint: 'Inspect transcripts and turn detail', path: '/chat?tab=sessions' },
+    { label: 'Memory', hint: 'L2 memories, recall, and curation', path: '/memory' },
+    { label: 'Concerns', hint: 'Active threads and ongoing focus', path: '/concerns' },
+    { label: 'Models & Costs', hint: 'Model slots, token budgets, and usage', path: '/models' },
+    { label: 'Subsystem Health', hint: 'Runtime diagnostics and continuity', path: '/subsystem-health' },
+    { label: 'Confirmations', hint: 'Pending approvals and reviews', path: '/confirmations' },
+  ] as const;
 
   let data = $state<AdminDashboardData | null>(null);
   let error = $state('');
@@ -213,7 +217,7 @@
         label="Sessions"
         value={stats.sessionCount.toLocaleString()}
         hint={`${transientSessionTelemetry.turnsSinceOperatorStart.toLocaleString()} live turn events since operator start`}
-        href={scopeGardenPath('/sessions')}
+        href={scopeGardenPath('/chat?tab=sessions')}
       />
       <DashboardStatCard
         label={`Total tokens · ${costWindowHint(committedCostWindow)}`}
@@ -265,43 +269,32 @@
           <ToolStatusPanel tools={stats.toolStatus} />
         </div>
 
-        <div class="grid items-start gap-4 xl:grid-cols-2">
-          <div id="memory" class="scroll-mt-4">
-            <MemoryBreakdownPanel
-              memoryByType={stats.memoryByType}
-              total={stats.memoryTotal}
-              avgSalience={stats.avgSalience}
-            />
+        <section class="card-garden p-4" aria-labelledby="dashboard-workspaces-heading">
+          <div class="flex flex-wrap items-baseline justify-between gap-2">
+            <div>
+              <h2 id="dashboard-workspaces-heading" class="font-serif text-lg font-semibold text-shadow-900">
+                Workspaces
+              </h2>
+              <p class="mt-0.5 text-sm text-shadow-600">
+                Open dedicated surfaces for memory breakdowns, model costs, traces, and active concerns.
+              </p>
+            </div>
           </div>
-          <div id="cost" class="scroll-mt-4">
-            <TokenUsagePanel
-              usage={selectedCostWindowUsage}
-              window={committedCostWindow}
-              loading={costWindowLoading || backgroundRefreshLoading}
-              transientTelemetry={transientSessionTelemetry}
-              {formatTokens}
-              {formatCost}
-              formatDuration={formatOptionalDuration}
-            />
+          <div class="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {#each QUICK_LINKS as link (link.path)}
+              <a
+                href={scopeGardenPath(link.path)}
+                class="rounded-xl border border-bark-200 bg-bark-50/70 px-3.5 py-2.5 transition-colors hover:border-gold-300 hover:bg-bark-100"
+              >
+                <span class="block text-sm font-semibold text-shadow-900">{link.label}</span>
+                <span class="mt-0.5 block text-xs text-shadow-600">{link.hint}</span>
+              </a>
+            {/each}
           </div>
-        </div>
-
-        <LatencyWaterfalls
-          waterfalls={transientSessionTelemetry.recentLatencyWaterfalls}
-          {formatDuration}
-          formatTimestamp={formatFreshnessTimestamp}
-        />
-
-        <div id="traces" class="scroll-mt-4">
-          <AnalysisTracesTable
-            traces={stats.recentAnalysisWorkbenchTraces}
-            {formatTokens}
-            {formatDuration}
-          />
-        </div>
+        </section>
       </div>
 
-      <aside class="space-y-4" aria-label="Runtime and companion context">
+      <aside id="runtime" class="scroll-mt-4 space-y-4" aria-label="Runtime and companion context">
         <RuntimeStrip
           schedulerTasks={stats.schedulerTasks}
           activeShards={stats.activeShards}
@@ -310,8 +303,6 @@
           averageTtft={formatOptionalDuration(transientSessionTelemetry.averageTtftMs)}
         />
         <IntentionFollowUpRoutingCard routing={stats.intentionFollowUpRouting} />
-        <ContextAllocationPanel />
-        <ActiveConcernsCard />
       </aside>
     </div>
   {/if}

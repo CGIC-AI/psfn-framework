@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { onMount, onDestroy, tick } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { page } from '$app/stores';
   import { getChatBootstrap, updateChatBootstrap } from '$lib/api/endpoints/chat';
   import { getModelRoomBootstrap } from '$lib/api/endpoints/model-room';
   import { applyIdentityOnboardingAction } from '$lib/api/endpoints/identity';
@@ -11,6 +13,7 @@
   } from '$lib/stores/companion.svelte';
   import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
+  import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
   import { createVisibilityAwarePoller } from '$lib/polling/visibility-aware-poller';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
   import { apiFetch } from '$lib/api/client';
@@ -23,6 +26,11 @@
     getCompanionCacheScope,
     scopeGardenPath,
   } from '$lib/fleet/companion-scope';
+  import {
+    canonicalConversationsPath,
+    CONVERSATIONS_TABS,
+    resolveConversationsTab,
+  } from '$lib/nav/canonical-routes';
   import type {
     AdminChatBootstrapResponse,
     AdminModelRoomBootstrapResponse,
@@ -32,6 +40,21 @@
     isToolCallOutcome,
     type ToolCallOutcome,
   } from '../../../../src/shared/contracts/tool-call-outcome.js';
+  import SessionsPage from '../sessions/+page.svelte';
+  import SessionRecoveryPage from '../session-recovery/+page.svelte';
+
+  const conversationsTabs: GardenTabItem[] = CONVERSATIONS_TABS.map(tab => ({ ...tab }));
+  const activeTab = $derived(resolveConversationsTab($page.url.searchParams));
+  let liveChatLoadStarted = false;
+
+  function selectConversationsTab(id: string): void {
+    const tab = CONVERSATIONS_TABS.find(candidate => candidate.id === id)?.id;
+    if (!tab || tab === activeTab) return;
+    void goto(scopeGardenPath(canonicalConversationsPath(tab)), {
+      keepFocus: true,
+      noScroll: true,
+    });
+  }
 
   // ── Message model (unified: companion chat + model-room rounds) ──
   interface ToolCallView {
@@ -452,7 +475,7 @@ ${context}`;
 
   // ── Lifecycle ──
 
-  onMount(async () => {
+  async function initializeLiveChat(): Promise<void> {
     try {
       bootstrap = await getChatBootstrap();
       setCompanionNameFromChatBootstrap(bootstrap);
@@ -503,15 +526,34 @@ ${context}`;
         roomUnavailableReason = e instanceof Error ? e.message : 'Model roster unavailable';
       }
 
-      healthPoller.start();
       // Load existing session history
       await loadSessionHistory(bootstrap.defaultSessionId);
-      connectDebugStream();
+      if (activeTab === 'live') {
+        healthPoller.start();
+        connectDebugStream();
+      }
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load chat bootstrap';
       connectionStatus = 'error';
     } finally {
       loading = false;
+    }
+  }
+
+  $effect(() => {
+    if (activeTab !== 'live') {
+      healthPoller.stop();
+      disconnectDebugStream();
+      return;
+    }
+    if (!liveChatLoadStarted) {
+      liveChatLoadStarted = true;
+      void initializeLiveChat();
+      return;
+    }
+    if (bootstrap) {
+      healthPoller.start();
+      connectDebugStream();
     }
   });
 
@@ -1130,33 +1172,50 @@ ${context}`;
   };
 </script>
 
-<div class="garden-page flex h-[calc(100dvh-7rem)] min-h-[42rem] flex-col">
+<div class={activeTab === 'live'
+  ? 'garden-page flex h-[calc(100dvh-7rem)] min-h-[42rem] flex-col'
+  : 'garden-page space-y-4 pb-8'}>
   <GardenPageHeader
     eyebrow="Live Operations"
-    title="The Canopy"
-    description="Multifunction chat console for companion chat and direct-model rounds."
+    title="Conversations"
+    description="Live companion chat, direct-model rounds, session inspection, and lane recovery."
     class="mb-3 shrink-0"
   >
     {#snippet actions()}
-      <span class="inline-block w-2.5 h-2.5 rounded-full {STATUS_DOT[connectionStatus]}"></span>
-      <span class="text-sm font-medium {STATUS_TEXT[connectionStatus]}">{STATUS_LABEL[connectionStatus]}</span>
-      {#if statusDetail && connectionStatus !== 'connecting'}
-        <span class="text-sm text-bark-700">-- {statusDetail}</span>
-      {/if}
-      {#if messages.length > 0}
-        <button
-          onclick={clearTranscript}
-          disabled={busy}
-          class="garden-action min-h-11 rounded-lg border border-bark-300 px-3 py-2 text-sm text-shadow-700 hover:bg-bark-100
-                 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          Clear Transcript
-        </button>
+      {#if activeTab === 'live'}
+        <span class="inline-block w-2.5 h-2.5 rounded-full {STATUS_DOT[connectionStatus]}"></span>
+        <span class="text-sm font-medium {STATUS_TEXT[connectionStatus]}">{STATUS_LABEL[connectionStatus]}</span>
+        {#if statusDetail && connectionStatus !== 'connecting'}
+          <span class="text-sm text-bark-700">-- {statusDetail}</span>
+        {/if}
+        {#if messages.length > 0}
+          <button
+            onclick={clearTranscript}
+            disabled={busy}
+            class="garden-action min-h-11 rounded-lg border border-bark-300 px-3 py-2 text-sm text-shadow-700 hover:bg-bark-100
+                   transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Clear Transcript
+          </button>
+        {/if}
       {/if}
     {/snippet}
   </GardenPageHeader>
 
-  {#if loading}
+  <div class="mb-3 shrink-0">
+    <GardenTabBar
+      tabs={conversationsTabs}
+      activeId={activeTab}
+      onSelect={selectConversationsTab}
+      label="Conversation views"
+    />
+  </div>
+
+  {#if activeTab === 'sessions'}
+    <SessionsPage embedded />
+  {:else if activeTab === 'recovery'}
+    <SessionRecoveryPage embedded />
+  {:else if loading}
     <div class="garden-loading card-garden p-6 animate-pulse flex-1" aria-busy="true">
       <div class="h-4 bg-bark-200 rounded w-48 mb-4"></div>
       <div class="h-64 bg-bark-200 rounded"></div>

@@ -29,6 +29,8 @@
 
   type SessionMessageOntologyView = AdminSessionMessagesData['messageOntologyViews'][number];
 
+  let { embedded = false } = $props<{ embedded?: boolean }>();
+
   let channels = $state<ChannelInfo[]>([]);
   let selectedSessionId = $state<string | null>(null);
   let selectedSessionDetail = $state<AdminSessionDetailData | null>(null);
@@ -455,25 +457,20 @@
   ));
 
   onMount(() => {
-    loadChannels();
+    if (embedded) void loadChannels();
   });
 </script>
 
-<div class="garden-page space-y-4">
-  <GardenPageHeader
-    eyebrow="Live Operations"
-    title="The Branches"
-    description="Search session channels, inspect message history, and audit content-free turn detail."
-  />
+<div class={embedded ? 'space-y-4' : 'garden-page space-y-4'}>
+  {#if embedded}
+    {#if error}
+      <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4" role="alert">
+        <p class="text-wilt-600 text-sm">{error}</p>
+        <button onclick={() => error = ''} class="mt-2 min-h-11 rounded-lg px-3 text-sm font-medium text-shadow-600 hover:bg-bark-100 hover:text-shadow-900">Dismiss</button>
+      </div>
+    {/if}
 
-  {#if error}
-    <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4" role="alert">
-      <p class="text-wilt-600 text-sm">{error}</p>
-      <button onclick={() => error = ''} class="mt-2 min-h-11 rounded-lg px-3 text-sm font-medium text-shadow-600 hover:bg-bark-100 hover:text-shadow-900">Dismiss</button>
-    </div>
-  {/if}
-
-  <div class="garden-split-view flex min-h-[36rem] flex-col gap-4 lg:h-[calc(100vh-12rem)] lg:flex-row">
+    <div class="garden-split-view flex min-h-[36rem] flex-col gap-4 lg:h-[calc(100vh-14rem)] lg:flex-row">
     <!-- Channel list -->
     <section class="garden-section card-garden flex max-h-96 w-full shrink-0 flex-col overflow-hidden lg:max-h-none lg:w-80" aria-labelledby="session-channels-heading">
       <div class="border-b border-bark-300 bg-bark-100 p-3">
@@ -785,4 +782,11 @@
       {/if}
     </section>
   </div>
+  {:else}
+    <GardenPageHeader
+      eyebrow="Live Operations"
+      title="Conversations"
+      description="Sessions and turn debugging now live under Conversations. Redirecting…"
+    />
+  {/if}
 </div>

@@ -52,3 +52,17 @@ test('Places is the only world-location destination in the operator navigation',
     groupId: 'operate',
   }]);
 });
+
+test('Conversations is the single chat and session destination in the operator navigation', () => {
+  const conversationItems = navItems.filter(item => (
+    item.id === 'chat' || item.id === 'sessions' || item.id === 'session-recovery'
+  ));
+
+  assert.deepEqual(conversationItems, [{
+    id: 'chat',
+    path: '/chat',
+    defaultLabel: 'Conversations',
+    icon: '\u{1F4AC}',
+    groupId: 'operate',
+  }]);
+});

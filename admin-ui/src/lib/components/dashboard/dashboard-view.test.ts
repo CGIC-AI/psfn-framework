@@ -4,7 +4,6 @@ import {
   countDashboardTools,
   DASHBOARD_SECTIONS,
   filterDashboardTools,
-  memorySharePercent,
   resolveDashboardSection,
   type DashboardTool,
 } from './dashboard-view';
@@ -47,23 +46,14 @@ test('filterDashboardTools searches names, statuses, and live detail case-insens
   );
 });
 
-test('memorySharePercent is finite and bounded for unavailable or inconsistent totals', () => {
-  assert.equal(memorySharePercent(25, 100), 25);
-  assert.equal(memorySharePercent(200, 100), 100);
-  assert.equal(memorySharePercent(25, 0), 0);
-  assert.equal(memorySharePercent(Number.NaN, 100), 0);
-});
-
 test('dashboard section links resolve every visible deep link and reject unknown hashes', () => {
   assert.deepEqual(DASHBOARD_SECTIONS, [
     { id: 'overview', label: 'Overview', href: '#overview' },
     { id: 'health', label: 'Health', href: '#health' },
-    { id: 'memory', label: 'Memory', href: '#memory' },
-    { id: 'cost', label: 'Cost', href: '#cost' },
-    { id: 'traces', label: 'Traces', href: '#traces' },
+    { id: 'runtime', label: 'Runtime', href: '#runtime' },
   ]);
-  assert.equal(resolveDashboardSection('#memory'), 'memory');
-  assert.equal(resolveDashboardSection('#traces'), 'traces');
+  assert.equal(resolveDashboardSection('#health'), 'health');
+  assert.equal(resolveDashboardSection('#runtime'), 'runtime');
   assert.equal(resolveDashboardSection('#missing'), 'overview');
   assert.equal(resolveDashboardSection(''), 'overview');
 });

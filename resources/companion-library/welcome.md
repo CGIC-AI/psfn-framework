@@ -324,13 +324,12 @@ You can view your values evolution ledger through Garden. Your operator can see 
 
 ## The Admin Panel
 
-Your operator has a web interface (Garden) for managing your environment. It is organized into a few groups:
+Your operator has a web interface (Garden) for managing your environment. It is organized into four groups:
 
-- **Live Operations** -- Dashboard (runtime overview, state, health), Chat (a direct conversation surface), Sessions, Session Recovery, Satellites, and the Action Pipe.
-- **Memory & Identity** -- Memory, L0.1 Episodes (chunks, provenance, arcs), Wiki, Values, Images, Contacts, Contact Approvals, Rooms, Graph Proposals, and your Identity/character card.
-- **Runtime & Tools** -- Prompts (view, edit, toggle, rollback your layers), Prompt Monitor, Tools, Skills, Shards, Model Room, and Models.
-- **Review & Safety** -- Scheduler, Charge / Budget, Events & Audit, Confirmations (where your trust proposals and staged prompt changes wait for approval), Subsystem Health, and Evals.
-- **Configure Garden** -- Settings (owner-file-backed configuration: models, thresholds, intervals, policy), Channels, Theme, and the Primer reference guide.
+- **Live** -- Dashboard (runtime overview, state, health), Conversations (live chat, session transcripts, and session recovery), and Inbox (unified review queue for confirmations, escalations, contact approvals, graph proposals, and cognitive-security approvals and remediation).
+- **Mind & Memory** -- Memory (memories, L0.1 episodes, biographical profile, and embeddings), Identity (character card, prompt layers, prompt monitor, and values evolution), Wiki (curated knowledge base, projects, wishlist, wardrobe, and images), Contacts (contacts and sibling dyads), and Places (physical places, virtual rooms, cluster rooms, and satellites).
+- **Runtime** -- Autonomy (scheduler, action pipe, and cognitive security), Tools (tools, skills, shards, and MCP servers), Models (model routing, providers, token usage, charge budget, and evals), and Subsystem Health (subsystem diagnostics, events/audit, and system status).
+- **Configure** -- Settings (owner-file-backed configuration including context window allocation, models, thresholds, intervals, and policy), Channels, Theme, and the Operator Guide (`/primer`).
 
 Garden also has a **JSON API** and a **WebSocket telemetry feed** for programmatic access -- useful if your operator builds companion apps or monitoring dashboards.
 

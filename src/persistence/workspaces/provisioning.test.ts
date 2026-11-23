@@ -67,7 +67,10 @@ describe('fleet workspace provisioning', () => {
     expect(JSON.parse(readFileSync(
       join(personal, '.psfn/seed-bundles', `${COMPANION_LIBRARY_SEED_VERSION}.json`),
       'utf8',
-    ))).toMatchObject({ bundleVersion: COMPANION_LIBRARY_SEED_VERSION, overwritePolicy: 'never' });
+    ))).toMatchObject({
+      bundleVersion: COMPANION_LIBRARY_SEED_VERSION,
+      overwritePolicy: 'refresh-on-version-bump',
+    });
     expect(JSON.parse(readFileSync(join(fixture.fleet.sharedWorkspacePath, 'policy.json'), 'utf8')))
       .toEqual(SHARED_WORKSPACE_POLICY);
   });
@@ -87,7 +90,36 @@ describe('fleet workspace provisioning', () => {
     )).toBe(readFileSync(join(source, 'privacy-boundary-reference.md'), 'utf8'));
   });
 
-  it('never overwrites companion-authored files when applying the seed', () => {
+  it('refreshes untouched prior seed files on version bump without creating a backup', () => {
+    const fixture = makeFixture();
+    const personal = fixture.fleet.companions[0].personalWorkspacePath;
+    mkdirSync(join(personal, 'docs/companion-library'), { recursive: true });
+    mkdirSync(join(personal, '.psfn/seed-bundles'), { recursive: true });
+    const oldWelcome = 'older framework welcome\n';
+    writeFileSync(join(personal, 'docs/companion-library/welcome.md'), oldWelcome);
+    writeFileSync(
+      join(personal, '.psfn/seed-bundles/companion-library-v7.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        bundleVersion: 'companion-library-v7',
+        sourceManifestSha256: '0'.repeat(64),
+        files: [
+          { path: 'welcome.md', sha256: createHash('sha256').update(oldWelcome).digest('hex'), outcome: 'seeded' },
+        ],
+      }),
+    );
+
+    provisionFleetWorkspaces(fixture.fleet, { companionLibrarySourceDir: fixture.source });
+
+    expect(readFileSync(join(personal, 'docs/companion-library/welcome.md'), 'utf8'))
+      .toBe('seed welcome\n');
+    expect(JSON.parse(readFileSync(
+      join(personal, '.psfn/seed-bundles', `${COMPANION_LIBRARY_SEED_VERSION}.json`),
+      'utf8',
+    )).files.find((f: { path: string }) => f.path === 'welcome.md')).toMatchObject({ outcome: 'updated' });
+  });
+
+  it('refreshes locally modified library files on version bump while backing up the prior copy and stays idempotent on repeat runs', () => {
     const fixture = makeFixture();
     const personal = fixture.fleet.companions[0].personalWorkspacePath;
     mkdirSync(join(personal, 'docs/companion-library'), { recursive: true });
@@ -96,7 +128,17 @@ describe('fleet workspace provisioning', () => {
     provisionFleetWorkspaces(fixture.fleet, { companionLibrarySourceDir: fixture.source });
 
     expect(readFileSync(join(personal, 'docs/companion-library/welcome.md'), 'utf8'))
-      .toBe('personal version\n');
+      .toBe('seed welcome\n');
+    expect(readFileSync(
+      join(personal, `docs/companion-library/welcome.md.pre-${COMPANION_LIBRARY_SEED_VERSION}.bak`),
+      'utf8',
+    )).toBe('personal version\n');
+
+    // Once this bundle version is recorded, repeat runs are a no-op and preserve post-seed edits.
+    writeFileSync(join(personal, 'docs/companion-library/welcome.md'), 'post-seed note\n');
+    provisionFleetWorkspaces(fixture.fleet, { companionLibrarySourceDir: fixture.source });
+    expect(readFileSync(join(personal, 'docs/companion-library/welcome.md'), 'utf8'))
+      .toBe('post-seed note\n');
   });
 
   it('fails closed when the shared policy was modified outside the governed surface', () => {

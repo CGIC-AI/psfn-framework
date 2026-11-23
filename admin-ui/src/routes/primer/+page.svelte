@@ -22,46 +22,50 @@
 
   const locations: GuideLocation[] = [
     {
-      title: 'Start and converse',
-      description: 'Dashboard summarizes the current companion. Chat is the operator conversation console; Sessions browses retained conversations; Prompt Monitor (the Loom) explains one turn from prompt and context through tools, provider, and timing.',
+      title: 'Live operations & conversations',
+      description: 'Dashboard summarizes the current companion. Conversations unifies live chat, retained session search/debugging, and session recovery. Inbox collects every approval, escalation, and quarantine queue in one place; Places organizes physical rooms, virtual rooms, satellites, and cluster room arbitration.',
       links: [
         { label: 'Dashboard', path: '/' },
-        { label: 'Chat', path: '/chat' },
-        { label: 'Sessions', path: '/sessions' },
-        { label: 'Prompt Monitor', path: '/prompt-monitor' },
+        { label: 'Conversations', path: '/chat' },
+        { label: 'Inbox', path: '/inbox' },
+        { label: 'Places', path: '/places' },
       ],
     },
     {
-      title: 'Memory and people',
-      description: 'Memory exposes durable memory records and safe operator metadata. L0.1 Episodes shows episodic landmarks and arcs. Contacts (the Visitors) owns canonical people, linked channel identities, trust, and relationship state.',
+      title: 'Mind, memory, and people',
+      description: 'Memory brings together L2 memories, L0.1 episodes, and Stable Biography. Identity & Prompts combines the character card, prompt layers, live Prompt Monitor, and Values journal. Knowledge & Work groups Wiki, Concerns, Wishlist, and Images; Contacts owns people and hub enrollment.',
       links: [
         { label: 'Memory', path: '/memory' },
-        { label: 'L0.1 Episodes', path: '/episodic-memory' },
+        { label: 'Identity & Prompts', path: '/identity' },
+        { label: 'Knowledge & Work', path: '/wiki' },
         { label: 'Contacts', path: '/contacts' },
       ],
     },
     {
-      title: 'Skills and configuration',
-      description: 'Skills shows what was discovered, loaded, skipped, and injected. Settings edits the canonical owner files; the floating Save Settings control stays visible and reports dirty, saving, and last-saved state.',
+      title: 'Autonomy, tools, and configuration',
+      description: 'Autonomy & Schedule unifies ICP autonomy, Scheduler, Action Pipe, and Automata. Tools & Skills houses runtime tools, skills, analysis workbench traces, and shards. Settings edits canonical owner files with a unified save bar.',
       links: [
-        { label: 'Skills', path: '/skills' },
+        { label: 'Autonomy & Schedule', path: '/autonomy' },
+        { label: 'Tools & Skills', path: '/tools' },
         { label: 'Settings', path: '/settings' },
       ],
     },
     {
-      title: 'Cognitive Security',
-      description: 'Approvals is the human quarantine queue. Firewall shows enforcement mode, source tiers and lists, escalation thresholds, sink gates, and recent CogSec events.',
+      title: 'Safety, health, and Cognitive Security',
+      description: 'Inbox -> CogSec Quarantine & Integrity Remediation handle pending human decisions. Safety & Health houses Subsystem Health, Events & Audit, Intake Firewall, Drift Review, Chain of Custody, and Evals.',
       links: [
-        { label: 'Approvals', path: '/cognitive-security/approvals' },
-        { label: 'Firewall', path: '/cognitive-security/firewall' },
+        { label: 'CogSec Quarantine', path: '/inbox?tab=cogsec' },
+        { label: 'Safety & Health', path: '/subsystem-health' },
+        { label: 'Intake Firewall', path: '/subsystem-health?tab=firewall' },
       ],
     },
     {
-      title: 'Usage and cost',
-      description: 'Dashboard has the quick current-companion totals. Token Usage provides the detailed per-companion accounting cockpit; Cluster Costs compares authorized companions and cluster totals.',
+      title: 'Models, usage, and cost',
+      description: 'Dashboard gives a quick companion snapshot. Models & Usage unifies model routing, Charge & Budget policies, per-companion Token Usage accounting, and Cluster Costs.',
       links: [
-        { label: 'Token Usage', path: '/charge-budget?tab=token-usage' },
-        { label: 'Cluster Costs', path: '/fleet-costs' },
+        { label: 'Models & Usage', path: '/models' },
+        { label: 'Token Usage', path: '/models?tab=token-usage' },
+        { label: 'Cluster Costs', path: '/models?tab=fleet-costs' },
       ],
     },
     {
@@ -77,22 +81,22 @@
     {
       title: 'Review a quarantined item',
       steps: [
-        'Open Approvals and expand an awaiting-review item.',
+        'Open Inbox -> CogSec Quarantine and expand an awaiting-review item.',
         'Inspect why it was flagged, classifier findings, envelope history, and the sanitized representation before revealing raw content.',
         'Enter an audited reason, choose release raw, release sanitized, or discard, optionally teach the source list, then complete the two-step confirmation.',
       ],
-      links: [{ label: 'Open Approvals', path: '/cognitive-security/approvals' }],
+      links: [{ label: 'Open CogSec Quarantine', path: '/inbox?tab=cogsec' }],
     },
     {
       title: 'Check tokens and costs',
       steps: [
         'Use Dashboard for a quick companion snapshot.',
-        'Open Token Usage for model, provider, cache, time-window, and event detail.',
-        'Use Cluster Costs when the question spans companions.',
+        'Open Models & Usage -> Token Usage for model, provider, cache, time-window, and event detail.',
+        'Switch to Cluster Costs when the question spans companions.',
       ],
       links: [
-        { label: 'Token Usage', path: '/charge-budget?tab=token-usage' },
-        { label: 'Cluster Costs', path: '/fleet-costs' },
+        { label: 'Token Usage', path: '/models?tab=token-usage' },
+        { label: 'Cluster Costs', path: '/models?tab=fleet-costs' },
       ],
     },
     {
@@ -115,10 +119,10 @@
     {
       title: 'Recover a session',
       steps: [
-        'Open Session Recovery for a poisoned, over-compressed, or otherwise bad live session route.',
-        'Start a fresh logical session for the source channel. Old L0 history is retained for audit and search; row-level redaction belongs in CogSec Remediation.',
+        'Open Conversations -> Session Recovery for a poisoned, over-compressed, or otherwise bad live session route.',
+        'Start a fresh logical session for the source channel. Old L0 history is retained for audit and search; row-level redaction belongs in Inbox -> Integrity Remediation.',
       ],
-      links: [{ label: 'Session Recovery', path: '/session-recovery' }],
+      links: [{ label: 'Session Recovery', path: '/chat?tab=recovery' }],
     },
   ];
 

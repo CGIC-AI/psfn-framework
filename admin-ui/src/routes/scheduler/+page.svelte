@@ -20,6 +20,7 @@
   } from '$lib/types';
 
   // ── State ──
+  let { embedded = false }: { embedded?: boolean } = $props();
   let tasks = $state<ScheduledTask[]>([]);
   let reflections = $state<ReflectionTemplate[]>([]);
   let loading = $state(true);
@@ -551,22 +552,30 @@
   });
 </script>
 
-<div class="garden-page space-y-4">
-  <GardenPageHeader
-    eyebrow="Live Operations"
-    title="The Rhythms"
-    description="Scheduled tasks, heartbeats, reflections, and one-shot work."
+{#snippet schedulerActions()}
+  <button
+    onclick={loadData}
+    disabled={loading}
+    class="garden-action min-h-11 rounded-lg border border-bark-300 px-4 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:cursor-not-allowed disabled:opacity-50"
   >
-    {#snippet actions()}
-      <button
-        onclick={loadData}
-        disabled={loading}
-        class="garden-action min-h-11 rounded-lg border border-bark-300 px-4 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {loading ? 'Loading...' : 'Refresh'}
-      </button>
-    {/snippet}
-  </GardenPageHeader>
+    {loading ? 'Loading...' : 'Refresh'}
+  </button>
+{/snippet}
+
+<div class="garden-page space-y-4">
+  {#if !embedded}
+    <GardenPageHeader
+      eyebrow="Live Operations"
+      title="The Rhythms"
+      description="Scheduled tasks, heartbeats, reflections, and one-shot work."
+      actions={schedulerActions}
+    />
+  {:else}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">Scheduled tasks, heartbeats, reflections, and one-shot work.</p>
+      {@render schedulerActions()}
+    </div>
+  {/if}
 
   <!-- Feedback toast -->
   {#if feedback}

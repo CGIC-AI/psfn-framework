@@ -26,12 +26,11 @@
 
   const QUICK_LINKS = [
     { label: 'Conversations', hint: 'Live chat, sessions, and lane recovery', path: '/chat' },
-    { label: 'Sessions & Debug', hint: 'Inspect transcripts and turn detail', path: '/chat?tab=sessions' },
-    { label: 'Memory', hint: 'L2 memories, recall, and curation', path: '/memory' },
-    { label: 'Concerns', hint: 'Active threads and ongoing focus', path: '/concerns' },
-    { label: 'Models & Costs', hint: 'Model slots, token budgets, and usage', path: '/models' },
-    { label: 'Subsystem Health', hint: 'Runtime diagnostics and continuity', path: '/subsystem-health' },
-    { label: 'Confirmations', hint: 'Pending approvals and reviews', path: '/confirmations' },
+    { label: 'Inbox', hint: 'Approvals, escalations, and CogSec review', path: '/inbox' },
+    { label: 'Memory', hint: 'L2 memories, L0.1 episodes, and biography', path: '/memory' },
+    { label: 'Concerns', hint: 'Active threads and ongoing focus', path: '/wiki?tab=concerns' },
+    { label: 'Models & Usage', hint: 'Model slots, charge budgets, and token costs', path: '/models' },
+    { label: 'Safety & Health', hint: 'Diagnostics, events, firewall, and evals', path: '/subsystem-health' },
   ] as const;
 
   let data = $state<AdminDashboardData | null>(null);

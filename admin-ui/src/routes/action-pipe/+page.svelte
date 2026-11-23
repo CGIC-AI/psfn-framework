@@ -25,6 +25,8 @@
   const MUTATION_CANCEL_DETAIL = 'Cancelled from Garden action-pipe operator surface.';
   const MUTATION_ACK_DETAIL = 'Acknowledged from Garden action-pipe operator surface.';
 
+  let { embedded = false }: { embedded?: boolean } = $props();
+
   let status = $state<ActionPipeStatus | null>(null);
   let loading = $state(true);
   let refreshing = $state(false);
@@ -103,22 +105,30 @@
   });
 </script>
 
-<div class="garden-page space-y-6">
-  <GardenPageHeader
-    eyebrow="Live Operations"
-    title="Action Pipe"
-    description="Post-turn work, autonomous actions, retries, quarantine, and bounded subagent outcomes."
+{#snippet actionPipeActions()}
+  <button
+    onclick={refreshStatus}
+    disabled={refreshing}
+    class="garden-action min-h-11 rounded-lg border border-bark-300 px-4 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:cursor-not-allowed disabled:opacity-50"
   >
-    {#snippet actions()}
-      <button
-        onclick={refreshStatus}
-        disabled={refreshing}
-        class="garden-action min-h-11 rounded-lg border border-bark-300 px-4 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {refreshing ? 'Refreshing...' : 'Refresh'}
-      </button>
-    {/snippet}
-  </GardenPageHeader>
+    {refreshing ? 'Refreshing...' : 'Refresh'}
+  </button>
+{/snippet}
+
+<div class="garden-page space-y-6">
+  {#if !embedded}
+    <GardenPageHeader
+      eyebrow="Live Operations"
+      title="Action Pipe"
+      description="Post-turn work, autonomous actions, retries, quarantine, and bounded subagent outcomes."
+      actions={actionPipeActions}
+    />
+  {:else}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">Post-turn work, autonomous actions, retries, quarantine, and bounded subagent outcomes.</p>
+      {@render actionPipeActions()}
+    </div>
+  {/if}
 
   {#if errorMessage}
     <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4" role="alert">

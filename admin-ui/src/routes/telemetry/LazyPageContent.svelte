@@ -31,6 +31,7 @@
   } from '$lib/types';
 
   // ── Tab State ──
+  let { embedded = false }: { embedded?: boolean } = $props();
   type TabId = 'live' | 'audit';
   let activeTab = $state<TabId>('live');
 
@@ -513,12 +514,21 @@
     </div>
   {/snippet}
 
-  <GardenPageHeader
-    eyebrow="Operations · Observability"
-    title="Events & Audit"
-    description="Live telemetry, persisted audit evidence, and an honest map of which operator surfaces are durable, derived, or process-local."
-    actions={telemetryHeaderActions}
-  />
+  {#if !embedded}
+    <GardenPageHeader
+      eyebrow="Operations · Observability"
+      title="Events & Audit"
+      description="Live telemetry, persisted audit evidence, and an honest map of which operator surfaces are durable, derived, or process-local."
+      actions={telemetryHeaderActions}
+    />
+  {:else}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">
+        Live telemetry, persisted audit evidence, and durability classification across operator surfaces.
+      </p>
+      {@render telemetryHeaderActions()}
+    </div>
+  {/if}
 
   <AuditSurfaceMap
     {activeTab}

@@ -35,6 +35,8 @@
     steps: TraceStep[];
   }
 
+  let { embedded = false }: { embedded?: boolean } = $props();
+
   let traces = $state<Trace[]>([]);
   let loading = $state(true);
   let error = $state('');
@@ -85,18 +87,29 @@
 </script>
 
 <div class="garden-page space-y-5 pb-10">
-  <GardenPageHeader
-    eyebrow="Runtime & Tools · Analysis"
-    title="Analysis Workbench"
-    description="Recent durable REPL traces with explicit completion, limiting policy, progress, and run cost."
-    class="border-b border-bark-300 pb-4"
-  >
-    {#snippet actions()}
+  {#if !embedded}
+    <GardenPageHeader
+      eyebrow="Runtime & Tools · Analysis"
+      title="Analysis Workbench"
+      description="Recent durable REPL traces with explicit completion, limiting policy, progress, and run cost."
+      class="border-b border-bark-300 pb-4"
+    >
+      {#snippet actions()}
+        <span class="garden-status {loading ? 'garden-status--warning' : error ? 'garden-status--danger' : 'garden-status--success'} rounded-full border border-bark-300 bg-bark-50 px-2.5 py-1 text-xs font-semibold text-shadow-700">
+          {loading ? 'loading traces' : `${traces.length} recent`}
+        </span>
+      {/snippet}
+    </GardenPageHeader>
+  {:else}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">
+        Recent durable REPL traces with explicit completion, limiting policy, progress, and run cost.
+      </p>
       <span class="garden-status {loading ? 'garden-status--warning' : error ? 'garden-status--danger' : 'garden-status--success'} rounded-full border border-bark-300 bg-bark-50 px-2.5 py-1 text-xs font-semibold text-shadow-700">
         {loading ? 'loading traces' : `${traces.length} recent`}
       </span>
-    {/snippet}
-  </GardenPageHeader>
+    </div>
+  {/if}
 
   <section class="garden-metric-grid grid grid-cols-2 gap-3 lg:grid-cols-5" aria-label="Analysis trace summary">
     <div class="garden-metric card-garden p-4">

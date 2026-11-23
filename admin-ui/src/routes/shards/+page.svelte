@@ -26,6 +26,7 @@
   }
 
   // ── Dashboard state ──
+  let { embedded = false }: { embedded?: boolean } = $props();
   let dashboardShardCount = $state<number | null>(null);
   let dashboardLoading = $state(true);
   let dashboardError = $state('');
@@ -145,50 +146,60 @@
   });
 </script>
 
-<div class="garden-page space-y-6 pb-10">
-  <GardenPageHeader
-    eyebrow="Runtime & Tools · Shards"
-    title="The Blooms"
-    description="Parent-owned shard activity, runtime-only overrides, fold reviews, and the live telemetry trail."
-    class="border-b border-bark-300 pb-4"
-  >
-    {#snippet actions()}
-    <div class="garden-toolbar flex flex-wrap items-center gap-2">
-      {#if isConnected()}
-        <span class="relative flex h-2.5 w-2.5">
-          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-moss-400 opacity-75"></span>
-          <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-moss-500"></span>
+{#snippet shardActions()}
+  <div class="garden-toolbar flex flex-wrap items-center gap-2">
+    {#if isConnected()}
+      <span class="relative flex h-2.5 w-2.5">
+        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-moss-400 opacity-75"></span>
+        <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-moss-500"></span>
+      </span>
+      <span class="garden-status garden-status--success rounded-full border border-moss-300 bg-moss-50 px-2.5 py-1 text-xs font-semibold text-moss-700">Telemetry active</span>
+      <button
+        onclick={() => disconnectTelemetry()}
+        class="garden-action text-sm px-3 py-1.5 rounded-lg border border-bark-300 text-shadow-600
+               hover:bg-bark-100 font-medium transition-colors"
+      >
+        Disconnect
+      </button>
+    {:else}
+      <span class="inline-flex rounded-full h-2.5 w-2.5 bg-wilt-400"></span>
+      <span class="garden-status garden-status--danger rounded-full border border-wilt-300 bg-wilt-50 px-2.5 py-1 text-xs font-semibold text-wilt-700">Disconnected</span>
+      {#if getTelemetryConnectionError()}
+        <span class="text-xs text-wilt-600" role="status">
+          {#if getTelemetryConnectionError()?.code !== null}
+            Code {getTelemetryConnectionError()?.code}:
+          {/if}
+          {getTelemetryConnectionError()?.reason}
         </span>
-        <span class="garden-status garden-status--success rounded-full border border-moss-300 bg-moss-50 px-2.5 py-1 text-xs font-semibold text-moss-700">Telemetry active</span>
-        <button
-          onclick={() => disconnectTelemetry()}
-          class="garden-action text-sm px-3 py-1.5 rounded-lg border border-bark-300 text-shadow-600
-                 hover:bg-bark-100 font-medium transition-colors"
-        >
-          Disconnect
-        </button>
-      {:else}
-        <span class="inline-flex rounded-full h-2.5 w-2.5 bg-wilt-400"></span>
-        <span class="garden-status garden-status--danger rounded-full border border-wilt-300 bg-wilt-50 px-2.5 py-1 text-xs font-semibold text-wilt-700">Disconnected</span>
-        {#if getTelemetryConnectionError()}
-          <span class="text-xs text-wilt-600" role="status">
-            {#if getTelemetryConnectionError()?.code !== null}
-              Code {getTelemetryConnectionError()?.code}:
-            {/if}
-            {getTelemetryConnectionError()?.reason}
-          </span>
-        {/if}
-        <button
-          onclick={() => connectTelemetry()}
-          class="garden-action text-sm px-3 py-1.5 rounded-lg border border-moss-300 bg-moss-50 text-moss-700
-                 hover:bg-moss-100 font-medium transition-colors"
-        >
-          Connect
-        </button>
       {/if}
+      <button
+        onclick={() => connectTelemetry()}
+        class="garden-action text-sm px-3 py-1.5 rounded-lg border border-moss-300 bg-moss-50 text-moss-700
+               hover:bg-moss-100 font-medium transition-colors"
+      >
+        Connect
+      </button>
+    {/if}
+  </div>
+{/snippet}
+
+<div class="garden-page space-y-6 pb-10">
+  {#if !embedded}
+    <GardenPageHeader
+      eyebrow="Runtime & Tools · Shards"
+      title="The Blooms"
+      description="Parent-owned shard activity, runtime-only overrides, fold reviews, and the live telemetry trail."
+      class="border-b border-bark-300 pb-4"
+      actions={shardActions}
+    />
+  {:else}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">
+        Parent-owned shard activity, runtime-only overrides, fold reviews, and the live telemetry trail.
+      </p>
+      {@render shardActions()}
     </div>
-    {/snippet}
-  </GardenPageHeader>
+  {/if}
 
   <!-- Active Shards Counter + Overview -->
   <div class="garden-metric-grid grid grid-cols-1 gap-4 md:grid-cols-3">

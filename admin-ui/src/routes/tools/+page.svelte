@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import { base } from '$app/paths';
+  import { page } from '$app/stores';
   import FailureRow from '$lib/components/tools/FailureRow.svelte';
   import ServiceHealthPanel from '$lib/components/tools/ServiceHealthPanel.svelte';
   import ToolCard from '$lib/components/tools/ToolCard.svelte';
@@ -10,6 +11,13 @@
   import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
+  import LazyGardenPage from '$lib/components/garden/LazyGardenPage.svelte';
+  import { scopeGardenPath } from '$lib/fleet/companion-scope';
+  import {
+    canonicalToolsPath,
+    resolveToolsTab,
+    TOOLS_TABS,
+  } from '$lib/nav/canonical-routes';
   import {
     ALL_TOOL_FILTERS,
     countInventoryTools,
@@ -199,7 +207,25 @@
     return AVAILABILITY_LABELS[status as keyof typeof AVAILABILITY_LABELS] ?? status;
   }
 
-  onMount(() => {
+  const toolsHubTabs: GardenTabItem[] = TOOLS_TABS.map(tab => ({ ...tab }));
+  const activeHubTab = $derived(resolveToolsTab($page.url.searchParams));
+  const loadSkillsPage = () => import('../skills/+page.svelte');
+  const loadWorkbenchPage = () => import('../analysis-workbench/+page.svelte');
+  const loadShardsPage = () => import('../shards/+page.svelte');
+  let toolsLoadStarted = false;
+
+  function selectToolsHubTab(id: string): void {
+    const tab = TOOLS_TABS.find(candidate => candidate.id === id)?.id;
+    if (!tab || tab === activeHubTab) return;
+    void goto(scopeGardenPath(canonicalToolsPath(tab)), {
+      keepFocus: true,
+      noScroll: true,
+    });
+  }
+
+  $effect(() => {
+    if (activeHubTab !== 'tools' || toolsLoadStarted) return;
+    toolsLoadStarted = true;
     const params = new URLSearchParams(window.location.search);
     const legacySurface = params.get('surface');
     if (
@@ -221,12 +247,13 @@
 
 <div class="garden-page space-y-6 pb-10">
   <GardenPageHeader
-    eyebrow="The Shed"
-    title="Tools"
-    description="Direct runtime tool availability for registered tools, service health, turn policy, and audit signals."
+    eyebrow="Runtime"
+    title="Tools & Skills"
+    description="Runtime tool catalog, discovered skills, analysis workbench traces, and active shards."
     class="border-b border-bark-300 pb-4"
   >
     {#snippet actions()}
+      {#if activeHubTab === 'tools'}
       <button
         onclick={refreshData}
         disabled={refreshing}
@@ -234,8 +261,39 @@
       >
         {refreshing ? 'Refreshing...' : 'Refresh'}
       </button>
+      {/if}
     {/snippet}
   </GardenPageHeader>
+
+  <GardenTabBar
+    tabs={toolsHubTabs}
+    activeId={activeHubTab}
+    onSelect={selectToolsHubTab}
+    label="Tools and skills views"
+  />
+
+  {#if activeHubTab === 'skills'}
+    <LazyGardenPage
+      loader={loadSkillsPage}
+      componentProps={{ embedded: true }}
+      loadingLabel="Loading skills..."
+      errorLabel="Failed to load skills."
+    />
+  {:else if activeHubTab === 'workbench'}
+    <LazyGardenPage
+      loader={loadWorkbenchPage}
+      componentProps={{ embedded: true }}
+      loadingLabel="Loading analysis workbench..."
+      errorLabel="Failed to load analysis workbench."
+    />
+  {:else if activeHubTab === 'shards'}
+    <LazyGardenPage
+      loader={loadShardsPage}
+      componentProps={{ embedded: true }}
+      loadingLabel="Loading shards..."
+      errorLabel="Failed to load shards."
+    />
+  {:else}
 
   {#if errorMessage}
     <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4">
@@ -730,5 +788,6 @@
         </div>
       </div>
     </section>
+  {/if}
   {/if}
 </div>

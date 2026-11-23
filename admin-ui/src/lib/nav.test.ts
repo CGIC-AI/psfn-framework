@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 import { resolveThemeMenuLabel, resolveThemePack } from './theme/loader';
-import { navItems } from './nav';
+import { navGroups, navItems } from './nav';
 
 test('operator guide replaces the primer without changing its route slot', () => {
   const guide = navItems.find(item => item.id === 'operator-guide');
@@ -26,17 +26,44 @@ test('operator guide replaces the primer without changing its route slot', () =>
   );
 });
 
-test('Automata is discoverable beside the scheduler in live operations', () => {
-  const schedulerIndex = navItems.findIndex(item => item.id === 'scheduler');
-  const automata = navItems[schedulerIndex + 1];
+test('Garden sidebar exposes exactly 4 groups and 16 consolidated hub destinations', () => {
+  assert.deepEqual(
+    navGroups.map(group => ({ id: group.id, count: group.items.length })),
+    [
+      { id: 'operate', count: 4 },
+      { id: 'memory', count: 4 },
+      { id: 'runtime', count: 4 },
+      { id: 'configure', count: 4 },
+    ],
+  );
+  assert.equal(navItems.length, 16);
 
-  assert.deepEqual(automata, {
-    id: 'automata',
-    path: '/automata',
-    defaultLabel: 'Automata',
-    icon: '\u{2699}\u{FE0F}',
-    groupId: 'operate',
-  });
+  const runtimeHubs = navItems
+    .filter(item => item.groupId === 'runtime')
+    .map(item => ({ id: item.id, path: item.path, defaultLabel: item.defaultLabel }));
+  assert.deepEqual(runtimeHubs, [
+    { id: 'autonomy', path: '/autonomy', defaultLabel: 'Autonomy & Schedule' },
+    { id: 'tools', path: '/tools', defaultLabel: 'Tools & Skills' },
+    { id: 'models', path: '/models', defaultLabel: 'Models & Usage' },
+    { id: 'subsystem-health', path: '/subsystem-health', defaultLabel: 'Safety & Health' },
+  ]);
+
+  const absorbedRuntimeIds = new Set([
+    'scheduler',
+    'automata',
+    'action-pipe',
+    'skills',
+    'analysis-workbench',
+    'shards',
+    'charge-budget',
+    'fleet-costs',
+    'telemetry',
+    'cogsec-firewall',
+    'cogsec-drift',
+    'cogsec-custody',
+    'evals-emotion-sidecar',
+  ]);
+  assert.equal(navItems.some(item => absorbedRuntimeIds.has(item.id)), false);
 });
 
 test('Places is the only world-location destination in the operator navigation', () => {

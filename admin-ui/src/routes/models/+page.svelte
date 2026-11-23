@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import { base } from '$app/paths';
+  import { page } from '$app/stores';
   import {
     getModelsConfigRaw,
     getProvidersConfigRaw,
@@ -37,6 +38,14 @@
   import { derivePurposeRoutingCoverage } from './routing-coverage';
   import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
+  import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
+  import LazyGardenPage from '$lib/components/garden/LazyGardenPage.svelte';
+  import { scopeGardenPath } from '$lib/fleet/companion-scope';
+  import {
+    canonicalModelsPath,
+    MODELS_TABS,
+    resolveModelsTab,
+  } from '$lib/nav/canonical-routes';
   import {
     parseProviderRegistryJson,
     PROVIDER_TYPE_LABELS,
@@ -893,7 +902,22 @@
     }
   }
 
-  onMount(async () => {
+  const modelsTabs: GardenTabItem[] = MODELS_TABS.map(tab => ({ ...tab }));
+  const activeHubTab = $derived(resolveModelsTab($page.url.searchParams));
+  const loadChargeBudgetPage = () => import('../charge-budget/LazyPageContent.svelte');
+  const loadFleetCostsPage = () => import('../fleet-costs/LazyPageContent.svelte');
+  let modelsLoadStarted = false;
+
+  function selectModelsTab(id: string): void {
+    const tab = MODELS_TABS.find(candidate => candidate.id === id)?.id;
+    if (!tab || tab === activeHubTab) return;
+    void goto(scopeGardenPath(canonicalModelsPath(tab)), {
+      keepFocus: true,
+      noScroll: true,
+    });
+  }
+
+  async function loadModelsInitial(): Promise<void> {
     loading = true;
     try {
       await loadPageData();
@@ -902,6 +926,12 @@
     } finally {
       loading = false;
     }
+  }
+
+  $effect(() => {
+    if (activeHubTab !== 'models' || modelsLoadStarted) return;
+    modelsLoadStarted = true;
+    void loadModelsInitial();
   });
 </script>
 
@@ -925,12 +955,13 @@
 
 <div class="garden-page space-y-5 pb-10">
   <GardenPageHeader
-    eyebrow="Runtime & Tools · Model registry"
-    title="The Conservatory"
-    description="Canonical model routing, provider wiring, capability limits, tuning, and spend policy."
+    eyebrow="Runtime"
+    title="Models & Usage"
+    description="Model routing, provider wiring, charge budgets, token accounting, and cluster costs."
     class="border-b border-bark-300 pb-4"
   >
     {#snippet actions()}
+      {#if activeHubTab === 'models'}
       {#if dirty}
         <span class="rounded-full border border-gold-300 bg-gold-100 px-2.5 py-1 text-xs font-semibold text-gold-800">
           Unsaved changes
@@ -950,8 +981,39 @@
       >
         {saving ? 'Saving...' : 'Save models.json'}
       </button>
+      {/if}
     {/snippet}
   </GardenPageHeader>
+
+  <GardenTabBar
+    tabs={modelsTabs}
+    activeId={activeHubTab}
+    onSelect={selectModelsTab}
+    label="Models and usage views"
+  />
+
+  {#if activeHubTab === 'charges'}
+    <LazyGardenPage
+      loader={loadChargeBudgetPage}
+      componentProps={{ embedded: true, forcedSubTab: 'charges' as const }}
+      loadingLabel="Loading charge policy..."
+      errorLabel="Failed to load charge policy."
+    />
+  {:else if activeHubTab === 'token-usage'}
+    <LazyGardenPage
+      loader={loadChargeBudgetPage}
+      componentProps={{ embedded: true, forcedSubTab: 'token-usage' as const }}
+      loadingLabel="Loading token usage..."
+      errorLabel="Failed to load token usage."
+    />
+  {:else if activeHubTab === 'fleet-costs'}
+    <LazyGardenPage
+      loader={loadFleetCostsPage}
+      componentProps={{ embedded: true }}
+      loadingLabel="Loading cluster costs..."
+      errorLabel="Failed to load cluster costs."
+    />
+  {:else}
 
   <nav aria-label="Conservatory sections" class="garden-toolbar -mx-1 flex gap-1 overflow-x-auto border-b border-bark-300 px-1">
     {#each [
@@ -1484,5 +1546,6 @@
         </CollapsibleSection>
       {/if}
     </div>
+  {/if}
   {/if}
 </div>

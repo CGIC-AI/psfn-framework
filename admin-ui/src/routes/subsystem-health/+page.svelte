@@ -1,6 +1,16 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onDestroy } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { page } from '$app/stores';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
+  import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
+  import LazyGardenPage from '$lib/components/garden/LazyGardenPage.svelte';
+  import { scopeGardenPath } from '$lib/fleet/companion-scope';
+  import {
+    canonicalSafetyPath,
+    resolveSafetyTab,
+    SAFETY_TABS,
+  } from '$lib/nav/canonical-routes';
   import { getSubsystemHealth } from '$lib/api/endpoints/subsystem-health';
   import { getIncidents } from '$lib/api/endpoints/incidents';
   import { createVisibilityAwarePoller } from '$lib/polling/visibility-aware-poller';
@@ -150,8 +160,32 @@
     intervalMs: 15_000,
   });
 
-  onMount(() => {
+  const safetyTabs: GardenTabItem[] = SAFETY_TABS.map(tab => ({ ...tab }));
+  const activeTab = $derived(resolveSafetyTab($page.url.searchParams));
+  const loadTelemetryPage = () => import('../telemetry/LazyPageContent.svelte');
+  const loadFirewallPage = () => import('../cognitive-security/firewall/+page.svelte');
+  const loadDriftPage = () => import('../cognitive-security/drift/+page.svelte');
+  const loadCustodyPage = () => import('../cognitive-security/custody/+page.svelte');
+  const loadEvalsPage = () => import('../evals/emotion-sidecar/+page.svelte');
+
+  function selectSafetyTab(id: string): void {
+    const tab = SAFETY_TABS.find(candidate => candidate.id === id)?.id;
+    if (!tab || tab === activeTab) return;
+    void goto(scopeGardenPath(canonicalSafetyPath(tab)), {
+      keepFocus: true,
+      noScroll: true,
+    });
+  }
+
+  $effect(() => {
+    if (activeTab !== 'health') {
+      poller.stop();
+      return;
+    }
     poller.start();
+    return () => {
+      poller.stop();
+    };
   });
 
   onDestroy(() => {
@@ -161,11 +195,12 @@
 
 <div class="garden-page space-y-5">
   <GardenPageHeader
-    eyebrow="Operations · Runtime posture"
-    title="Subsystem Health"
-    description="Live health from durable deferred work, event-bus lanes, episodic watermarks, and scheduled work. Process-local history is labelled separately from durable state."
+    eyebrow="Runtime"
+    title="Safety & Health"
+    description="Subsystem health, live events & audit, intake firewall, drift review, chain of custody, and evals."
   >
     {#snippet actions()}
+      {#if activeTab === 'health'}
       <button
       onclick={loadData}
       disabled={loading}
@@ -175,8 +210,53 @@
       >
         {loading ? 'Loading...' : 'Refresh'}
       </button>
+      {/if}
     {/snippet}
   </GardenPageHeader>
+
+  <GardenTabBar
+    tabs={safetyTabs}
+    activeId={activeTab}
+    onSelect={selectSafetyTab}
+    label="Safety and health views"
+  />
+
+  {#if activeTab === 'events'}
+    <LazyGardenPage
+      loader={loadTelemetryPage}
+      componentProps={{ embedded: true }}
+      loadingLabel="Loading events and audit..."
+      errorLabel="Failed to load events and audit."
+    />
+  {:else if activeTab === 'firewall'}
+    <LazyGardenPage
+      loader={loadFirewallPage}
+      componentProps={{ embedded: true }}
+      loadingLabel="Loading intake firewall..."
+      errorLabel="Failed to load intake firewall."
+    />
+  {:else if activeTab === 'drift'}
+    <LazyGardenPage
+      loader={loadDriftPage}
+      componentProps={{ embedded: true }}
+      loadingLabel="Loading drift review..."
+      errorLabel="Failed to load drift review."
+    />
+  {:else if activeTab === 'custody'}
+    <LazyGardenPage
+      loader={loadCustodyPage}
+      componentProps={{ embedded: true }}
+      loadingLabel="Loading chain of custody..."
+      errorLabel="Failed to load chain of custody."
+    />
+  {:else if activeTab === 'evals'}
+    <LazyGardenPage
+      loader={loadEvalsPage}
+      componentProps={{ embedded: true }}
+      loadingLabel="Loading evals..."
+      errorLabel="Failed to load evals."
+    />
+  {:else}
 
   {#if loading && !snapshot}
     <div class="garden-loading card-garden p-12 text-center">
@@ -608,5 +688,6 @@
         </div>
       {/if}
     </section>
+  {/if}
   {/if}
 </div>

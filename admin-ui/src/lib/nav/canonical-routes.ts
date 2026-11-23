@@ -142,6 +142,88 @@ export function canonicalPlacesPath(tab: PlacesTabId): string {
   return tab === 'physical' ? '/places' : `/places?tab=${tab}`;
 }
 
+export const AUTONOMY_TABS = [
+  { id: 'autonomy', label: 'Autonomy' },
+  { id: 'scheduler', label: 'Scheduler' },
+  { id: 'action-pipe', label: 'Action Pipe' },
+  { id: 'automata', label: 'Automata' },
+] as const;
+
+export type AutonomyTabId = (typeof AUTONOMY_TABS)[number]['id'];
+
+const AUTONOMY_TAB_IDS = new Set<AutonomyTabId>(AUTONOMY_TABS.map(tab => tab.id));
+
+export function resolveAutonomyTab(searchParams: URLSearchParams): AutonomyTabId {
+  const tab = searchParams.get('tab') ?? 'autonomy';
+  return AUTONOMY_TAB_IDS.has(tab as AutonomyTabId) ? tab as AutonomyTabId : 'autonomy';
+}
+
+export function canonicalAutonomyPath(tab: AutonomyTabId): string {
+  return tab === 'autonomy' ? '/autonomy' : `/autonomy?tab=${tab}`;
+}
+
+export const TOOLS_TABS = [
+  { id: 'tools', label: 'Tools' },
+  { id: 'skills', label: 'Skills' },
+  { id: 'workbench', label: 'Analysis Workbench' },
+  { id: 'shards', label: 'Shards' },
+] as const;
+
+export type ToolsTabId = (typeof TOOLS_TABS)[number]['id'];
+
+const TOOLS_TAB_IDS = new Set<ToolsTabId>(TOOLS_TABS.map(tab => tab.id));
+
+export function resolveToolsTab(searchParams: URLSearchParams): ToolsTabId {
+  const tab = searchParams.get('tab') ?? 'tools';
+  return TOOLS_TAB_IDS.has(tab as ToolsTabId) ? tab as ToolsTabId : 'tools';
+}
+
+export function canonicalToolsPath(tab: ToolsTabId): string {
+  return tab === 'tools' ? '/tools' : `/tools?tab=${tab}`;
+}
+
+export const MODELS_TABS = [
+  { id: 'models', label: 'Models' },
+  { id: 'charges', label: 'Charge & Budget' },
+  { id: 'token-usage', label: 'Token Usage' },
+  { id: 'fleet-costs', label: 'Cluster Costs' },
+] as const;
+
+export type ModelsTabId = (typeof MODELS_TABS)[number]['id'];
+
+const MODELS_TAB_IDS = new Set<ModelsTabId>(MODELS_TABS.map(tab => tab.id));
+
+export function resolveModelsTab(searchParams: URLSearchParams): ModelsTabId {
+  const tab = searchParams.get('tab') ?? 'models';
+  return MODELS_TAB_IDS.has(tab as ModelsTabId) ? tab as ModelsTabId : 'models';
+}
+
+export function canonicalModelsPath(tab: ModelsTabId): string {
+  return tab === 'models' ? '/models' : `/models?tab=${tab}`;
+}
+
+export const SAFETY_TABS = [
+  { id: 'health', label: 'Subsystem Health' },
+  { id: 'events', label: 'Events & Audit' },
+  { id: 'firewall', label: 'Firewall' },
+  { id: 'drift', label: 'Drift Review' },
+  { id: 'custody', label: 'Chain of Custody' },
+  { id: 'evals', label: 'Evals' },
+] as const;
+
+export type SafetyTabId = (typeof SAFETY_TABS)[number]['id'];
+
+const SAFETY_TAB_IDS = new Set<SafetyTabId>(SAFETY_TABS.map(tab => tab.id));
+
+export function resolveSafetyTab(searchParams: URLSearchParams): SafetyTabId {
+  const tab = searchParams.get('tab') ?? 'health';
+  return SAFETY_TAB_IDS.has(tab as SafetyTabId) ? tab as SafetyTabId : 'health';
+}
+
+export function canonicalSafetyPath(tab: SafetyTabId): string {
+  return tab === 'health' ? '/subsystem-health' : `/subsystem-health?tab=${tab}`;
+}
+
 function scopedDestination(pathname: string, destination: string): string {
   const scope = parseCompanionGardenScope(pathname);
   return scope ? `${scope.publicPrefix}${destination}` : destination;
@@ -217,6 +299,49 @@ export function canonicalGardenDestination(
   }
   if (innerPath === '/enrollment') {
     return scopedDestination(pathname, canonicalContactsPath('enrollment'));
+  }
+  if (innerPath === '/scheduler') {
+    return scopedDestination(pathname, canonicalAutonomyPath('scheduler'));
+  }
+  if (innerPath === '/action-pipe') {
+    return scopedDestination(pathname, canonicalAutonomyPath('action-pipe'));
+  }
+  if (innerPath === '/automata') {
+    return scopedDestination(pathname, canonicalAutonomyPath('automata'));
+  }
+  if (innerPath === '/skills') {
+    return scopedDestination(pathname, canonicalToolsPath('skills'));
+  }
+  if (innerPath === '/analysis-workbench') {
+    return scopedDestination(pathname, canonicalToolsPath('workbench'));
+  }
+  if (innerPath === '/shards') {
+    return scopedDestination(pathname, canonicalToolsPath('shards'));
+  }
+  if (innerPath === '/charge-budget') {
+    const params = new URLSearchParams(search);
+    const requestedTab = params.get('tab');
+    const targetTab: ModelsTabId = requestedTab === 'token-usage' ? 'token-usage' : 'charges';
+    params.set('tab', targetTab);
+    return scopedDestination(pathname, `/models?${params.toString()}`);
+  }
+  if (innerPath === '/fleet-costs') {
+    return scopedDestination(pathname, canonicalModelsPath('fleet-costs'));
+  }
+  if (innerPath === '/telemetry') {
+    return scopedDestination(pathname, canonicalSafetyPath('events'));
+  }
+  if (innerPath === '/cognitive-security/firewall') {
+    return scopedDestination(pathname, canonicalSafetyPath('firewall'));
+  }
+  if (innerPath === '/cognitive-security/drift') {
+    return scopedDestination(pathname, canonicalSafetyPath('drift'));
+  }
+  if (innerPath === '/cognitive-security/custody') {
+    return scopedDestination(pathname, canonicalSafetyPath('custody'));
+  }
+  if (innerPath === '/evals/emotion-sidecar') {
+    return scopedDestination(pathname, canonicalSafetyPath('evals'));
   }
   if (innerPath === '/letters') {
     return scopedDestination(pathname, canonicalConversationsPath('live'));

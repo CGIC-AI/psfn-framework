@@ -6,6 +6,8 @@
   import { pushToast } from '$lib/stores/toast.svelte';
   import { createVisibilityAwarePoller } from '$lib/polling/visibility-aware-poller';
 
+  let { embedded = false }: { embedded?: boolean } = $props();
+
   let cards = $state<DriftReviewCard[]>([]);
   let loading = $state(true);
   let error = $state('');
@@ -141,28 +143,36 @@
   });
 </script>
 
-<svelte:head>
-  <title>Cognitive Security: Drift Review</title>
-</svelte:head>
+{#snippet driftActions()}
+  <span class="text-xs text-shadow-600">Auto-refreshes every 30s</span>
+  <button
+    onclick={loadData}
+    disabled={loading}
+    class="text-sm px-3 py-1.5 rounded-lg border border-bark-300 text-shadow-600 hover:bg-bark-100
+           transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+  >
+    {loading ? 'Loading...' : 'Refresh'}
+  </button>
+{/snippet}
 
 <div class="garden-page space-y-5">
-  <GardenPageHeader
-    eyebrow="Cognitive Security · Slow-poisoning watch"
-    title="Drift Review"
-    description="Compare emotional trajectory, memory-write rate, intake labels, and retrieval share against each contact's own history. Reviews are non-mutating unless consolidation is explicitly approved."
-  >
-    {#snippet actions()}
-      <span class="text-xs text-shadow-600">Auto-refreshes every 30s</span>
-      <button
-        onclick={loadData}
-        disabled={loading}
-        class="text-sm px-3 py-1.5 rounded-lg border border-bark-300 text-shadow-600 hover:bg-bark-100
-               transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-      >
-        {loading ? 'Loading...' : 'Refresh'}
-      </button>
-    {/snippet}
-  </GardenPageHeader>
+  {#if !embedded}
+    <GardenPageHeader
+      eyebrow="Cognitive Security · Slow-poisoning watch"
+      title="Drift Review"
+      description="Compare emotional trajectory, memory-write rate, intake labels, and retrieval share against each contact's own history. Reviews are non-mutating unless consolidation is explicitly approved."
+      actions={driftActions}
+    />
+  {:else}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">
+        Compare emotional trajectory, memory-write rate, intake labels, and retrieval share against contact history.
+      </p>
+      <div class="flex items-center gap-2">
+        {@render driftActions()}
+      </div>
+    </div>
+  {/if}
 
   {#if loading && cards.length === 0}
     <div class="garden-loading space-y-3">

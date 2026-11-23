@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { page } from '$app/stores';
   import { buildPrivacyChangeCandidates, contactPrivacyKey, contactChannelPrivacy, saveContactPolicyPrivacy } from './contact-privacy';
   import ContactChannelPrivacy from './ContactChannelPrivacy.svelte';
   import { getChannelEnvelopeData, type ChannelEnvelopeData } from '$lib/api/endpoints/channels';
@@ -34,6 +35,27 @@
   import { RELATIONSHIP_TYPES, CHANNEL_PRIVACY_LEVELS, TRUST_LEVELS } from '$lib/types';
   import { scopeGardenPath } from '$lib/fleet/companion-scope';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
+  import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
+  import LazyGardenPage from '$lib/components/garden/LazyGardenPage.svelte';
+  import {
+    canonicalContactsPath,
+    CONTACTS_TABS,
+    resolveContactsTab,
+  } from '$lib/nav/canonical-routes';
+
+  const contactsTabs: GardenTabItem[] = CONTACTS_TABS.map(tab => ({ ...tab }));
+  const activeTab = $derived(resolveContactsTab($page.url.searchParams));
+  const loadEnrollmentPage = () => import('../enrollment/+page.svelte');
+  let contactsLoadStarted = false;
+
+  function selectContactsTab(id: string): void {
+    const tab = CONTACTS_TABS.find(candidate => candidate.id === id)?.id;
+    if (!tab || tab === activeTab) return;
+    void goto(scopeGardenPath(canonicalContactsPath(tab)), {
+      keepFocus: true,
+      noScroll: true,
+    });
+  }
 
   let data = $state<AdminContactListData | null>(null);
   let channelPolicies = $state<ChannelEnvelopeData | null>(null);
@@ -604,7 +626,7 @@
   }
 
   // Init
-  onMount(async () => {
+  async function loadContactsInitial(): Promise<void> {
     try {
       await reloadContacts();
     } catch (e) {
@@ -612,16 +634,23 @@
     } finally {
       loading = false;
     }
+  }
+
+  $effect(() => {
+    if (activeTab !== 'contacts' || contactsLoadStarted) return;
+    contactsLoadStarted = true;
+    void loadContactsInitial();
   });
 </script>
 
 <div class="garden-page space-y-5 pb-8">
   <GardenPageHeader
-    eyebrow="Memory & Identity"
-    title="The Visitors"
-    description={`${visibleContacts.length} contact${visibleContacts.length === 1 ? '' : 's'} in view · manage trust, channels, profiles, and social context.`}
+    eyebrow="Mind & Memory"
+    title="Contacts"
+    description="People, trust, channel privacy, social graph, and hub-identity enrollment."
   >
     {#snippet actions()}
+      {#if activeTab === 'contacts'}
       <button
         type="button"
         onclick={() => showCreateForm = true}
@@ -629,8 +658,25 @@
       >
         New contact
       </button>
+      {/if}
     {/snippet}
   </GardenPageHeader>
+
+  <GardenTabBar
+    tabs={contactsTabs}
+    activeId={activeTab}
+    onSelect={selectContactsTab}
+    label="Contact views"
+  />
+
+  {#if activeTab === 'enrollment'}
+    <LazyGardenPage
+      loader={loadEnrollmentPage}
+      componentProps={{ embedded: true }}
+      loadingLabel="Loading enrollment..."
+      errorLabel="Failed to load enrollment."
+    />
+  {:else}
 
   <!-- Flash message -->
   {#if saveMessage}
@@ -1555,5 +1601,6 @@
       {/each}
       </section>
     </div>
+  {/if}
   {/if}
 </div>

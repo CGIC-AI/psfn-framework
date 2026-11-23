@@ -69,6 +69,8 @@
       : emptyJournalState<T>();
   }
 
+  let { embedded = false }: { embedded?: boolean } = $props();
+
   let values = $state<JournalState<ValuesJournalEntry>>(cachedJournalState(
     getJournalDisclosure('values-journal')?.entries,
   ));
@@ -273,11 +275,13 @@
 {/snippet}
 
 <div class="garden-page space-y-5 pb-8">
-  <GardenPageHeader
-    eyebrow="Memory & Identity"
-    title="The Journal"
-    description={`${companionName}'s values, metacognition, daily notes, and reflection timelines.`}
-  />
+  {#if !embedded}
+    <GardenPageHeader
+      eyebrow="Memory & Identity"
+      title="The Journal"
+      description={`${companionName}'s values, metacognition, daily notes, and reflection timelines.`}
+    />
+  {/if}
 
   <div class="garden-toolbar space-y-3">
     <GardenTabBar

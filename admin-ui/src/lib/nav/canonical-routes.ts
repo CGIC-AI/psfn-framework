@@ -45,10 +45,88 @@ export function canonicalConversationsPath(tab: ConversationsTabId): string {
   return tab === 'live' ? '/chat' : `/chat?tab=${tab}`;
 }
 
+export const MEMORY_TABS = [
+  { id: 'memories', label: 'L2 Memories' },
+  { id: 'episodes', label: 'L0.1 Episodes' },
+  { id: 'biography', label: 'Stable Biography' },
+] as const;
+
+export type MemoryTabId = (typeof MEMORY_TABS)[number]['id'];
+
+const MEMORY_TAB_IDS = new Set<MemoryTabId>(MEMORY_TABS.map(tab => tab.id));
+
+export function resolveMemoryTab(searchParams: URLSearchParams): MemoryTabId {
+  const tab = searchParams.get('tab') ?? 'memories';
+  return MEMORY_TAB_IDS.has(tab as MemoryTabId) ? tab as MemoryTabId : 'memories';
+}
+
+export function canonicalMemoryPath(tab: MemoryTabId): string {
+  return tab === 'memories' ? '/memory' : `/memory?tab=${tab}`;
+}
+
+export const IDENTITY_TABS = [
+  { id: 'card', label: 'Character Card' },
+  { id: 'prompts', label: 'Prompt Layers' },
+  { id: 'monitor', label: 'Prompt Monitor' },
+  { id: 'values', label: 'Values & Journal' },
+] as const;
+
+export type IdentityTabId = (typeof IDENTITY_TABS)[number]['id'];
+
+const IDENTITY_TAB_IDS = new Set<IdentityTabId>(IDENTITY_TABS.map(tab => tab.id));
+
+export function resolveIdentityTab(searchParams: URLSearchParams): IdentityTabId {
+  const tab = searchParams.get('tab') ?? 'card';
+  return IDENTITY_TAB_IDS.has(tab as IdentityTabId) ? tab as IdentityTabId : 'card';
+}
+
+export function canonicalIdentityPath(tab: IdentityTabId): string {
+  return tab === 'card' ? '/identity' : `/identity?tab=${tab}`;
+}
+
+export const KNOWLEDGE_TABS = [
+  { id: 'wiki', label: 'Wiki' },
+  { id: 'concerns', label: 'Concerns' },
+  { id: 'wishlist', label: 'Wishlist' },
+  { id: 'images', label: 'Images' },
+] as const;
+
+export type KnowledgeTabId = (typeof KNOWLEDGE_TABS)[number]['id'];
+
+const KNOWLEDGE_TAB_IDS = new Set<KnowledgeTabId>(KNOWLEDGE_TABS.map(tab => tab.id));
+
+export function resolveKnowledgeTab(searchParams: URLSearchParams): KnowledgeTabId {
+  const tab = searchParams.get('tab') ?? 'wiki';
+  return KNOWLEDGE_TAB_IDS.has(tab as KnowledgeTabId) ? tab as KnowledgeTabId : 'wiki';
+}
+
+export function canonicalKnowledgePath(tab: KnowledgeTabId): string {
+  return tab === 'wiki' ? '/wiki' : `/wiki?tab=${tab}`;
+}
+
+export const CONTACTS_TABS = [
+  { id: 'contacts', label: 'Contacts' },
+  { id: 'enrollment', label: 'Enrollment' },
+] as const;
+
+export type ContactsTabId = (typeof CONTACTS_TABS)[number]['id'];
+
+const CONTACTS_TAB_IDS = new Set<ContactsTabId>(CONTACTS_TABS.map(tab => tab.id));
+
+export function resolveContactsTab(searchParams: URLSearchParams): ContactsTabId {
+  const tab = searchParams.get('tab') ?? 'contacts';
+  return CONTACTS_TAB_IDS.has(tab as ContactsTabId) ? tab as ContactsTabId : 'contacts';
+}
+
+export function canonicalContactsPath(tab: ContactsTabId): string {
+  return tab === 'contacts' ? '/contacts' : `/contacts?tab=${tab}`;
+}
+
 export const PLACES_TABS = [
   { id: 'physical', label: 'Physical' },
   { id: 'virtual', label: 'Virtual' },
   { id: 'satellites', label: 'Satellites' },
+  { id: 'arbiter', label: 'Cluster Rooms' },
 ] as const;
 
 export type PlacesTabId = (typeof PLACES_TABS)[number]['id'];
@@ -83,6 +161,9 @@ export function canonicalGardenDestination(
   if (innerPath === '/satellites') {
     return scopedDestination(pathname, canonicalPlacesPath('satellites'));
   }
+  if (innerPath === '/room-arbiter') {
+    return scopedDestination(pathname, canonicalPlacesPath('arbiter'));
+  }
   if (innerPath === '/model-room') {
     return scopedDestination(pathname, canonicalConversationsPath('live'));
   }
@@ -110,11 +191,35 @@ export function canonicalGardenDestination(
   if (innerPath === '/cognitive-security/remediation') {
     return scopedDestination(pathname, canonicalInboxPath('remediation'));
   }
+  if (innerPath === '/episodic-memory') {
+    return scopedDestination(pathname, canonicalMemoryPath('episodes'));
+  }
+  if (innerPath === '/biographical-profile') {
+    return scopedDestination(pathname, canonicalMemoryPath('biography'));
+  }
+  if (innerPath === '/prompts') {
+    return scopedDestination(pathname, canonicalIdentityPath('prompts'));
+  }
+  if (innerPath === '/prompt-monitor') {
+    return scopedDestination(pathname, canonicalIdentityPath('monitor'));
+  }
+  if (innerPath === '/values') {
+    return scopedDestination(pathname, canonicalIdentityPath('values'));
+  }
+  if (innerPath === '/concerns') {
+    return scopedDestination(pathname, canonicalKnowledgePath('concerns'));
+  }
+  if (innerPath === '/wishlist' || innerPath === '/doing-mirror') {
+    return scopedDestination(pathname, canonicalKnowledgePath('wishlist'));
+  }
+  if (innerPath === '/images') {
+    return scopedDestination(pathname, canonicalKnowledgePath('images'));
+  }
+  if (innerPath === '/enrollment') {
+    return scopedDestination(pathname, canonicalContactsPath('enrollment'));
+  }
   if (innerPath === '/letters') {
     return scopedDestination(pathname, canonicalConversationsPath('live'));
-  }
-  if (innerPath === '/doing-mirror') {
-    return scopedDestination(pathname, '/wishlist');
   }
   if (innerPath === '/chat') {
     const requestedTab = new URLSearchParams(search).get('tab');

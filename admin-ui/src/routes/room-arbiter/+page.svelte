@@ -12,6 +12,8 @@
     type FleetPortalCompanion,
   } from '$lib/fleet/portal';
 
+  let { embedded = false }: { embedded?: boolean } = $props();
+
   let data = $state<RoomArbiterData | null>(null);
   let loading = $state(true);
   let error = $state('');
@@ -76,22 +78,29 @@
   });
 </script>
 
-<svelte:head>
-  <title>Cluster Command · Garden</title>
-</svelte:head>
-
 <div class="garden-page space-y-6">
-    <GardenPageHeader
-      eyebrow="Live Operations"
-      title="Cluster Command"
-      description="Room-state and arbitration telemetry. Content-free by contract: identifiers, enums, counts, and timestamps only."
-    >
-      {#snippet actions()}
+    {#if !embedded}
+      <GardenPageHeader
+        eyebrow="Live Operations"
+        title="Cluster Command"
+        description="Room-state and arbitration telemetry. Content-free by contract: identifiers, enums, counts, and timestamps only."
+      >
+        {#snippet actions()}
+          <span class="garden-status garden-status--success inline-flex min-h-9 items-center rounded-full border border-bark-300 bg-bark-50 px-3 text-xs font-medium text-shadow-600">
+            Auto-refresh · 15s
+          </span>
+        {/snippet}
+      </GardenPageHeader>
+    {:else}
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <p class="text-sm text-shadow-600">
+          Room-state and arbitration telemetry. Content-free by contract: identifiers, enums, counts, and timestamps only.
+        </p>
         <span class="garden-status garden-status--success inline-flex min-h-9 items-center rounded-full border border-bark-300 bg-bark-50 px-3 text-xs font-medium text-shadow-600">
           Auto-refresh · 15s
         </span>
-      {/snippet}
-    </GardenPageHeader>
+      </div>
+    {/if}
 
     {#if loading && data === null}
       <div class="garden-loading card-garden animate-pulse p-8 text-center text-sm text-shadow-500" aria-busy="true">Loading room arbiter telemetry&hellip;</div>

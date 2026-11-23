@@ -9,6 +9,8 @@
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import { pushToast } from '$lib/stores/toast.svelte';
 
+  let { embedded = false }: { embedded?: boolean } = $props();
+
   let enrollments = $state<AdminEnrollmentBindingView[]>([]);
   let total = $state(0);
   let loading = $state(true);
@@ -98,22 +100,32 @@
   });
 </script>
 
-<div class="garden-page space-y-5 pb-8">
-  <GardenPageHeader
-    eyebrow="Recognition Seam"
-    title="Enrollment"
-    description="Bind an opaque hub-identity handle to an existing contact. Biometric templates remain entirely at the Satellite Hub."
+{#snippet enrollmentActions()}
+  <button
+    onclick={refreshData}
+    disabled={refreshing}
+    class="rounded-xl border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
   >
-    {#snippet actions()}
-      <button
-        onclick={refreshData}
-        disabled={refreshing}
-        class="rounded-xl border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {refreshing ? 'Refreshing...' : 'Refresh'}
-      </button>
-    {/snippet}
-  </GardenPageHeader>
+    {refreshing ? 'Refreshing...' : 'Refresh'}
+  </button>
+{/snippet}
+
+<div class="garden-page space-y-5 pb-8">
+  {#if !embedded}
+    <GardenPageHeader
+      eyebrow="Recognition Seam"
+      title="Enrollment"
+      description="Bind an opaque hub-identity handle to an existing contact. Biometric templates remain entirely at the Satellite Hub."
+      actions={enrollmentActions}
+    />
+  {:else}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">
+        Bind an opaque hub-identity handle to an existing contact. Biometric templates remain entirely at the Satellite Hub.
+      </p>
+      {@render enrollmentActions()}
+    </div>
+  {/if}
 
   {#if errorMessage}
     <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4">

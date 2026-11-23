@@ -9,6 +9,8 @@
   } from './generated-image-links';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
 
+  let { embedded = false }: { embedded?: boolean } = $props();
+
   let data = $state<GeneratedImagesResponse | null>(null);
   let loading = $state(true);
   let refreshing = $state(false);
@@ -258,22 +260,32 @@
   });
 </script>
 
-<div class="garden-page space-y-5 pb-8">
-  <GardenPageHeader
-    eyebrow="The Gallery"
-    title="Generated Images"
-    description={`${images.length} image${images.length === 1 ? '' : 's'} · curate favorites, moments, tags, and narrative context.`}
+{#snippet imageActions()}
+  <button
+    onclick={refreshImages}
+    disabled={refreshing}
+    class="rounded-xl border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
   >
-    {#snippet actions()}
-    <button
-      onclick={refreshImages}
-      disabled={refreshing}
-      class="rounded-xl border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
-    >
-      {refreshing ? 'Refreshing...' : 'Refresh'}
-    </button>
-    {/snippet}
-  </GardenPageHeader>
+    {refreshing ? 'Refreshing...' : 'Refresh'}
+  </button>
+{/snippet}
+
+<div class="garden-page space-y-5 pb-8">
+  {#if !embedded}
+    <GardenPageHeader
+      eyebrow="The Gallery"
+      title="Generated Images"
+      description={`${images.length} image${images.length === 1 ? '' : 's'} · curate favorites, moments, tags, and narrative context.`}
+      actions={imageActions}
+    />
+  {:else}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">
+        {images.length} image{images.length === 1 ? '' : 's'} · curate favorites, moments, tags, and narrative context.
+      </p>
+      {@render imageActions()}
+    </div>
+  {/if}
 
   <div class="garden-toolbar grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
     <label class="block text-sm font-medium text-shadow-700">

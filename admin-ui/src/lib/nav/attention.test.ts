@@ -98,9 +98,9 @@ describe('attention count reconciliation', () => {
     expect(apiGet).toHaveBeenCalledWith('/api/admin/escalations?state=open');
   });
 
-  it('surfaces missed or failed journal runs on Values without polling retired Letters', async () => {
-    expect(ATTENTION_SOURCES.map(source => source.path)).toEqual(['/inbox', '/values']);
-    const source = ATTENTION_SOURCES.find((item) => item.path === '/values');
+  it('surfaces missed or failed journal runs on Identity & Prompts without polling retired Letters', async () => {
+    expect(ATTENTION_SOURCES.map(source => source.path)).toEqual(['/inbox', '/identity']);
+    const source = ATTENTION_SOURCES.find((item) => item.path === '/identity');
     expect(source).toBeDefined();
 
     apiGet.mockResolvedValueOnce({ attentionCount: 2 });

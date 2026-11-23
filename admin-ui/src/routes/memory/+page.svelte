@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onDestroy } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { page } from '$app/stores';
   import {
     bulkDeleteMemories,
     bulkUpdateMemories,
@@ -30,7 +32,30 @@
     AdminUiPurrMemory,
   } from '$lib/types';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
+  import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
+  import LazyGardenPage from '$lib/components/garden/LazyGardenPage.svelte';
+  import { scopeGardenPath } from '$lib/fleet/companion-scope';
+  import {
+    canonicalMemoryPath,
+    MEMORY_TABS,
+    resolveMemoryTab,
+  } from '$lib/nav/canonical-routes';
+  import BiographicalClaimsPanel from './BiographicalClaimsPanel.svelte';
   import MemoryDetailModal from './MemoryDetailModal.svelte';
+
+  const memoryTabs: GardenTabItem[] = MEMORY_TABS.map(tab => ({ ...tab }));
+  const activeTab = $derived(resolveMemoryTab($page.url.searchParams));
+  const loadEpisodicMemoryPage = () => import('../episodic-memory/LazyPageContent.svelte');
+  let memoriesLoadStarted = false;
+
+  function selectMemoryTab(id: string): void {
+    const tab = MEMORY_TABS.find(candidate => candidate.id === id)?.id;
+    if (!tab || tab === activeTab) return;
+    void goto(scopeGardenPath(canonicalMemoryPath(tab)), {
+      keepFocus: true,
+      noScroll: true,
+    });
+  }
 
   const MEMORY_TYPES = ['', 'episodic', 'semantic', 'emotional', 'procedural', 'reflection', 'relational'];
   const SENSITIVITY_LEVELS = ['', 'public', 'personal', 'intimate', 'confidential'];
@@ -745,9 +770,11 @@
     }
   }
 
-  onMount(() => {
-    loadMemories();
-    loadManagedScopes();
+  $effect(() => {
+    if (activeTab !== 'memories' || memoriesLoadStarted) return;
+    memoriesLoadStarted = true;
+    void loadMemories();
+    void loadManagedScopes();
   });
 
   onDestroy(() => {
@@ -760,10 +787,30 @@
 
 <div class="garden-page space-y-5 pb-8">
   <GardenPageHeader
-    eyebrow="Memory & Identity"
-    title="The Roots"
-    description="Search canonical memory, inspect privacy boundaries, and manage scoped retrieval metadata."
+    eyebrow="Mind & Memory"
+    title="Memory"
+    description="Canonical L2 memories, L0.1 episodic arcs, and stable biography claims in one workspace."
   />
+
+  <GardenTabBar
+    tabs={memoryTabs}
+    activeId={activeTab}
+    onSelect={selectMemoryTab}
+    label="Memory views"
+  />
+
+  {#if activeTab === 'episodes'}
+    <LazyGardenPage
+      loader={loadEpisodicMemoryPage}
+      componentProps={{ embedded: true }}
+      loadingLabel="Loading episodic memory..."
+      errorLabel="Failed to load episodic memory."
+    />
+  {:else if activeTab === 'biography'}
+    <div class="garden-section">
+      <BiographicalClaimsPanel />
+    </div>
+  {:else}
 
   <section class="garden-section card-garden p-4 space-y-4">
     <div>
@@ -1365,9 +1412,10 @@
       </button>
     </div>
   {/if}
+  {/if}
 </div>
 
-{#if detailModalId}
+{#if activeTab === 'memories' && detailModalId}
   <MemoryDetailModal
     {detailModalData}
     {detailModalLoading}

@@ -10,11 +10,10 @@
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import PromptMonitorSelectedTurnTabs from '$lib/components/prompt-monitor/PromptMonitorSelectedTurnTabs.svelte';
   import {
-    connectGardenEventBus,
-    disconnectGardenEventBus,
     getGardenEventBusConnectionError,
     getGardenEvents,
     isGardenEventBusConnected,
+    retainGardenEventBus,
     subscribeGardenEvents,
   } from '$lib/events/garden-event-bus.svelte';
   import {
@@ -31,6 +30,8 @@
   import type { ChannelInfo } from '$lib/types';
   import { isRecord } from '../../../../src/shared/utils/types.js';
 
+  let { embedded = false }: { embedded?: boolean } = $props();
+
   let channels = $state<ChannelInfo[]>([]);
   let selectedSessionId = $state<string | null>(null);
   let turns = $state<PromptMonitorTurn[]>([]);
@@ -41,6 +42,7 @@
   let error = $state('');
   let liveEventCount = $state(0);
 
+  let releaseEventBus: (() => void) | null = null;
   let unsubscribePromptEvents: (() => void) | null = null;
   const pendingTurnDetailFetches = new Map<string, Promise<void>>();
   const deferredTurnDetailFetches = new Set<string>();
@@ -267,7 +269,7 @@
   }
 
   onMount(async () => {
-    connectGardenEventBus();
+    releaseEventBus = retainGardenEventBus();
     unsubscribePromptEvents = subscribeGardenEvents(handlePromptEvent, {
       types: ['agent.turn.snapshot', 'agent.turn.stage', 'memory.retrieval'],
     });
@@ -276,49 +278,57 @@
 
   onDestroy(() => {
     unsubscribePromptEvents?.();
-    disconnectGardenEventBus();
+    releaseEventBus?.();
+    releaseEventBus = null;
   });
 </script>
 
-<div class="garden-page space-y-5">
-  <GardenPageHeader
-    eyebrow="Prompts · Live monitor"
-    title="The Loom"
-    description="Prompt-generation timing, assembled context, and model handoff built from live turn snapshots and stage telemetry."
-  >
-    {#snippet actions()}
-      <span class="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm font-medium
-        {isGardenEventBusConnected() ? 'border-moss-300 bg-moss-50 text-moss-700' : 'border-wilt-200 bg-wilt-50 text-wilt-600'}">
-        <span class="inline-block h-2.5 w-2.5 rounded-full {isGardenEventBusConnected() ? 'bg-moss-500' : 'bg-wilt-400'}"></span>
-        {isGardenEventBusConnected() ? 'Live bus connected' : 'Live bus disconnected'}
-        {#if !isGardenEventBusConnected() && getGardenEventBusConnectionError()}
-          <span role="status">
-            —
-            {#if getGardenEventBusConnectionError()?.code !== null}
-              code {getGardenEventBusConnectionError()?.code}:
-            {/if}
-            {getGardenEventBusConnectionError()?.reason}
-          </span>
+{#snippet monitorActions()}
+  <span class="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm font-medium
+    {isGardenEventBusConnected() ? 'border-moss-300 bg-moss-50 text-moss-700' : 'border-wilt-200 bg-wilt-50 text-wilt-600'}">
+    <span class="inline-block h-2.5 w-2.5 rounded-full {isGardenEventBusConnected() ? 'bg-moss-500' : 'bg-wilt-400'}"></span>
+    {isGardenEventBusConnected() ? 'Live bus connected' : 'Live bus disconnected'}
+    {#if !isGardenEventBusConnected() && getGardenEventBusConnectionError()}
+      <span role="status">
+        —
+        {#if getGardenEventBusConnectionError()?.code !== null}
+          code {getGardenEventBusConnectionError()?.code}:
         {/if}
+        {getGardenEventBusConnectionError()?.reason}
       </span>
-      <button
-        type="button"
-        onclick={() => void loadChannels()}
-        class="rounded-lg border border-bark-300 px-2.5 py-1 text-sm font-medium text-shadow-700 hover:bg-bark-100 transition-colors disabled:opacity-60"
-        disabled={loadingChannels}
-      >
-        {loadingChannels ? 'Refreshing…' : 'Refresh Sessions'}
-      </button>
-      <button
-        type="button"
-        onclick={() => void refreshSelectedChannel()}
-        class="rounded-lg border border-gold-300 bg-gold-50 px-2.5 py-1 text-sm font-medium text-shadow-800 hover:bg-gold-100 transition-colors disabled:opacity-60"
-        disabled={!selectedSessionId || refreshingSelected}
-      >
-        {refreshingSelected ? 'Refreshing…' : 'Refresh Turn History'}
-      </button>
-    {/snippet}
-  </GardenPageHeader>
+    {/if}
+  </span>
+  <button
+    type="button"
+    onclick={() => void loadChannels()}
+    class="rounded-lg border border-bark-300 px-2.5 py-1 text-sm font-medium text-shadow-700 hover:bg-bark-100 transition-colors disabled:opacity-60"
+    disabled={loadingChannels}
+  >
+    {loadingChannels ? 'Refreshing…' : 'Refresh Sessions'}
+  </button>
+  <button
+    type="button"
+    onclick={() => void refreshSelectedChannel()}
+    class="rounded-lg border border-gold-300 bg-gold-50 px-2.5 py-1 text-sm font-medium text-shadow-800 hover:bg-gold-100 transition-colors disabled:opacity-60"
+    disabled={!selectedSessionId || refreshingSelected}
+  >
+    {refreshingSelected ? 'Refreshing…' : 'Refresh Turn History'}
+  </button>
+{/snippet}
+
+<div class="garden-page space-y-5">
+  {#if !embedded}
+    <GardenPageHeader
+      eyebrow="Prompts · Live monitor"
+      title="The Loom"
+      description="Prompt-generation timing, assembled context, and model handoff built from live turn snapshots and stage telemetry."
+      actions={monitorActions}
+    />
+  {:else}
+    <div class="flex flex-wrap items-center justify-end gap-2">
+      {@render monitorActions()}
+    </div>
+  {/if}
 
   {#if error}
     <div class="card-garden border-wilt-200 p-4">

@@ -12,6 +12,7 @@
   import { pushToast } from '$lib/stores/toast.svelte';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
+  import LazyGardenPage from '$lib/components/garden/LazyGardenPage.svelte';
   import { scopeGardenPath } from '$lib/fleet/companion-scope';
   import {
     canonicalPlacesPath,
@@ -21,6 +22,7 @@
   import RoomsPage from '../rooms/+page.svelte';
   import SatellitesPage from '../satellites/+page.svelte';
 
+  const loadRoomArbiterPage = () => import('../room-arbiter/+page.svelte');
   const placesTabs: GardenTabItem[] = PLACES_TABS.map(tab => ({ ...tab }));
   const activeTab = $derived(resolvePlacesTab($page.url.searchParams));
 
@@ -187,6 +189,13 @@
     <RoomsPage embedded />
   {:else if activeTab === 'satellites'}
     <SatellitesPage embedded />
+  {:else if activeTab === 'arbiter'}
+    <LazyGardenPage
+      loader={loadRoomArbiterPage}
+      componentProps={{ embedded: true }}
+      loadingLabel="Loading cluster room arbitration..."
+      errorLabel="Failed to load cluster room arbitration."
+    />
   {:else}
     {#if errorMessage}
     <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4" role="alert">

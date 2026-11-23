@@ -20,6 +20,8 @@
   import { getCompanionName } from '$lib/stores/companion.svelte';
   import { pushToast } from '$lib/stores/toast.svelte';
 
+  let { embedded = false }: { embedded?: boolean } = $props();
+
   let policy = $state<IntakePolicyConfig | null>(null);
   let lists = $state<IntakeSourceListsConfig | null>(null);
   let cogSecEvents = $state<AdminCogSecEventListData['events']>([]);
@@ -158,27 +160,33 @@
   });
 </script>
 
-<svelte:head>
-  <title>Cognitive Security: Firewall</title>
-</svelte:head>
+{#snippet firewallActions()}
+  <button
+    onclick={loadData}
+    disabled={loading}
+    class="text-sm px-3 py-1.5 rounded-lg border border-bark-300 text-shadow-600 hover:bg-bark-100
+           transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+  >
+    {loading ? 'Loading...' : 'Refresh'}
+  </button>
+{/snippet}
 
 <div class="garden-page space-y-5">
-  <GardenPageHeader
-    eyebrow="Cognitive Security · Intake policy"
-    title="Intake Firewall"
-    description="Inspect enforcement posture, source risk tiers, escalation thresholds, and the allow/deny flywheel that gates inbound context."
-  >
-    {#snippet actions()}
-      <button
-      onclick={loadData}
-      disabled={loading}
-      class="text-sm px-3 py-1.5 rounded-lg border border-bark-300 text-shadow-600 hover:bg-bark-100
-             transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-      >
-        {loading ? 'Loading...' : 'Refresh'}
-      </button>
-    {/snippet}
-  </GardenPageHeader>
+  {#if !embedded}
+    <GardenPageHeader
+      eyebrow="Cognitive Security · Intake policy"
+      title="Intake Firewall"
+      description="Inspect enforcement posture, source risk tiers, escalation thresholds, and the allow/deny flywheel that gates inbound context."
+      actions={firewallActions}
+    />
+  {:else}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">
+        Inspect enforcement posture, source risk tiers, escalation thresholds, and allow/deny lists.
+      </p>
+      {@render firewallActions()}
+    </div>
+  {/if}
 
   {#if loading && !policy}
     <div class="card-garden p-5 animate-pulse space-y-3">

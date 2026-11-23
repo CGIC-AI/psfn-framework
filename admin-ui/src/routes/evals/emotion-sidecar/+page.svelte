@@ -59,6 +59,8 @@
     { value: 'test_persona', label: 'Test persona' },
   ];
 
+  let { embedded = false }: { embedded?: boolean } = $props();
+
   let activeTab = $state<TabId>('overview');
   let health = $state<AdminObserverEvalSidecarHealthData | null>(null);
   let latest = $state<AdminObserverEvalSidecarObservationView | null>(null);
@@ -351,29 +353,41 @@
   });
 </script>
 
+{#snippet evalActions()}
+  <span class="rounded-full border px-2.5 py-1 text-xs font-semibold {statusBadgeClass(pageState)}">
+    Status: {labelizeObserverEval(pageState)}
+  </span>
+  <a
+    href={currentExportPath}
+    download="observer-eval-sidecar-export.json"
+    class="rounded-xl border border-bark-300 bg-surface px-3 py-2 text-sm font-medium text-shadow-700 shadow-sm transition-colors hover:border-gold-300"
+  >Export JSON</a>
+  <button
+    type="button"
+    onclick={refresh}
+    disabled={refreshing || loading}
+    class="rounded-xl border border-gold-300 bg-gold-50 px-3 py-2 text-sm font-medium text-gold-800 transition-colors hover:bg-gold-100 disabled:cursor-not-allowed disabled:opacity-50"
+  >{refreshing ? 'Refreshing' : 'Refresh'}</button>
+{/snippet}
+
 <div class="garden-page space-y-5">
-  <GardenPageHeader
-    eyebrow="Evals · Observer lane"
-    title="Emotion Sidecar"
-    description="Read-only comparison between PSFN's current EmotionState and the isolated EmoSim observer, with privacy-safe evidence and lever timelines."
-  >
-    {#snippet actions()}
-      <span class="rounded-full border px-2.5 py-1 text-xs font-semibold {statusBadgeClass(pageState)}">
-        Status: {labelizeObserverEval(pageState)}
-      </span>
-      <a
-        href={currentExportPath}
-        download="observer-eval-sidecar-export.json"
-        class="rounded-xl border border-bark-300 bg-surface px-3 py-2 text-sm font-medium text-shadow-700 shadow-sm transition-colors hover:border-gold-300"
-      >Export JSON</a>
-      <button
-        type="button"
-        onclick={refresh}
-        disabled={refreshing || loading}
-        class="rounded-xl border border-gold-300 bg-gold-50 px-3 py-2 text-sm font-medium text-gold-800 transition-colors hover:bg-gold-100 disabled:cursor-not-allowed disabled:opacity-50"
-      >{refreshing ? 'Refreshing' : 'Refresh'}</button>
-    {/snippet}
-  </GardenPageHeader>
+  {#if !embedded}
+    <GardenPageHeader
+      eyebrow="Evals · Observer lane"
+      title="Emotion Sidecar"
+      description="Read-only comparison between PSFN's current EmotionState and the isolated EmoSim observer, with privacy-safe evidence and lever timelines."
+      actions={evalActions}
+    />
+  {:else}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">
+        Read-only comparison between PSFN's EmotionState and the isolated EmoSim observer.
+      </p>
+      <div class="flex flex-wrap items-center gap-2">
+        {@render evalActions()}
+      </div>
+    </div>
+  {/if}
 
   {#if errorMessage}
     <div class="card-garden border-l-4 border-l-wilt-400 p-4">

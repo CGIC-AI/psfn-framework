@@ -12,6 +12,8 @@
   // hash, a count, a closed-vocabulary label, a timestamp or an outcome —
   // the same discipline the stored records are held to.
 
+  let { embedded = false }: { embedded?: boolean } = $props();
+
   let chain = $state<CustodyChainEgressToSourcesView | null>(null);
   let sources = $state<CustodyChainSourceToEgressesView | null>(null);
   let chainInput = $state('');
@@ -76,16 +78,14 @@
   }
 </script>
 
-<svelte:head>
-  <title>Cognitive Security: Chain of Custody</title>
-</svelte:head>
-
 <div class="garden-page space-y-5">
-  <GardenPageHeader
-    eyebrow="Cognitive Security · Provenance"
-    title="Chain of Custody"
-    description="Which admitted context caused an egress, and where a source's bytes ended up. Ids, hashes, counts and outcomes only -- never message content."
-  />
+  {#if !embedded}
+    <GardenPageHeader
+      eyebrow="Cognitive Security · Provenance"
+      title="Chain of Custody"
+      description="Which admitted context caused an egress, and where a source's bytes ended up. Ids, hashes, counts and outcomes only -- never message content."
+    />
+  {/if}
 
   <section class="card-garden p-5 space-y-4">
     <h2 class="text-sm font-semibold text-shadow-700">Egress &rarr; sources</h2>

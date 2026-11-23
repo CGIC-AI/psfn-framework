@@ -1,7 +1,16 @@
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { page } from '$app/stores';
   import ConfirmationModal from '$lib/components/ConfirmationModal.svelte';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
+  import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
+  import LazyGardenPage from '$lib/components/garden/LazyGardenPage.svelte';
+  import {
+    AUTONOMY_TABS,
+    canonicalAutonomyPath,
+    resolveAutonomyTab,
+  } from '$lib/nav/canonical-routes';
   import {
     cancelIcpCandidate,
     emergencyDisableIcpAutonomy,
@@ -163,9 +172,37 @@
     return 'bg-gold-100 text-gold-700';
   }
 
-  onMount(() => {
+  const autonomyTabs: GardenTabItem[] = AUTONOMY_TABS.map(tab => ({ ...tab }));
+  const activeTab = $derived(resolveAutonomyTab($page.url.searchParams));
+  const loadSchedulerPage = () => import('../scheduler/+page.svelte');
+  const loadActionPipePage = () => import('../action-pipe/+page.svelte');
+  const loadAutomataPage = () => import('../automata/+page.svelte');
+
+  function selectAutonomyTab(id: string): void {
+    const tab = AUTONOMY_TABS.find(candidate => candidate.id === id)?.id;
+    if (!tab || tab === activeTab) return;
+    void goto(scopeGardenPath(canonicalAutonomyPath(tab)), {
+      keepFocus: true,
+      noScroll: true,
+    });
+  }
+
+  $effect(() => {
+    if (activeTab !== 'autonomy') {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      return;
+    }
     void loadData();
     timer = setInterval(() => void loadData(true), 15_000);
+    return () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
   });
 
   onDestroy(() => {
@@ -175,11 +212,12 @@
 
 <div class="garden-page space-y-6">
   <GardenPageHeader
-    eyebrow="Live Operations"
-    title="Autonomy Control Plane"
-    description="Bounded, content-free observability and emergency controls for autonomous companion initiation."
+    eyebrow="Runtime"
+    title="Autonomy & Schedule"
+    description="Autonomous initiation controls, scheduled tasks, action pipe queues, and durable Automata workers."
   >
     {#snippet actions()}
+      {#if activeTab === 'autonomy'}
       <div class="flex flex-wrap items-center gap-2">
         {#if data}
           <span class={`garden-status ${data.runtimeEnabled ? 'garden-status--success' : 'garden-status--warning'} rounded-full px-2.5 py-1 text-xs font-medium ${data.runtimeEnabled ? 'bg-moss-100 text-moss-700' : 'bg-bark-200 text-shadow-700'}`}>
@@ -196,8 +234,39 @@
         Emergency disable
       </button>
       </div>
+      {/if}
     {/snippet}
   </GardenPageHeader>
+
+  <GardenTabBar
+    tabs={autonomyTabs}
+    activeId={activeTab}
+    onSelect={selectAutonomyTab}
+    label="Autonomy and schedule views"
+  />
+
+  {#if activeTab === 'scheduler'}
+    <LazyGardenPage
+      loader={loadSchedulerPage}
+      componentProps={{ embedded: true }}
+      loadingLabel="Loading scheduler..."
+      errorLabel="Failed to load scheduler."
+    />
+  {:else if activeTab === 'action-pipe'}
+    <LazyGardenPage
+      loader={loadActionPipePage}
+      componentProps={{ embedded: true }}
+      loadingLabel="Loading action pipe..."
+      errorLabel="Failed to load action pipe."
+    />
+  {:else if activeTab === 'automata'}
+    <LazyGardenPage
+      loader={loadAutomataPage}
+      componentProps={{ embedded: true }}
+      loadingLabel="Loading automata..."
+      errorLabel="Failed to load automata."
+    />
+  {:else}
 
   {#if mutationMessage}
     <div class="garden-status garden-status--warning card-garden border-l-4 border-l-gold-400 p-4 text-sm text-shadow-800" role="status" aria-live="polite">{mutationMessage}</div>
@@ -416,8 +485,10 @@
       </div>
     </section>
   {/if}
+  {/if}
 </div>
 
+{#if activeTab === 'autonomy'}
 <ConfirmationModal
   open={pendingAction !== null}
   title={confirmation?.title ?? ''}
@@ -430,3 +501,4 @@
   onConfirm={() => void confirmAction()}
   onCancel={() => (pendingAction = null)}
 />
+{/if}

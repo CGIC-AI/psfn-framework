@@ -25,6 +25,7 @@
   } from './skills-view';
 
   // ── State ──
+  let { embedded = false }: { embedded?: boolean } = $props();
   let snapshot = $state<SkillSnapshot | null>(null);
   let managed = $state<ManagedSkill[]>([]);
   let disabledSkills = $state<string[]>([]);
@@ -362,35 +363,47 @@
   });
 </script>
 
-<div class="garden-page space-y-6 pb-10">
-  <GardenPageHeader
-    eyebrow="Runtime & Tools · Skills"
-    title="The Crafts"
-    description="Skills discovered, loaded, budgeted, and injected into the companion's runtime context."
-    class="border-b border-bark-300 pb-4"
+{#snippet skillActions()}
+  {#if snapshot}
+    <button
+      onclick={() => { showCreateForm = !showCreateForm; actionError = ''; }}
+      class="garden-action text-sm px-3 py-2 rounded-lg border border-gold-400
+             text-gold-700 hover:bg-gold-50
+             transition-colors font-medium"
+    >
+      {showCreateForm ? 'Cancel' : '+ New Skill'}
+    </button>
+  {/if}
+  <button
+    onclick={loadData}
+    disabled={loading}
+    class="garden-action text-sm px-3 py-2 rounded-lg border border-bark-300 bg-bark-50
+           text-shadow-600 hover:bg-bark-100
+           transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
   >
-    {#snippet actions()}
-      {#if snapshot}
-        <button
-          onclick={() => { showCreateForm = !showCreateForm; actionError = ''; }}
-          class="garden-action text-sm px-3 py-2 rounded-lg border border-gold-400
-                 text-gold-700 hover:bg-gold-50
-                 transition-colors font-medium"
-        >
-          {showCreateForm ? 'Cancel' : '+ New Skill'}
-        </button>
-      {/if}
-      <button
-        onclick={loadData}
-        disabled={loading}
-        class="garden-action text-sm px-3 py-2 rounded-lg border border-bark-300 bg-bark-50
-               text-shadow-600 hover:bg-bark-100
-               transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-      >
-        {loading ? 'Loading...' : 'Refresh'}
-      </button>
-    {/snippet}
-  </GardenPageHeader>
+    {loading ? 'Loading...' : 'Refresh'}
+  </button>
+{/snippet}
+
+<div class="garden-page space-y-6 pb-10">
+  {#if !embedded}
+    <GardenPageHeader
+      eyebrow="Runtime & Tools · Skills"
+      title="The Crafts"
+      description="Skills discovered, loaded, budgeted, and injected into the companion's runtime context."
+      class="border-b border-bark-300 pb-4"
+      actions={skillActions}
+    />
+  {:else}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">
+        Skills discovered, loaded, budgeted, and injected into the companion's runtime context.
+      </p>
+      <div class="flex flex-wrap items-center gap-2">
+        {@render skillActions()}
+      </div>
+    </div>
+  {/if}
 
   <!-- Action Error Banner -->
   {#if actionError}

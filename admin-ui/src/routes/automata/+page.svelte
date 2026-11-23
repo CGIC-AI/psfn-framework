@@ -28,6 +28,8 @@
     { value: 'rejected', label: 'Rejected' },
   ];
 
+  let { embedded = false }: { embedded?: boolean } = $props();
+
   let snapshot = $state<AutomataSnapshot | null>(null);
   let loading = $state(true);
   let refreshing = $state(false);
@@ -141,23 +143,33 @@
   });
 </script>
 
-<div class="garden-page space-y-5">
-  <GardenPageHeader
-    eyebrow="Operations · Durable workers"
-    title="Automata"
-    description="Registry, retained runs, content-safe Bus state, and review-only recurrent lesson proposals for the selected companion."
+{#snippet automataActions()}
+  <button
+    type="button"
+    class="garden-action"
+    onclick={() => loadData('refresh')}
+    disabled={loading || refreshing}
   >
-    {#snippet actions()}
-      <button
-        type="button"
-        class="garden-action"
-        onclick={() => loadData('refresh')}
-        disabled={loading || refreshing}
-      >
-        {refreshing ? 'Refreshing…' : 'Refresh'}
-      </button>
-    {/snippet}
-  </GardenPageHeader>
+    {refreshing ? 'Refreshing…' : 'Refresh'}
+  </button>
+{/snippet}
+
+<div class="garden-page space-y-5">
+  {#if !embedded}
+    <GardenPageHeader
+      eyebrow="Operations · Durable workers"
+      title="Automata"
+      description="Registry, retained runs, content-safe Bus state, and review-only recurrent lesson proposals for the selected companion."
+      actions={automataActions}
+    />
+  {:else}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">
+        Registry, retained runs, content-safe Bus state, and review-only recurrent lesson proposals.
+      </p>
+      {@render automataActions()}
+    </div>
+  {/if}
 
   {#if pageState === 'loading'}
     <section class="garden-loading card-garden p-10 text-center" aria-live="polite">

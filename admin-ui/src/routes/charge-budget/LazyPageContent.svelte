@@ -42,9 +42,18 @@
   const SURFACE_VALUES = CHARGE_POLICY_SURFACE_VALUES;
   const REFERENCE_MODEL_CLASS_VALUES = CHARGE_POLICY_REFERENCE_MODEL_CLASS_VALUES;
 
+  let {
+    embedded = false,
+    forcedSubTab,
+  }: {
+    embedded?: boolean;
+    forcedSubTab?: 'charges' | 'token-usage';
+  } = $props();
+
   let charges = $state<AdminChargeLedgerData | null>(null);
   let policy = $state<ChargePolicyConfig | null>(null);
-  let activeTab = $state<'charges' | 'token-usage'>('charges');
+  let selectedSubTab = $state<'charges' | 'token-usage'>('charges');
+  const activeTab = $derived(forcedSubTab ?? selectedSubTab);
   let dayWindow = $state<AdminChargeLedgerData | null>(null);
   let monthWindow = $state<AdminChargeLedgerData | null>(null);
   let loading = $state(true);
@@ -357,7 +366,8 @@
   }
 
   function selectTab(tab: 'charges' | 'token-usage'): void {
-    activeTab = tab;
+    if (forcedSubTab) return;
+    selectedSubTab = tab;
     const url = new URL(window.location.href);
     url.search = accountingSearchParamsForTab(url.searchParams, tab).toString();
     window.history.replaceState(window.history.state, '', url);
@@ -389,32 +399,42 @@
   }
 
   onMount(() => {
-    if (new URLSearchParams(window.location.search).get('tab') === 'token-usage') {
-      activeTab = 'token-usage';
+    if (!forcedSubTab && new URLSearchParams(window.location.search).get('tab') === 'token-usage') {
+      selectedSubTab = 'token-usage';
     }
     void loadAll();
   });
 </script>
 
+{#snippet chargeActions()}
+  {#if activeTab === 'charges'}
+    <button
+      onclick={refreshData}
+      disabled={refreshing || saving}
+      class="garden-action rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:border-gold-300 hover:bg-gold-50 disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      {refreshing ? 'Refreshing...' : 'Refresh'}
+    </button>
+  {/if}
+{/snippet}
+
 <div class="garden-page space-y-6 pb-10">
-  <GardenPageHeader
-    eyebrow="Runtime & Tools · Accounting"
-    title="Charge / Budget"
-    description="Canonical charge-policy controls, a merged run/event ledger, rolling quotas, and persisted model-cost analysis."
-    class="border-b border-bark-300 pb-4"
-  >
-    {#snippet actions()}
-    {#if activeTab === 'charges'}
-      <button
-        onclick={refreshData}
-        disabled={refreshing || saving}
-        class="garden-action rounded-lg border border-bark-300 bg-bark-50 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:border-gold-300 hover:bg-gold-50 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {refreshing ? 'Refreshing...' : 'Refresh'}
-      </button>
-    {/if}
-    {/snippet}
-  </GardenPageHeader>
+  {#if !embedded}
+    <GardenPageHeader
+      eyebrow="Runtime & Tools · Accounting"
+      title="Charge / Budget"
+      description="Canonical charge-policy controls, a merged run/event ledger, rolling quotas, and persisted model-cost analysis."
+      class="border-b border-bark-300 pb-4"
+      actions={chargeActions}
+    />
+  {:else if activeTab === 'charges'}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">
+        Canonical charge-policy controls, merged run/event ledger, and rolling lane quotas.
+      </p>
+      {@render chargeActions()}
+    </div>
+  {/if}
 
   {#if errorMessage && activeTab === 'charges'}
     <div class="garden-error card-garden border-l-4 border-l-wilt-400 p-4">
@@ -429,22 +449,24 @@
       {/each}
     </div>
   {:else}
-    <div class="garden-toolbar flex gap-1 overflow-x-auto border-b border-bark-300 pb-0">
-      <button
-        type="button"
-        onclick={() => selectTab('charges')}
-        class="shrink-0 border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors {activeTab === 'charges' ? 'border-gold-500 text-shadow-900' : 'border-transparent text-shadow-600 hover:border-gold-300 hover:text-shadow-900'}"
-      >
-        Charge Policy
-      </button>
-      <button
-        type="button"
-        onclick={() => selectTab('token-usage')}
-        class="shrink-0 border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors {activeTab === 'token-usage' ? 'border-gold-500 text-shadow-900' : 'border-transparent text-shadow-600 hover:border-gold-300 hover:text-shadow-900'}"
-      >
-        Token Usage
-      </button>
-    </div>
+    {#if !forcedSubTab}
+      <div class="garden-toolbar flex gap-1 overflow-x-auto border-b border-bark-300 pb-0">
+        <button
+          type="button"
+          onclick={() => selectTab('charges')}
+          class="shrink-0 border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors {activeTab === 'charges' ? 'border-gold-500 text-shadow-900' : 'border-transparent text-shadow-600 hover:border-gold-300 hover:text-shadow-900'}"
+        >
+          Charge Policy
+        </button>
+        <button
+          type="button"
+          onclick={() => selectTab('token-usage')}
+          class="shrink-0 border-b-2 px-3 pb-2.5 pt-1 text-sm font-medium transition-colors {activeTab === 'token-usage' ? 'border-gold-500 text-shadow-900' : 'border-transparent text-shadow-600 hover:border-gold-300 hover:text-shadow-900'}"
+        >
+          Token Usage
+        </button>
+      </div>
+    {/if}
 
     {#if activeTab === 'charges'}
     <section class="garden-metric-grid flex flex-wrap items-center gap-2" aria-label="Quick charge stats">

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { test } from 'vitest';
 import {
+  canonicalAutonomyPath,
   canonicalContactsPath,
   canonicalConversationsPath,
   canonicalGardenDestination,
@@ -10,14 +11,21 @@ import {
   canonicalInboxPath,
   canonicalKnowledgePath,
   canonicalMemoryPath,
+  canonicalModelsPath,
   canonicalPlacesPath,
+  canonicalSafetyPath,
+  canonicalToolsPath,
+  resolveAutonomyTab,
   resolveContactsTab,
   resolveConversationsTab,
   resolveIdentityTab,
   resolveInboxTab,
   resolveKnowledgeTab,
   resolveMemoryTab,
+  resolveModelsTab,
   resolvePlacesTab,
+  resolveSafetyTab,
+  resolveToolsTab,
 } from './canonical-routes';
 
 const COMPANION_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -152,6 +160,87 @@ test('Mind & Memory and Contacts hubs resolve canonical tabs and legacy redirect
   assert.equal(
     canonicalGardenDestination(`/companions/${COMPANION_ID}/garden/enrollment`, '', ''),
     `/companions/${COMPANION_ID}/garden/contacts?tab=enrollment`,
+  );
+});
+
+test('Runtime & Safety hubs resolve canonical tabs and legacy redirects', () => {
+  assert.equal(resolveAutonomyTab(new URLSearchParams()), 'autonomy');
+  assert.equal(resolveAutonomyTab(new URLSearchParams('tab=scheduler')), 'scheduler');
+  assert.equal(resolveAutonomyTab(new URLSearchParams('tab=action-pipe')), 'action-pipe');
+  assert.equal(resolveAutonomyTab(new URLSearchParams('tab=automata')), 'automata');
+  assert.equal(resolveAutonomyTab(new URLSearchParams('tab=bad')), 'autonomy');
+  assert.equal(canonicalAutonomyPath('autonomy'), '/autonomy');
+  assert.equal(canonicalAutonomyPath('scheduler'), '/autonomy?tab=scheduler');
+  assert.equal(canonicalAutonomyPath('action-pipe'), '/autonomy?tab=action-pipe');
+  assert.equal(canonicalAutonomyPath('automata'), '/autonomy?tab=automata');
+
+  assert.equal(resolveToolsTab(new URLSearchParams()), 'tools');
+  assert.equal(resolveToolsTab(new URLSearchParams('tab=skills')), 'skills');
+  assert.equal(resolveToolsTab(new URLSearchParams('tab=workbench')), 'workbench');
+  assert.equal(resolveToolsTab(new URLSearchParams('tab=shards')), 'shards');
+  assert.equal(resolveToolsTab(new URLSearchParams('tab=bad')), 'tools');
+  assert.equal(canonicalToolsPath('tools'), '/tools');
+  assert.equal(canonicalToolsPath('skills'), '/tools?tab=skills');
+  assert.equal(canonicalToolsPath('workbench'), '/tools?tab=workbench');
+  assert.equal(canonicalToolsPath('shards'), '/tools?tab=shards');
+
+  assert.equal(resolveModelsTab(new URLSearchParams()), 'models');
+  assert.equal(resolveModelsTab(new URLSearchParams('tab=charges')), 'charges');
+  assert.equal(resolveModelsTab(new URLSearchParams('tab=token-usage')), 'token-usage');
+  assert.equal(resolveModelsTab(new URLSearchParams('tab=fleet-costs')), 'fleet-costs');
+  assert.equal(resolveModelsTab(new URLSearchParams('tab=bad')), 'models');
+  assert.equal(canonicalModelsPath('models'), '/models');
+  assert.equal(canonicalModelsPath('charges'), '/models?tab=charges');
+  assert.equal(canonicalModelsPath('token-usage'), '/models?tab=token-usage');
+  assert.equal(canonicalModelsPath('fleet-costs'), '/models?tab=fleet-costs');
+
+  assert.equal(resolveSafetyTab(new URLSearchParams()), 'health');
+  assert.equal(resolveSafetyTab(new URLSearchParams('tab=events')), 'events');
+  assert.equal(resolveSafetyTab(new URLSearchParams('tab=firewall')), 'firewall');
+  assert.equal(resolveSafetyTab(new URLSearchParams('tab=drift')), 'drift');
+  assert.equal(resolveSafetyTab(new URLSearchParams('tab=custody')), 'custody');
+  assert.equal(resolveSafetyTab(new URLSearchParams('tab=evals')), 'evals');
+  assert.equal(resolveSafetyTab(new URLSearchParams('tab=bad')), 'health');
+  assert.equal(canonicalSafetyPath('health'), '/subsystem-health');
+  assert.equal(canonicalSafetyPath('events'), '/subsystem-health?tab=events');
+  assert.equal(canonicalSafetyPath('firewall'), '/subsystem-health?tab=firewall');
+  assert.equal(canonicalSafetyPath('drift'), '/subsystem-health?tab=drift');
+  assert.equal(canonicalSafetyPath('custody'), '/subsystem-health?tab=custody');
+  assert.equal(canonicalSafetyPath('evals'), '/subsystem-health?tab=evals');
+
+  assert.equal(canonicalGardenDestination('/scheduler', '', ''), '/autonomy?tab=scheduler');
+  assert.equal(canonicalGardenDestination('/action-pipe', '', ''), '/autonomy?tab=action-pipe');
+  assert.equal(canonicalGardenDestination('/automata', '', ''), '/autonomy?tab=automata');
+  assert.equal(canonicalGardenDestination('/skills', '', ''), '/tools?tab=skills');
+  assert.equal(canonicalGardenDestination('/analysis-workbench', '', ''), '/tools?tab=workbench');
+  assert.equal(canonicalGardenDestination('/shards', '', ''), '/tools?tab=shards');
+  assert.equal(canonicalGardenDestination('/shards/shard-123', '', ''), null);
+  assert.equal(canonicalGardenDestination('/charge-budget', '', ''), '/models?tab=charges');
+  assert.equal(
+    canonicalGardenDestination('/charge-budget', '?tab=token-usage&range=today', ''),
+    '/models?tab=token-usage&range=today',
+  );
+  assert.equal(canonicalGardenDestination('/fleet-costs', '', ''), '/models?tab=fleet-costs');
+  assert.equal(canonicalGardenDestination('/telemetry', '', ''), '/subsystem-health?tab=events');
+  assert.equal(
+    canonicalGardenDestination('/cognitive-security/firewall', '', ''),
+    '/subsystem-health?tab=firewall',
+  );
+  assert.equal(
+    canonicalGardenDestination('/cognitive-security/drift', '', ''),
+    '/subsystem-health?tab=drift',
+  );
+  assert.equal(
+    canonicalGardenDestination('/cognitive-security/custody', '', ''),
+    '/subsystem-health?tab=custody',
+  );
+  assert.equal(
+    canonicalGardenDestination('/evals/emotion-sidecar', '', ''),
+    '/subsystem-health?tab=evals',
+  );
+  assert.equal(
+    canonicalGardenDestination(`/companions/${COMPANION_ID}/garden/telemetry`, '', ''),
+    `/companions/${COMPANION_ID}/garden/subsystem-health?tab=events`,
   );
 });
 

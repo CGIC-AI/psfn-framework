@@ -16,9 +16,11 @@
 // provider that simply never answers cannot hold the lane open past the
 // deadline the operator set.
 
-import { buildLLMWorkSpec, completeWithWorkSpec } from '../../../primitives/llm/work-spec.js';
+import {
+  boundedSealedText,
+  completeSealedJsonObject,
+} from '../../../primitives/llm/sealed-json-runner.js';
 import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../../shared/telemetry/model-usage.js';
-import { isRecord } from '../../../shared/utils/types.js';
 import { COGSEC_EVENT_SAFE_TEXT_MAX_CHARS } from '../intake/screening-envelope-policy.js';
 import {
   isBlindReviewConcernLevel,
@@ -27,7 +29,6 @@ import {
   type BlindReviewerPort,
 } from './contracts.js';
 import type { LLMProviderPort } from '../../agent/contracts.js';
-import type { LLMContext } from '../../../shared/contracts/runtime.js';
 
 /**
  * Safe-summary ceiling. Derived from the CogSec event store's own safe-text
@@ -46,45 +47,15 @@ const REVIEWER_SYSTEM_PROMPT = [
   'Return exactly one JSON object and no markdown.',
 ].join(' ');
 
-function context(content: string): LLMContext {
-  return { systemPrompt: REVIEWER_SYSTEM_PROMPT, messages: [{ role: 'user', content }] };
-}
-
-function parseJsonObject(content: string, label: string): Record<string, unknown> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    throw new Error(`${label} returned malformed JSON`);
-  }
-  if (!isRecord(parsed)) {
-    throw new Error(`${label} must return a JSON object`);
-  }
-  return parsed;
-}
-
-function assertExactKeys(value: Record<string, unknown>, keys: readonly string[], label: string): void {
-  const expected = new Set(keys);
-  const actual = Object.keys(value);
-  if (actual.length !== expected.size || actual.some(key => !expected.has(key))) {
-    throw new Error(`${label} returned an invalid response shape`);
-  }
-}
-
 /**
  * The summary reaches an operator alert, and CogSec safe text is single-line.
  * Collapse whitespace rather than rejecting a model that used a newline, but
  * reject anything empty, over-long, or carrying a NUL.
  */
 function boundedSafeSummary(value: unknown, label: string): string {
-  if (typeof value !== 'string') {
-    throw new Error(`${label} safeSummary must be a string`);
-  }
-  const normalized = value.replace(/\s+/gu, ' ').trim();
-  if (normalized.length === 0 || normalized.length > MAX_SAFE_SUMMARY_CHARS || /\0/u.test(normalized)) {
-    throw new Error(`${label} safeSummary must be 1-${MAX_SAFE_SUMMARY_CHARS} characters`);
-  }
-  return normalized;
+  return boundedSealedText(value, `${label} safeSummary`, MAX_SAFE_SUMMARY_CHARS, {
+    collapseWhitespace: true,
+  });
 }
 
 /**
@@ -124,28 +95,23 @@ export function createLLMBlindReviewer(llmProvider: LLMProviderPort): BlindRevie
       if (request.items.length === 0) {
         throw new Error('Blind reviewer requires a non-empty batch');
       }
-      const abort = new AbortController();
-      const deadline = setTimeout(() => abort.abort(), request.deadlineMs);
-      let response;
-      try {
-        response = await completeWithWorkSpec(
-          llmProvider,
-          context(JSON.stringify(toReviewPayload(request))),
-          buildLLMWorkSpec({
-            purpose: 'background',
-            durable: false,
-            correlation: COMPANION_PRIVATE_BACKGROUND_TELEMETRY,
-            maxOutputTokens: request.maxOutputTokens,
-            deadlineMs: request.deadlineMs,
-            costCeilingUsd: request.costCeilingUsd,
-          }),
-          { signal: abort.signal, modelHint: { maxTokens: request.maxOutputTokens, temperature: 0 } },
-        );
-      } finally {
-        clearTimeout(deadline);
-      }
-      const parsed = parseJsonObject(response.content, 'blind reviewer');
-      assertExactKeys(parsed, ['concernLevel', 'confidence', 'safeSummary'], 'blind reviewer');
+      const { parsed, response } = await completeSealedJsonObject({
+        llmProvider,
+        label: 'blind reviewer',
+        systemPrompt: REVIEWER_SYSTEM_PROMPT,
+        payload: toReviewPayload(request),
+        workSpec: {
+          purpose: 'background',
+          durable: false,
+          correlation: COMPANION_PRIVATE_BACKGROUND_TELEMETRY,
+          maxOutputTokens: request.maxOutputTokens,
+          deadlineMs: request.deadlineMs,
+          costCeilingUsd: request.costCeilingUsd,
+        },
+        exactKeys: ['concernLevel', 'confidence', 'safeSummary'],
+        deadlineMs: request.deadlineMs,
+        modelHint: { maxTokens: request.maxOutputTokens, temperature: 0 },
+      });
       if (!isBlindReviewConcernLevel(parsed.concernLevel)) {
         throw new Error('blind reviewer concernLevel is invalid');
       }

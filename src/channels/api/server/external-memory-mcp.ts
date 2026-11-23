@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { createMcpHandler, fromJsonSchema, McpServer, type JsonSchemaType } from '@modelcontextprotocol/server';
+import { fromJsonSchema, McpServer, type JsonSchemaType } from '@modelcontextprotocol/server';
 import {
   EXTERNAL_MEMORY_TOOL_SCHEMAS,
   parseExternalMemoryBinding,
@@ -12,6 +12,11 @@ import {
 import type { ExternalMemoryApiConfig } from '../../backplane/external-memory-config.js';
 import { getBearerToken, isExpectedApiToken } from '../../backplane/http/auth.js';
 import { readJsonBodyWithLimit, sendJson } from '../../backplane/http/primitives.js';
+import {
+  dispatchStatelessMcpHttp,
+  rejectBrowserOriginForMcp,
+  rejectInvalidStatelessMcpRequest,
+} from '../../backplane/http/stateless-mcp-http.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { MAX_BODY_SIZE } from './http.js';
@@ -53,8 +58,9 @@ export class ExternalMemoryMcpRoute {
 
   async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     // This is a machine-to-machine surface; browser credentials never authorize it.
-    if (req.headers.origin !== undefined) {
-      sendJson(res, 403, { error: 'Browser origins are not supported for external memory' });
+    if (rejectBrowserOriginForMcp(req, res, {
+      originRejectedError: 'Browser origins are not supported for external memory',
+    })) {
       return;
     }
     const bearer = getBearerToken(req);
@@ -63,13 +69,7 @@ export class ExternalMemoryMcpRoute {
       sendJson(res, 401, { error: 'External memory credential required' }, { 'WWW-Authenticate': 'Bearer' });
       return;
     }
-    if (req.method !== 'POST') {
-      sendJson(res, 405, { error: 'Method not allowed' }, { Allow: 'POST' });
-      return;
-    }
-    // Stateless serving cannot resume an authenticated transport under another key.
-    if (req.headers['mcp-session-id'] !== undefined) {
-      sendJson(res, 400, { error: 'MCP sessions are not supported' });
+    if (rejectInvalidStatelessMcpRequest(req, res)) {
       return;
     }
     const parsed = await readJsonBodyWithLimit(req, res, { maxBytes: MAX_BODY_SIZE, logger: log });
@@ -80,25 +80,15 @@ export class ExternalMemoryMcpRoute {
     const { apiKey: _apiKey, ...binding } = credential;
     try {
       const companionTools = await this.resolveCompanionToolsForPayload(binding, parsed.value);
-      const handler = createMcpHandler(() => this.createServer(binding, companionTools), {
-        onerror: error => log.warn('External memory MCP request rejected', { error: error.message }),
+      await dispatchStatelessMcpHttp({
+        req,
+        res,
+        endpointPath: '/v1/memory/mcp',
+        rawBody: parsed.rawBody,
+        parsedBody: parsed.value,
+        createServer: () => this.createServer(binding, companionTools),
+        onError: error => log.warn('External memory MCP request rejected', { error: error.message }),
       });
-      try {
-        const headers = new Headers();
-        for (const [name, value] of Object.entries(req.headers)) {
-          if (value !== undefined && name !== 'authorization' && name !== 'cookie') {
-            headers.set(name, Array.isArray(value) ? value.join(', ') : value);
-          }
-        }
-        const request = new Request('http://localhost/v1/memory/mcp', {
-          method: 'POST', headers, body: parsed.rawBody,
-        });
-        const response = await handler.fetch(request, { parsedBody: parsed.value });
-        res.writeHead(response.status, Object.fromEntries(response.headers));
-        res.end(Buffer.from(await response.arrayBuffer()));
-      } finally {
-        await handler.close();
-      }
     } catch (error) {
       log.error('External memory MCP transport failed', { error });
       if (!res.headersSent) sendJson(res, 500, { error: 'External memory transport failed' });

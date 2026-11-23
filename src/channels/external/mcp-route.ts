@@ -8,11 +8,16 @@
 // the API server or any other channel.
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { createMcpHandler, fromJsonSchema, McpServer, type JsonSchemaType } from '@modelcontextprotocol/server';
+import { fromJsonSchema, McpServer, type JsonSchemaType } from '@modelcontextprotocol/server';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toError } from '../../shared/utils/errors.js';
 import { getBearerToken, isExpectedApiToken } from '../backplane/http/auth.js';
 import { readJsonBodyWithLimit, sendJson } from '../backplane/http/primitives.js';
+import {
+  dispatchStatelessMcpHttp,
+  rejectBrowserOriginForMcp,
+  rejectInvalidStatelessMcpRequest,
+} from '../backplane/http/stateless-mcp-http.js';
 import type { ExternalChannelAdapter } from './adapter.js';
 import { EXTERNAL_CHANNEL_PLUGIN_ID } from './config.js';
 import {
@@ -86,8 +91,9 @@ export class ExternalChannelMcpRoute {
 
   async #handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     // Machine-to-machine only: browser credentials never authorize a bridge.
-    if (req.headers.origin !== undefined) {
-      sendJson(res, 403, { error: 'Browser origins are not supported for external channels' });
+    if (rejectBrowserOriginForMcp(req, res, {
+      originRejectedError: 'Browser origins are not supported for external channels',
+    })) {
       return;
     }
     const adapter = this.#resolve(req.url ?? '/');
@@ -96,12 +102,7 @@ export class ExternalChannelMcpRoute {
       sendJson(res, 401, { error: 'External channel credential required' }, { 'WWW-Authenticate': 'Bearer' });
       return;
     }
-    if (req.method !== 'POST') {
-      sendJson(res, 405, { error: 'Method not allowed' }, { Allow: 'POST' });
-      return;
-    }
-    if (req.headers['mcp-session-id'] !== undefined) {
-      sendJson(res, 400, { error: 'MCP sessions are not supported' });
+    if (rejectInvalidStatelessMcpRequest(req, res)) {
       return;
     }
     if (!adapter.running) {
@@ -110,28 +111,18 @@ export class ExternalChannelMcpRoute {
     }
     const body = await this.#readBody(req, res, adapter);
     if (!body.ok) return;
-    const handler = createMcpHandler(() => this.#createServer(adapter), {
-      onerror: error => log.warn('External channel MCP request rejected', {
+    await dispatchStatelessMcpHttp({
+      req,
+      res,
+      endpointPath: externalChannelEndpointPath(adapter.instanceId),
+      rawBody: body.rawBody,
+      parsedBody: body.value,
+      createServer: () => this.#createServer(adapter),
+      onError: error => log.warn('External channel MCP request rejected', {
         instanceId: adapter.instanceId,
         error: error.message,
       }),
     });
-    try {
-      const headers = new Headers();
-      for (const [name, value] of Object.entries(req.headers)) {
-        if (value !== undefined && name !== 'authorization' && name !== 'cookie') {
-          headers.set(name, Array.isArray(value) ? value.join(', ') : value);
-        }
-      }
-      const request = new Request(`http://localhost${externalChannelEndpointPath(adapter.instanceId)}`, {
-        method: 'POST', headers, body: body.rawBody,
-      });
-      const response = await handler.fetch(request, { parsedBody: body.value });
-      res.writeHead(response.status, Object.fromEntries(response.headers));
-      res.end(Buffer.from(await response.arrayBuffer()));
-    } finally {
-      await handler.close();
-    }
   }
 
   #resolve(url: string): ExternalChannelAdapter | undefined {

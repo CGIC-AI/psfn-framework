@@ -1,7 +1,7 @@
 import { createComponentLogger } from '../../shared/logger.js';
-import { assertNoUnknownKeys, isRecord } from '../../shared/utils/types.js';
+import { assertNoUnknownKeys } from '../../shared/utils/types.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
-import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
+import { completeSealedJsonObject } from '../../primitives/llm/sealed-json-runner.js';
 import type {
   IcpInitiationConsent,
   IcpInitiationConsentEvaluator,
@@ -22,24 +22,7 @@ const SYSTEM_PROMPT = [
   'Never include message text or instructions for the peer-visible turn.',
 ].join('\n');
 
-function stripMarkdownJsonFence(content: string): string {
-  const trimmed = content.trim();
-  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(trimmed);
-  return fenced ? fenced[1]!.trim() : trimmed;
-}
-
-function parseExactObject(content: string): Record<string, unknown> | null {
-  try {
-    const parsed: unknown = JSON.parse(stripMarkdownJsonFence(content));
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function parseConsent(content: string): IcpInitiationConsent | null {
-  const value = parseExactObject(content);
-  if (!value) return null;
+function validateConsentObject(value: Record<string, unknown>): IcpInitiationConsent | null {
   try {
     assertNoUnknownKeys(value, ['action', 'reason'], 'ICP initiation consent');
   } catch {
@@ -61,29 +44,30 @@ export function createLlmIcpInitiationConsentEvaluator(input: {
   return {
     async evaluate({ candidate, peer, channelId }) {
       try {
-        const completion = await completeWithWorkSpec(input.llmProvider, {
+        const { parsed: rawObject } = await completeSealedJsonObject({
+          llmProvider: input.llmProvider,
+          label: 'ICP initiation consent',
           systemPrompt,
-          messages: [{
-            role: 'user',
-            content: JSON.stringify({
-              peer: peer.displayName,
-              source: candidate.source,
-              privateReason: candidate.reasonSummary,
-              preferredChannel: candidate.preferredChannel,
-              channelId,
-            }),
-          }],
-        }, buildLLMWorkSpec({
-          purpose: 'background',
-          durable: false,
-          correlation: {
-            requestId: `icp-consent:${candidate.candidateId}`,
-            channelId: `internal:icp-consent:${candidate.candidateId}`,
-            callType: 'background',
-            purpose: 'agent.intention.appraisal',
+          payload: {
+            peer: peer.displayName,
+            source: candidate.source,
+            privateReason: candidate.reasonSummary,
+            preferredChannel: candidate.preferredChannel,
+            channelId,
           },
-        }));
-        const parsed = parseConsent(completion.content);
+          workSpec: {
+            purpose: 'background',
+            durable: false,
+            correlation: {
+              requestId: `icp-consent:${candidate.candidateId}`,
+              channelId: `internal:icp-consent:${candidate.candidateId}`,
+              callType: 'background',
+              purpose: 'agent.intention.appraisal',
+            },
+          },
+          allowMarkdownFence: true,
+        });
+        const parsed = validateConsentObject(rawObject);
         if (!parsed) {
           log.warn('ICP initiation consent response was malformed; deferring without fatigue penalty', {
             candidateId: candidate.candidateId,
@@ -96,12 +80,22 @@ export function createLlmIcpInitiationConsentEvaluator(input: {
         }
         return parsed;
       } catch (error) {
-        log.warn('ICP initiation consent evaluation failed; deferring without fatigue penalty', {
-          candidateId: candidate.candidateId,
-          peerCompanionId: candidate.peerCompanionId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return { action: 'defer', reason: 'consent_evaluation_failed' };
+        const message = error instanceof Error ? error.message : String(error);
+        const isMalformed = message.includes('malformed JSON') || message.includes('must return a JSON object');
+        log.warn(
+          isMalformed
+            ? 'ICP initiation consent response was malformed; deferring without fatigue penalty'
+            : 'ICP initiation consent evaluation failed; deferring without fatigue penalty',
+          {
+            candidateId: candidate.candidateId,
+            peerCompanionId: candidate.peerCompanionId,
+            ...(isMalformed ? {} : { error: message }),
+          },
+        );
+        return {
+          action: 'defer',
+          reason: isMalformed ? 'invalid_consent_response' : 'consent_evaluation_failed',
+        };
       }
     },
   };

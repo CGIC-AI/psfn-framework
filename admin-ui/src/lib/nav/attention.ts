@@ -1,5 +1,18 @@
 import { apiGet } from '$lib/api/client';
-import type { AdminConfirmationsData } from '$lib/types';
+import {
+  isGardenEventBusConnected,
+  retainGardenEventBus,
+  subscribeGardenEventBusConnection,
+  subscribeGardenEvents,
+} from '$lib/events/garden-event-bus.svelte';
+import type { GardenEventEnvelope, GardenEventFilter } from '$lib/events/envelope';
+import {
+  createVisibilityAwarePoller,
+  type VisibilityAwarePoller,
+  type VisibilityDocument,
+} from '$lib/polling/visibility-aware-poller';
+import type { AdminConfirmationsData, HumanEscalationSnapshot } from '$lib/types';
+import type { InboxTabId } from './canonical-routes';
 
 export interface AttentionSource {
   /** Nav item path this count attaches to (must match nav.ts exactly). */
@@ -7,9 +20,69 @@ export interface AttentionSource {
   fetchCount: () => Promise<number>;
 }
 
+export interface InboxAttentionSource {
+  tab: InboxTabId;
+  fetchCount: () => Promise<number>;
+}
+
+export type InboxTabCounts = Record<InboxTabId, number>;
+
 export type AttentionCounts = Record<string, number>;
 
 export type AttentionScopeKey = string | null;
+
+export function emptyInboxTabCounts(): InboxTabCounts {
+  return {
+    confirmations: 0,
+    escalations: 0,
+    contacts: 0,
+    graph: 0,
+    cogsec: 0,
+    remediation: 0,
+  };
+}
+
+let currentInboxTabCounts: InboxTabCounts = emptyInboxTabCounts();
+const inboxTabListeners = new Set<(counts: InboxTabCounts) => void>();
+const inboxChangeListeners = new Set<() => void>();
+
+export function getInboxTabCounts(): InboxTabCounts {
+  return { ...currentInboxTabCounts };
+}
+
+export function resetInboxTabCounts(): void {
+  currentInboxTabCounts = emptyInboxTabCounts();
+  const snapshot = getInboxTabCounts();
+  for (const listener of inboxTabListeners) listener(snapshot);
+}
+
+export function subscribeInboxTabCounts(
+  listener: (counts: InboxTabCounts) => void,
+): () => void {
+  inboxTabListeners.add(listener);
+  listener(getInboxTabCounts());
+  return () => inboxTabListeners.delete(listener);
+}
+
+/** Notify the Garden shell that an operator resolved or mutated an Inbox item. */
+export function notifyInboxAttentionChanged(): void {
+  for (const listener of inboxChangeListeners) listener();
+}
+
+function subscribeInboxAttentionChanges(listener: () => void): () => void {
+  inboxChangeListeners.add(listener);
+  return () => inboxChangeListeners.delete(listener);
+}
+
+function publishInboxTabCounts(next: InboxTabCounts): void {
+  const keys = Object.keys(next) as InboxTabId[];
+  if (keys.every((key) => currentInboxTabCounts[key] === next[key])) {
+    return;
+  }
+  currentInboxTabCounts = { ...next };
+  const snapshot = getInboxTabCounts();
+  for (const listener of inboxTabListeners) listener(snapshot);
+}
 
 export function shouldResetAttentionCounts(
   previousScope: AttentionScopeKey | undefined,
@@ -76,6 +149,16 @@ async function confirmationsCount(): Promise<number> {
   return data.entries.length;
 }
 
+async function escalationsCount(): Promise<number> {
+  const data = await apiGet<Pick<HumanEscalationSnapshot, 'counts' | 'escalations'>>(
+    '/api/admin/escalations?state=open',
+  );
+  if (typeof data.counts?.open === 'number' && Number.isFinite(data.counts.open)) {
+    return Math.max(0, data.counts.open);
+  }
+  return Array.isArray(data.escalations) ? data.escalations.length : 0;
+}
+
 async function contactApprovalsCount(): Promise<number> {
   const data = await apiGet<{ entries: ContactApprovalEntryLite[] }>('/api/admin/contact-approvals');
   return data.entries.filter((entry) => entry.status === 'pending').length;
@@ -93,8 +176,8 @@ async function graphProposalsCount(): Promise<number> {
 
 // Open session-integrity (HMAC-chain) incidents awaiting operator review (bead
 // g59z). These are durable CogSec cases of type 'session_integrity' recorded
-// when a session's stored history fails verification; they surface on the
-// Cognitive Security > Remediation page.
+// when a session's stored history fails verification; they surface in Inbox ->
+// Integrity Remediation.
 async function sessionIntegrityIncidentsCount(): Promise<number> {
   const data = await apiGet<CogSecEventListLite>('/api/admin/session-routes/cogsec/events');
   return (data.events ?? []).filter(
@@ -107,17 +190,139 @@ async function journalHealthAttentionCount(): Promise<number> {
   return data.attentionCount;
 }
 
-async function lettersWaitingCount(): Promise<number> {
-  const data = await apiGet<{ waitingCount: number }>('/api/admin/letters?direction=inbox');
-  return Number.isSafeInteger(data.waitingCount) && data.waitingCount > 0 ? data.waitingCount : 0;
+export const INBOX_ATTENTION_SOURCES: InboxAttentionSource[] = [
+  { tab: 'confirmations', fetchCount: confirmationsCount },
+  { tab: 'escalations', fetchCount: escalationsCount },
+  { tab: 'contacts', fetchCount: contactApprovalsCount },
+  { tab: 'graph', fetchCount: graphProposalsCount },
+  { tab: 'cogsec', fetchCount: cogsecApprovalsCount },
+  { tab: 'remediation', fetchCount: sessionIntegrityIncidentsCount },
+];
+
+export async function refreshInboxAttentionBreakdown(
+  previous: InboxTabCounts = currentInboxTabCounts,
+  sources: readonly InboxAttentionSource[] = INBOX_ATTENTION_SOURCES,
+): Promise<{ counts: InboxTabCounts; total: number }> {
+  const next: InboxTabCounts = { ...previous };
+  await Promise.all(
+    sources.map(async (source) => {
+      try {
+        const count = await source.fetchCount();
+        if (Number.isFinite(count) && count >= 0) {
+          next[source.tab] = Math.trunc(count);
+        }
+      } catch {
+        // Retain last verified count for this tab on transient error.
+      }
+    }),
+  );
+  publishInboxTabCounts(next);
+  const total = Object.values(next).reduce((sum, count) => sum + count, 0);
+  return { counts: next, total };
 }
 
 export const ATTENTION_SOURCES: AttentionSource[] = [
-  { path: '/confirmations', fetchCount: confirmationsCount },
-  { path: '/contact-approvals', fetchCount: contactApprovalsCount },
-  { path: '/cognitive-security/approvals', fetchCount: cogsecApprovalsCount },
-  { path: '/cognitive-security/remediation', fetchCount: sessionIntegrityIncidentsCount },
-  { path: '/graph-proposals', fetchCount: graphProposalsCount },
+  {
+    path: '/inbox',
+    fetchCount: async () => (await refreshInboxAttentionBreakdown()).total,
+  },
   { path: '/values', fetchCount: journalHealthAttentionCount },
-  { path: '/letters', fetchCount: lettersWaitingCount },
 ];
+
+export interface AttentionRefreshBus {
+  retain(): () => void;
+  isConnected(): boolean;
+  subscribeEvents(
+    listener: (event: GardenEventEnvelope) => void,
+    filter?: GardenEventFilter,
+  ): () => void;
+  subscribeConnection(listener: (connected: boolean) => void): () => void;
+}
+
+export interface AttentionRefreshController {
+  start(): void;
+  stop(): void;
+  requestRefresh(): void;
+}
+
+const sharedAttentionBus: AttentionRefreshBus = {
+  retain: retainGardenEventBus,
+  isConnected: isGardenEventBusConnected,
+  subscribeEvents: subscribeGardenEvents,
+  subscribeConnection: subscribeGardenEventBusConnection,
+};
+
+/**
+ * Push-driven attention badge controller.
+ *
+ * Fetches once immediately on start (when authentication is active), refreshes
+ * immediately on `garden.queue.changed` WebSocket events or local operator
+ * Inbox mutations, and disables periodic polling while the WebSocket is live.
+ * Periodic fallback polling only runs when the WebSocket is disconnected.
+ */
+export function createAttentionRefreshController(options: {
+  refresh: () => void | Promise<unknown>;
+  fallbackIntervalMs?: number;
+  documentRef?: VisibilityDocument;
+  bus?: AttentionRefreshBus;
+  subscribeLocalChanges?: (listener: () => void) => () => void;
+}): AttentionRefreshController {
+  const bus = options.bus ?? sharedAttentionBus;
+  const subscribeLocalChanges = options.subscribeLocalChanges ?? subscribeInboxAttentionChanges;
+  const poller: VisibilityAwarePoller = createVisibilityAwarePoller({
+    refresh: options.refresh,
+    intervalMs: options.fallbackIntervalMs ?? 60_000,
+    pollingEnabled: !bus.isConnected(),
+    ...(options.documentRef ? { documentRef: options.documentRef } : {}),
+  });
+
+  let running = false;
+  let disconnectedWhileRunning = false;
+  let releaseBus: (() => void) | undefined;
+  let unsubscribeEvents: (() => void) | undefined;
+  let unsubscribeConnection: (() => void) | undefined;
+  let unsubscribeLocal: (() => void) | undefined;
+
+  function start(): void {
+    if (running) return;
+    running = true;
+    unsubscribeEvents = bus.subscribeEvents(
+      () => poller.requestRefresh(),
+      { types: ['garden.queue.changed'] },
+    );
+    unsubscribeConnection = bus.subscribeConnection((connected) => {
+      if (!connected) {
+        disconnectedWhileRunning = true;
+      } else if (disconnectedWhileRunning) {
+        disconnectedWhileRunning = false;
+        poller.requestRefresh();
+      }
+      poller.setPollingEnabled(!connected);
+    });
+    unsubscribeLocal = subscribeLocalChanges(() => poller.requestRefresh());
+    releaseBus = bus.retain();
+    poller.setPollingEnabled(!bus.isConnected());
+    poller.start();
+  }
+
+  function stop(): void {
+    if (!running) return;
+    running = false;
+    disconnectedWhileRunning = false;
+    unsubscribeEvents?.();
+    unsubscribeEvents = undefined;
+    unsubscribeConnection?.();
+    unsubscribeConnection = undefined;
+    unsubscribeLocal?.();
+    unsubscribeLocal = undefined;
+    poller.stop();
+    releaseBus?.();
+    releaseBus = undefined;
+  }
+
+  return {
+    start,
+    stop,
+    requestRefresh: () => poller.requestRefresh(),
+  };
+}

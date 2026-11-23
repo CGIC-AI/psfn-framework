@@ -5,12 +5,52 @@ import { test } from 'vitest';
 import {
   canonicalConversationsPath,
   canonicalGardenDestination,
+  canonicalInboxPath,
   canonicalPlacesPath,
   resolveConversationsTab,
+  resolveInboxTab,
   resolvePlacesTab,
 } from './canonical-routes';
 
 const COMPANION_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+test('Inbox tabs have canonical, directly addressable URLs', () => {
+  assert.equal(resolveInboxTab(new URLSearchParams()), 'confirmations');
+  assert.equal(resolveInboxTab(new URLSearchParams('tab=confirmations')), 'confirmations');
+  assert.equal(resolveInboxTab(new URLSearchParams('tab=escalations')), 'escalations');
+  assert.equal(resolveInboxTab(new URLSearchParams('tab=contacts')), 'contacts');
+  assert.equal(resolveInboxTab(new URLSearchParams('tab=graph')), 'graph');
+  assert.equal(resolveInboxTab(new URLSearchParams('tab=cogsec')), 'cogsec');
+  assert.equal(resolveInboxTab(new URLSearchParams('tab=remediation')), 'remediation');
+  assert.equal(resolveInboxTab(new URLSearchParams('tab=unknown')), 'confirmations');
+  assert.equal(canonicalInboxPath('confirmations'), '/inbox');
+  assert.equal(canonicalInboxPath('escalations'), '/inbox?tab=escalations');
+  assert.equal(canonicalInboxPath('contacts'), '/inbox?tab=contacts');
+  assert.equal(canonicalInboxPath('graph'), '/inbox?tab=graph');
+  assert.equal(canonicalInboxPath('cogsec'), '/inbox?tab=cogsec');
+  assert.equal(canonicalInboxPath('remediation'), '/inbox?tab=remediation');
+});
+
+test('legacy approval, remediation, and retired queue links redirect to canonical destinations', () => {
+  assert.equal(canonicalGardenDestination('/confirmations', '', ''), '/inbox');
+  assert.equal(canonicalGardenDestination('/escalations', '', ''), '/inbox?tab=escalations');
+  assert.equal(canonicalGardenDestination('/contact-approvals', '', ''), '/inbox?tab=contacts');
+  assert.equal(canonicalGardenDestination('/graph-proposals', '', ''), '/inbox?tab=graph');
+  assert.equal(canonicalGardenDestination('/cognitive-security/approvals', '', ''), '/inbox?tab=cogsec');
+  assert.equal(canonicalGardenDestination('/cognitive-security/remediation', '', ''), '/inbox?tab=remediation');
+  assert.equal(canonicalGardenDestination('/letters', '', ''), '/chat');
+  assert.equal(canonicalGardenDestination('/doing-mirror', '', ''), '/wishlist');
+  assert.equal(
+    canonicalGardenDestination(`/companions/${COMPANION_ID}/garden/escalations`, '', ''),
+    `/companions/${COMPANION_ID}/garden/inbox?tab=escalations`,
+  );
+  assert.equal(
+    canonicalGardenDestination(`/companions/${COMPANION_ID}/garden/cognitive-security/approvals`, '', ''),
+    `/companions/${COMPANION_ID}/garden/inbox?tab=cogsec`,
+  );
+  assert.equal(canonicalGardenDestination('/inbox', '', ''), null);
+  assert.equal(canonicalGardenDestination('/inbox', '?tab=cogsec', ''), null);
+});
 
 test('Conversations tabs have canonical, directly addressable URLs', () => {
   assert.equal(resolveConversationsTab(new URLSearchParams()), 'live');

@@ -6,12 +6,15 @@
     resolveHumanEscalation,
   } from '$lib/api/endpoints/human-escalations';
   import { createVisibilityAwarePoller } from '$lib/polling/visibility-aware-poller';
+  import { notifyInboxAttentionChanged } from '$lib/nav/attention';
   import type {
     HumanEscalationRecord,
     HumanEscalationResolutionReason,
     HumanEscalationResolutionState,
     HumanEscalationSnapshot,
   } from '$lib/types';
+
+  let { embedded = false } = $props<{ embedded?: boolean }>();
 
   // ── State ──
   let snapshot = $state<HumanEscalationSnapshot | null>(null);
@@ -110,6 +113,7 @@
         reason: selectedReason(escalation.escalationId),
       });
       await loadData();
+      notifyInboxAttentionChanged();
     } catch (e) {
       actionError = e instanceof Error ? e.message : 'Failed to record the resolution';
     } finally {
@@ -123,7 +127,7 @@
   });
 
   onMount(() => {
-    poller.start();
+    if (embedded) poller.start();
   });
 
   onDestroy(() => {
@@ -131,13 +135,12 @@
   });
 </script>
 
-<div class="garden-page space-y-5">
-  <GardenPageHeader
-    eyebrow="Operations · Human in the loop"
-    title="Escalations"
-    description="Everything this runtime is waiting on a person for, on one governed ledger. Recording a decision here is a record, not an execution: specialised workflows are still answered on their own page."
-  >
-    {#snippet actions()}
+<div class={embedded ? 'space-y-5' : 'garden-page space-y-5'}>
+  {#if embedded}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">
+        Everything this runtime is waiting on a person for, on one governed ledger.
+      </p>
       <div class="flex items-center gap-2">
         <button
           onclick={() => setScope('open')}
@@ -152,8 +155,7 @@
           class="rounded-md border border-bark-200 px-3 py-1.5 text-sm"
         >Refresh</button>
       </div>
-    {/snippet}
-  </GardenPageHeader>
+    </div>
 
   {#if unavailable}
     <p class="rounded-md border border-gold-300 bg-gold-50 p-4 text-sm text-gold-800">
@@ -273,5 +275,12 @@
         {/each}
       </ul>
     {/if}
+  {/if}
+  {:else}
+    <GardenPageHeader
+      eyebrow="Live Operations"
+      title="Inbox"
+      description="Escalations now live in the Inbox. Redirecting…"
+    />
   {/if}
 </div>

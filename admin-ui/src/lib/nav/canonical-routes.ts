@@ -1,5 +1,27 @@
 import { parseCompanionGardenScope } from '$lib/fleet/companion-scope';
 
+export const INBOX_TABS = [
+  { id: 'confirmations', label: 'Confirmations' },
+  { id: 'escalations', label: 'Escalations' },
+  { id: 'contacts', label: 'Contacts' },
+  { id: 'graph', label: 'Graph Proposals' },
+  { id: 'cogsec', label: 'CogSec Quarantine' },
+  { id: 'remediation', label: 'Integrity Remediation' },
+] as const;
+
+export type InboxTabId = (typeof INBOX_TABS)[number]['id'];
+
+const INBOX_TAB_IDS = new Set<InboxTabId>(INBOX_TABS.map(tab => tab.id));
+
+export function resolveInboxTab(searchParams: URLSearchParams): InboxTabId {
+  const tab = searchParams.get('tab') ?? 'confirmations';
+  return INBOX_TAB_IDS.has(tab as InboxTabId) ? tab as InboxTabId : 'confirmations';
+}
+
+export function canonicalInboxPath(tab: InboxTabId): string {
+  return tab === 'confirmations' ? '/inbox' : `/inbox?tab=${tab}`;
+}
+
 export const CONVERSATIONS_TABS = [
   { id: 'live', label: 'Live Chat' },
   { id: 'sessions', label: 'Sessions & Debug' },
@@ -69,6 +91,30 @@ export function canonicalGardenDestination(
   }
   if (innerPath === '/session-recovery') {
     return scopedDestination(pathname, canonicalConversationsPath('recovery'));
+  }
+  if (innerPath === '/confirmations') {
+    return scopedDestination(pathname, canonicalInboxPath('confirmations'));
+  }
+  if (innerPath === '/escalations') {
+    return scopedDestination(pathname, canonicalInboxPath('escalations'));
+  }
+  if (innerPath === '/contact-approvals') {
+    return scopedDestination(pathname, canonicalInboxPath('contacts'));
+  }
+  if (innerPath === '/graph-proposals') {
+    return scopedDestination(pathname, canonicalInboxPath('graph'));
+  }
+  if (innerPath === '/cognitive-security/approvals') {
+    return scopedDestination(pathname, canonicalInboxPath('cogsec'));
+  }
+  if (innerPath === '/cognitive-security/remediation') {
+    return scopedDestination(pathname, canonicalInboxPath('remediation'));
+  }
+  if (innerPath === '/letters') {
+    return scopedDestination(pathname, canonicalConversationsPath('live'));
+  }
+  if (innerPath === '/doing-mirror') {
+    return scopedDestination(pathname, '/wishlist');
   }
   if (innerPath === '/chat') {
     const requestedTab = new URLSearchParams(search).get('tab');

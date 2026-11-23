@@ -17,11 +17,14 @@
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import RuleMatchProvenance from '$lib/components/cognitive-security/RuleMatchProvenance.svelte';
   import { pushToast } from '$lib/stores/toast.svelte';
+  import { notifyInboxAttentionChanged } from '$lib/nav/attention';
   import { createGardenQueueRefresh } from '$lib/polling/garden-queue-refresh';
   import {
     createSilentBackgroundRevalidation,
     reconcilePollingSnapshot,
   } from '$lib/polling/silent-background-revalidation';
+
+  let { embedded = false } = $props<{ embedded?: boolean }>();
 
   // ── Queue state ──
   let items = $state<AdminIntakeQuarantineItemView[]>([]);
@@ -261,6 +264,7 @@
     } finally {
       cancelConfirmFlow();
       await loadData();
+      notifyInboxAttentionChanged();
     }
   }
 
@@ -276,7 +280,7 @@
   });
 
   onMount(() => {
-    queueRefresh.start();
+    if (embedded) queueRefresh.start();
   });
 
   onDestroy(() => {
@@ -285,18 +289,12 @@
   });
 </script>
 
-<svelte:head>
-  <title>Cognitive Security: Approvals</title>
-</svelte:head>
-
-<div class="garden-page space-y-5">
-  <GardenPageHeader
-    eyebrow="Cognitive Security · Human review"
-    title="Quarantine Approvals"
-    description="Review content withheld by the intake firewall. Reading never releases content; every disposition is double-confirmed server-side and audit recorded."
-  >
-    {#snippet actions()}
-      <span class="text-xs text-shadow-600">Auto-refreshes every 15s</span>
+<div class={embedded ? 'space-y-5' : 'garden-page space-y-5'}>
+  {#if embedded}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">
+        Review content withheld by the intake firewall. Reading never releases content; every disposition is double-confirmed server-side and audit recorded.
+      </p>
       <button
         onclick={loadData}
         disabled={loading}
@@ -305,8 +303,7 @@
       >
         {loading ? 'Loading...' : 'Refresh'}
       </button>
-    {/snippet}
-  </GardenPageHeader>
+    </div>
 
   {#if lastDecisionResult}
     <div class="rounded border border-moss-300 bg-moss-50 px-4 py-3 text-sm text-moss-800" role="status">
@@ -796,6 +793,13 @@
         </div>
       </div>
     {/if}
+  {/if}
+  {:else}
+    <GardenPageHeader
+      eyebrow="Live Operations"
+      title="Inbox"
+      description="Quarantine approvals now live in the Inbox. Redirecting…"
+    />
   {/if}
 </div>
 

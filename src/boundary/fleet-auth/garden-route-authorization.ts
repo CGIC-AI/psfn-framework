@@ -117,7 +117,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   },
   {
     action: 'companion.read', area: 'garden_ui', routeIds: pageIds([
-      '/', '/channels', '/chat', '/primer', '/theme',
+      '/', '/channels', '/chat', '/inbox', '/primer', '/theme',
     ]),
   },
   {

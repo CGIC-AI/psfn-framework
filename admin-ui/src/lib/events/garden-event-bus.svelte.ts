@@ -35,6 +35,7 @@ let connected = $state(false);
 let connectionError = $state<WsConnectionError | null>(null);
 let paused = $state(false);
 let socket: ReconnectingWebSocket | null = null;
+let retainedConsumers = 0;
 const subscriptions = new Set<GardenEventSubscription>();
 const connectionSubscriptions = new Set<GardenEventConnectionListener>();
 const telemetryCache = new GardenTelemetryCache();
@@ -46,7 +47,8 @@ let preparedAdminToken = '';
 let preparedAdminTokenUntil = 0;
 
 onCompanionScopeChange((previousCompanionId) => {
-  disconnectGardenEventBus();
+  retainedConsumers = 0;
+  disconnectGardenEventBus(true);
   // Cancel any pending coalesced cache write before the scope changes so it
   // cannot flush the previous companion's buffer under the new cache scope,
   // and forget remembered revisions for the previous companion.
@@ -224,7 +226,24 @@ export function connectGardenEventBus(): void {
   connectionError = socket.connectionError;
 }
 
-export function disconnectGardenEventBus(): void {
+export function retainGardenEventBus(): () => void {
+  retainedConsumers += 1;
+  connectGardenEventBus();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    retainedConsumers = Math.max(0, retainedConsumers - 1);
+    if (retainedConsumers === 0) {
+      disconnectGardenEventBus(true);
+    }
+  };
+}
+
+export function disconnectGardenEventBus(force = false): void {
+  if (!force && retainedConsumers > 0) {
+    return;
+  }
   if (!socket) {
     setGardenEventBusConnected(false);
     connectionError = null;

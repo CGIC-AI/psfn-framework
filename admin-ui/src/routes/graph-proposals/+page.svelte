@@ -8,6 +8,7 @@
     type GraphProposal,
   } from '$lib/api/endpoints/graph-proposals';
   import { pushToast } from '$lib/stores/toast.svelte';
+  import { notifyInboxAttentionChanged } from '$lib/nav/attention';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
   import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
@@ -16,6 +17,8 @@
     createSilentBackgroundRevalidation,
     reconcilePollingSnapshot,
   } from '$lib/polling/silent-background-revalidation';
+
+  let { embedded = false } = $props<{ embedded?: boolean }>();
 
   let proposals = $state<GraphProposal[]>([]);
   let loading = $state(true);
@@ -76,6 +79,7 @@
         pushToast(result.message || 'Failed to approve proposal.', 'error');
       }
       await loadData();
+      notifyInboxAttentionChanged();
     } catch (e) {
       pushToast(e instanceof Error ? e.message : 'Action failed', 'error');
     }
@@ -90,6 +94,7 @@
         pushToast(result.message || 'Failed to reject proposal.', 'error');
       }
       await loadData();
+      notifyInboxAttentionChanged();
     } catch (e) {
       pushToast(e instanceof Error ? e.message : 'Action failed', 'error');
     }
@@ -101,7 +106,7 @@
     intervalMs: 15_000,
   });
   onMount(() => {
-    queueRefresh.start();
+    if (embedded) queueRefresh.start();
   });
   onDestroy(() => {
     queueRefresh.stop();
@@ -109,15 +114,12 @@
   });
 </script>
 
-<div class="garden-page space-y-5 pb-8">
-  <GardenPageHeader
-    eyebrow="Social Graph"
-    title="Graph Proposals"
-    description="Review relationship edges inferred from room evidence before they enter the live graph."
-  >
-    {#snippet actions()}
-      <div class="flex items-center gap-3">
-      <span class="text-xs text-shadow-600">Auto-refreshes every 15s</span>
+<div class={embedded ? 'space-y-5 pb-8' : 'garden-page space-y-5 pb-8'}>
+  {#if embedded}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">
+        Review relationship edges inferred from room evidence before they enter the live graph.
+      </p>
       <button
         onclick={loadData}
         disabled={loading}
@@ -125,9 +127,7 @@
       >
         {loading ? 'Loading...' : 'Refresh'}
       </button>
-      </div>
-    {/snippet}
-  </GardenPageHeader>
+    </div>
 
   {#if backgroundError}
     <p class="garden-error rounded border border-wilt-200 bg-wilt-50 px-3 py-2 text-sm text-wilt-700" role="status">
@@ -209,5 +209,12 @@
         </div>
       </BoundedList>
     </CollapsibleSection>
+  {/if}
+  {:else}
+    <GardenPageHeader
+      eyebrow="Live Operations"
+      title="Inbox"
+      description="Graph proposals now live in the Inbox. Redirecting…"
+    />
   {/if}
 </div>

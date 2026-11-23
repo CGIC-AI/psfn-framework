@@ -150,15 +150,15 @@ export function createFsTool(
     label: 'fs',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.fs,
     parameters: Type.Object({
-      action: Type.Optional(Type.Union([
+      action: Type.Union([
         Type.Literal('list'),
         Type.Literal('read'),
         Type.Literal('search'),
         Type.Literal('write'),
         Type.Literal('edit'),
       ], {
-        description: 'Filesystem action. Defaults to list for empty-argument calls.',
-      })),
+        description: 'Required filesystem action: list, read, search, write, or edit.',
+      }),
       path: Type.Optional(Type.String({
         description:
           'Directory path for action=list, or file path for action=read/write/edit. '

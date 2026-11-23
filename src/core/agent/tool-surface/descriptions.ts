@@ -49,13 +49,13 @@ const CANONICAL_TOOL_SURFACE_VARIANTS = {
   },
   companion_candidate: {
     tool: 'notify',
-    actionIds: ['send_companion'],
+    actionIds: ['initiate_companion'],
     purpose: 'Initiate the exact permitted companion contact from an authorized ICP candidate turn.',
     output: 'It returns the initiation result and lets the destination turn author peer-visible text.',
     guidance: 'Do not use this projection outside the exact candidate companion initiation.',
-    boundary: 'This send-only projection is permit-bound to the exact candidate and rejects message content or any other notification action.',
+    boundary: 'This initiation-only projection is permit-bound to the exact candidate and rejects message content or any other notification action.',
     example: {
-      action: 'send', target_kind: 'companion', contact_id: 'contact-123',
+      action: 'initiate_companion', contact_id: 'contact-123',
       initiation_permit: '11111111-1111-4111-8111-111111111111',
     },
   },
@@ -63,25 +63,32 @@ const CANONICAL_TOOL_SURFACE_VARIANTS = {
 
 export type CanonicalToolSurfaceVariantName = keyof typeof CANONICAL_TOOL_SURFACE_VARIANTS;
 
-function formatFields(fields: readonly string[]): string {
-  return fields.length === 0 ? 'none' : fields.join(', ');
+function formatAnyOf(groups: readonly (readonly string[])[]): string {
+  return groups
+    .map(group => (group.length === 1 ? group[0]! : `[${group.join(', ')}]`))
+    .join(' | ');
 }
 
 function renderActionContract(contract: CanonicalToolActionContract): string {
   const requiredParts = [
     ...(contract.required.length > 0 ? [contract.required.join(', ')] : []),
     ...(contract.requiredAnyOf ?? []).length > 0
-      ? [`one alternative of ${(contract.requiredAnyOf ?? []).map(group => `[${group.join(', ')}]`).join(' or ')}`]
+      ? [`one of: ${formatAnyOf(contract.requiredAnyOf ?? [])}`]
       : [],
     ...(contract.requiredOneOf ?? []).length > 0
-      ? [`at least one of [${(contract.requiredOneOf ?? []).join(', ')}]`]
+      ? [`>=1 of: ${(contract.requiredOneOf ?? []).join(', ')}`]
       : [],
   ];
   const invocation = contract.actionField === false
-    ? `direct ${contract.action} call without an action field`
+    ? `direct ${contract.action} call`
     : `action=${contract.action}`;
-  return `${invocation} (required: ${formatFields(requiredParts)}; optional: ${formatFields(contract.optional)}`
-    + `${contract.rule ? `; rule: ${contract.rule}` : ''})`;
+  const argParts: string[] = [];
+  if (requiredParts.length > 0) argParts.push(requiredParts.join(', '));
+  if (contract.optional.length > 0) argParts.push(`[${contract.optional.join(', ')}]`);
+  const detailParts: string[] = [];
+  if (argParts.length > 0) detailParts.push(argParts.join('; '));
+  if (contract.rule) detailParts.push(contract.rule);
+  return detailParts.length > 0 ? `${invocation} (${detailParts.join(' — ')})` : invocation;
 }
 
 function renderToolSurfaceDescription(
@@ -96,15 +103,19 @@ function renderToolSurfaceDescription(
   } = {},
 ): string {
   const actions = options.actions ?? contract.actions;
+  const actionsBlock = actions.length > 1
+    ? `Use (required args; optional in []):\n${actions.map(item => `- ${renderActionContract(item)}`).join('\n')}`
+    : `Use ${actions.map(renderActionContract).join('; ')}.`;
+  const output = options.boundary
+    ? `${options.output ?? contract.output} ${options.boundary}`
+    : options.output ?? contract.output;
   return [
     options.purpose ?? contract.purpose,
-    `Use ${actions.map(renderActionContract).join('; ')}.`,
-    options.boundary
-      ? `${options.output ?? contract.output} ${options.boundary}`
-      : options.output ?? contract.output,
+    actionsBlock,
+    output,
     options.guidance ?? contract.guidance,
     `Example: ${JSON.stringify(options.example ?? contract.example)}.`,
-  ].join(' ');
+  ].join('\n');
 }
 
 function buildCanonicalDescriptions<T extends Record<string, CanonicalToolSurfaceContract>>(

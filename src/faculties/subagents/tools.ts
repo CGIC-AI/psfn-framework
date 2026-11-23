@@ -40,7 +40,7 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
     label: 'subagent',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.subagent,
     parameters: Type.Object({
-      action: Type.Optional(Type.Union([
+      action: Type.Union([
         Type.Literal('spawn'),
         Type.Literal('message'),
         Type.Literal('wait'),
@@ -48,7 +48,7 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
         Type.Literal('status'),
         Type.Literal('discover'),
         Type.Literal('inspect'),
-      ], { description: 'Automata control action. Default: spawn.' })),
+      ], { description: 'Required automata control action: spawn, message, wait, cancel, status, discover, or inspect.' }),
       subagent_id: Type.Optional(Type.String({ description: 'The automaton id (the subagent_id returned by spawn or status) to message, wait on, cancel, or check status for.' })),
       name: Type.Optional(Type.String({ description: 'Short label for a spawned automaton.' })),
       task: Type.Optional(Type.String({ description: 'Initial bounded task for a spawned automaton.' })),

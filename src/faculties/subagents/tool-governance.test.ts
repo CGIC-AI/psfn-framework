@@ -89,15 +89,11 @@ describe('governed orient tool', () => {
     'reorient',
     'values_add',
     'values_update',
-    'create_concern',
-    'resolve_concern',
-    'transition_concern',
   ];
 
   it('passes read actions through unchanged', async () => {
     const harness = makeGoverned('orient');
     await expectPassThrough(harness, { action: 'values_list' });
-    await expectPassThrough(harness, { action: 'list_concerns', includeResolved: true });
     expect(harness.audit).not.toHaveBeenCalled();
   });
 
@@ -134,6 +130,20 @@ describe('governed orient tool', () => {
   });
 });
 
+describe('governed concerns tool', () => {
+  it('passes list through and denies create/resolve/transition', async () => {
+    const harness = makeGoverned('concerns');
+    await expectPassThrough(harness, { action: 'list', includeResolved: true });
+    expect(harness.audit).not.toHaveBeenCalled();
+    for (const action of ['create', 'resolve', 'transition']) {
+      await expectDenied(harness, { action, text: 'planted concern' }, {
+        action,
+        reason: 'mutation_not_permitted',
+      });
+    }
+  });
+});
+
 describe('governed journal tool', () => {
   it('passes reads through and denies write/append', async () => {
     const harness = makeGoverned('journal');
@@ -164,20 +174,13 @@ describe('governed wiki tool', () => {
     'write',
     'import',
     'propose_shared_world',
-    'wish_create',
-    'project_create',
-    'project_update',
-    'project_add_artifact',
-    'project_share',
-    'wardrobe_save',
-    'wardrobe_revise',
+    'world_note',
   ];
 
   it('passes explicit read actions through', async () => {
     const harness = makeGoverned('wiki');
     for (const action of [
-      'list', 'read', 'search', 'semantic_search', 'wish_list', 'wish_read',
-      'project_list', 'project_read', 'wardrobe_list', 'wardrobe_read',
+      'list', 'read', 'search', 'semantic_search', 'world_notes_read',
     ]) {
       await expectPassThrough(harness, { action, id: 'doc-1', query: 'q' });
     }
@@ -204,6 +207,36 @@ describe('governed wiki tool', () => {
     await expectDenied(harness, { title: 'New page', body: 'content' }, {
       action: 'unknown',
       reason: 'action_unresolved',
+    });
+  });
+});
+
+describe('governed projects tool', () => {
+  const MUTATIONS = [
+    'wish_create',
+    'project_create',
+    'project_update',
+    'project_add_artifact',
+    'project_share',
+    'wardrobe_save',
+    'wardrobe_revise',
+  ];
+
+  it('passes explicit read actions through', async () => {
+    const harness = makeGoverned('projects');
+    for (const action of [
+      'wish_list', 'wish_read', 'project_list', 'project_read', 'wardrobe_list', 'wardrobe_read',
+    ]) {
+      await expectPassThrough(harness, { action });
+    }
+    expect(harness.audit).not.toHaveBeenCalled();
+  });
+
+  it.each(MUTATIONS)('denies the %s mutation from a subagent context', async (action) => {
+    const harness = makeGoverned('projects');
+    await expectDenied(harness, { action }, {
+      action,
+      reason: 'mutation_not_permitted',
     });
   });
 });
@@ -241,7 +274,7 @@ describe('governed skill tool', () => {
 describe('governance policy map', () => {
   it('covers exactly the core-authoritative multiplexed surfaces', () => {
     expect([...GOVERNED_SUBAGENT_TOOL_POLICIES.keys()].sort()).toEqual([
-      'journal', 'orient', 'skill', 'wiki',
+      'concerns', 'journal', 'orient', 'projects', 'skill', 'wiki',
     ]);
     // scratchpad is deliberately ungoverned: bounded 24h ephemeral working
     // memory (c7d review disposition).

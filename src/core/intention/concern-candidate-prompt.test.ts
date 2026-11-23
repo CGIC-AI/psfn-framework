@@ -43,11 +43,11 @@ describe('pending concern candidates', () => {
     const candidates = [{ id: 'c-1', text: 'Ask how the interview went', priority: 'high' as const, createdAt: '' }];
     expect(renderPendingConcernCandidatesSection([], 'orient_tool')).toBeNull();
     expect(renderPendingConcernCandidatesSection(candidates, 'orient_tool'))
-      .toContain('orient action=transition_concern concernId=<id> status=active');
+      .toContain('concerns action=transition concernId=<id> status=active');
     expect(renderPendingConcernCandidatesSection(candidates, 'sleeptime_plan')).toContain('"concern_decisions"');
     const awareness = renderPendingConcernCandidatesSection(candidates, 'awareness_only')!;
     expect(awareness).toContain('- c-1 (high): Ask how the interview went');
-    expect(awareness).not.toContain('orient action');
+    expect(awareness).not.toContain('concerns action');
   });
 
   it('shows pending candidates in free time', () => {

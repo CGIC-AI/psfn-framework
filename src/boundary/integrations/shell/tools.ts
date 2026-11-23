@@ -35,9 +35,9 @@ export function createShellTool(ops: ShellOperations): SubstrateAgentTool {
     label: 'shell',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.shell,
     parameters: Type.Object({
-      action: Type.Optional(Type.Literal('exec', {
-        description: 'Run one fresh, isolated command. Defaults to exec.',
-      })),
+      action: Type.Literal('exec', {
+        description: 'Required shell action: exec.',
+      }),
       command: Type.Optional(Type.String({
         description:
           'Allowlisted image executable to run directly. Use bash with args ["-lc", "..."] for normal CLI work.',

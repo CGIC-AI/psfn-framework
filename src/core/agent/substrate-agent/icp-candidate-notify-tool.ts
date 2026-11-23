@@ -6,8 +6,7 @@ import { textResultWithError } from '../../tools/results.js';
 import { getCanonicalToolSurfaceDescription } from '../tool-surface/descriptions.js';
 
 const candidateNotifyParameters = Type.Object({
-  action: Type.Literal('send'),
-  target_kind: Type.Literal('companion'),
+  action: Type.Literal('initiate_companion'),
   contact_id: Type.String({
     minLength: 1,
     description: 'Exact canonical contact ID from the permitted candidate.',
@@ -19,8 +18,7 @@ const candidateNotifyParameters = Type.Object({
 }, { additionalProperties: false });
 
 function parseCandidateNotifyParams(value: unknown): {
-  action: 'send';
-  target_kind: 'companion';
+  action: 'initiate_companion';
   contact_id: string;
   initiation_permit: string;
 } {
@@ -32,8 +30,9 @@ function parseCandidateNotifyParams(value: unknown): {
     ['action', 'target_kind', 'contact_id', 'initiation_permit'],
     'candidate notify params',
   );
-  if (value.action !== 'send' || value.target_kind !== 'companion') {
-    throw new Error('candidate notify requires action=send and target_kind=companion');
+  if (value.action !== 'initiate_companion'
+    || (value.target_kind !== undefined && value.target_kind !== 'companion')) {
+    throw new Error('candidate notify requires action=initiate_companion');
   }
   if (typeof value.contact_id !== 'string'
     || value.contact_id.length === 0
@@ -44,8 +43,7 @@ function parseCandidateNotifyParams(value: unknown): {
     throw new Error('candidate notify initiation_permit must be a lowercase RFC-4122 UUID');
   }
   return {
-    action: 'send',
-    target_kind: 'companion',
+    action: 'initiate_companion',
     contact_id: value.contact_id,
     initiation_permit: value.initiation_permit,
   };
@@ -71,6 +69,7 @@ export function createIcpCandidateScopedNotifyTool(input: {
     description: getCanonicalToolSurfaceDescription('notify', 'companion_candidate')
       ?? input.notifyTool.description,
     parameters: candidateNotifyParameters,
+    modelParameters: candidateNotifyParameters,
     execute: async (toolCallId, rawParams, signal) => {
       let params: ReturnType<typeof parseCandidateNotifyParams>;
       try {

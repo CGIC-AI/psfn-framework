@@ -101,10 +101,10 @@ export function createNorthStarTool(store: NorthStarStore): SubstrateAgentTool {
     label: 'north_star',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.north_star,
     parameters: Type.Object({
-      action: Type.Optional(Type.Union(
+      action: Type.Union(
         NORTH_STAR_ACTIONS.map(action => Type.Literal(action)),
-        { description: 'North Star action. Defaults to list.' },
-      )),
+        { description: 'Required North Star action: list, create, update, delete, or reorder.' },
+      ),
       item_id: Type.Optional(Type.String({
         minLength: 1,
         description: 'North Star item id or unique prefix for update/delete.',

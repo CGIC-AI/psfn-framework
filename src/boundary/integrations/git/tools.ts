@@ -139,14 +139,14 @@ async function executeInspect(
 
 function buildActionSchema(access: RepoAccess) {
   return access === 'read_only'
-    ? Type.Optional(Type.Union([
+    ? Type.Union([
       Type.Literal('inspect'),
       Type.Literal('status'),
       Type.Literal('diff'),
     ], {
-      description: 'Repository action. Read-only mode defaults to inspect.',
-    }))
-    : Type.Optional(Type.Union([
+      description: 'Required repository action (read-only mode: inspect).',
+    })
+    : Type.Union([
       Type.Literal('inspect'),
       Type.Literal('status'),
       Type.Literal('diff'),
@@ -157,8 +157,8 @@ function buildActionSchema(access: RepoAccess) {
       Type.Literal('publish'),
       Type.Literal('open_pr'),
     ], {
-      description: 'Repository action. Defaults to inspect for empty-argument calls.',
-    }));
+      description: 'Required repository action: inspect, patch, branch, commit, or publish.',
+    });
 }
 
 export interface CreateRepoToolOptions {

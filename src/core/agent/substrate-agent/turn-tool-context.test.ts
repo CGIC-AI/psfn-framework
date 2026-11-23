@@ -94,7 +94,7 @@ describe('readActiveTurnToolSchemas', () => {
     expect(schemas).toHaveLength(1);
     expect(schemas[0]).toMatchObject({
       name: 'contact',
-      description: expect.stringMatching(/action=search\b[^;]*required: query\b/),
+      description: expect.stringMatching(/action=search\s*\(query\)/),
       inputSchema: {
         properties: {
           query: expect.objectContaining({

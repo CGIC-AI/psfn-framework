@@ -454,10 +454,9 @@ export function createSessionTool(options: UnifiedSessionToolOptions): Substrate
     label: 'session',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.session,
     parameters: Type.Object({
-      action: Type.Optional(Type.Union(SESSION_TOOL_ACTION_NAMES.map((action) => Type.Literal(action)), {
-        description:
-          'Session action. Defaults to list when omitted and no action-specific parameters are provided.',
-      })),
+      action: Type.Union(SESSION_TOOL_ACTION_NAMES.map((action) => Type.Literal(action)), {
+        description: 'Required session action.',
+      }),
       limit: Type.Optional(Type.Integer({
         minimum: 1,
         maximum: MAX_SESSION_LIST_LIMIT,

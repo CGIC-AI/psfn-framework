@@ -53,8 +53,8 @@ export async function listPendingConcernCandidates(
 
 const DECISION_GUIDANCE: Record<ConcernCandidateDecisionSurface, readonly string[]> = {
   orient_tool: [
-    'If one genuinely matters to you, keep it: orient action=transition_concern concernId=<id> status=active.',
-    'If it does not, let it go: orient action=transition_concern concernId=<id> status=dismissed.',
+    'If one genuinely matters to you, keep it: concerns action=transition concernId=<id> status=active.',
+    'If it does not, let it go: concerns action=transition concernId=<id> status=dismissed.',
   ],
   sleeptime_plan: [
     'You can decide about them in your plan: add "concern_decisions": [{"id": "<id>", "decision": "keep" | "let_go"}].',

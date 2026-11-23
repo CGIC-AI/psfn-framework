@@ -305,11 +305,9 @@ export function createPublicationTool(deps: PublicationToolDeps): SubstrateAgent
     label: 'publication',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.publication,
     parameters: Type.Object({
-      action: Type.Optional(
-        Type.Union(
-          PUBLICATION_ACTIONS.map((a) => Type.Literal(a)),
-          { description: 'submit a new publication candidate, revise (resubmit an edited candidate), or read status. Defaults to status.' },
-        ),
+      action: Type.Union(
+        PUBLICATION_ACTIONS.map((a) => Type.Literal(a)),
+        { description: 'Required publication action: submit, revise, or status.' },
       ),
       body: Type.Optional(
         Type.String({ description: 'The exact prose you authored for this publication. Verbatim; this exact content is what an approval binds to.' }),

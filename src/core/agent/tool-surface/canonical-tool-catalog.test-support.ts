@@ -16,12 +16,14 @@ import { createNotifyTool } from '../../tools/ntfy.js';
 import { createSelfStatusTool } from '../../tools/self-status.js';
 import { createSessionTool } from '../../tools/session.js';
 import { createOrientTool } from '../../../faculties/core-memory/tools.js';
+import { createConcernsTool } from '../../intention/concerns-tool.js';
 import { createMemoryTool } from '../../../faculties/memory/tools.js';
 import { createScratchpadTool } from '../../../faculties/memory/tools/scratchpad.js';
 import { createNorthStarTool } from '../../../faculties/north-star/tools.js';
 import { createSkillTool } from '../../../faculties/skills/tools.js';
 import { createSubagentTool } from '../../../faculties/subagents/tools.js';
 import { createWikiTool } from '../../../faculties/wiki/tools.js';
+import { createProjectsTool } from '../../../faculties/wiki/projects-tool.js';
 import { createPublicationTool } from '../../cogsec/disclosure/publication-tool.js';
 import { createGenerateImageTool, createSelfieTool } from '../../../primitives/images/tools.js';
 import { createResponseControlTool } from '../no-reply-tool.js';
@@ -81,7 +83,8 @@ export function createProviderFactoryToolCatalog(): AgentTool<any>[] {
     createResponseControlTool(() => null), createFsTool(inert), createRepoTool(inert),
     createShellTool(inert), createWebTool(inert), createWorldTool(inert, inert),
     createMcpTool({ gateway: inert }),
-    createAnalysisWorkbenchTool(inert), createOrientTool(inert), createIdentityTool(inert, {
+    createAnalysisWorkbenchTool(inert), createOrientTool(inert), createConcernsTool(inert),
+    createIdentityTool(inert, {
       intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
     }),
     createMemoryTool(inert, inert), automataBus, createScratchpadTool(inert), createContactTool(inert, {
@@ -90,7 +93,7 @@ export function createProviderFactoryToolCatalog(): AgentTool<any>[] {
     createSessionTool(inert), createSelfStatusTool(inert), createSystemTool(inert),
     createSkillTool(inert), createWikiTool(inert, {
       intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
-    }), createScheduleTool(inert),
+    }), createProjectsTool(inert), createScheduleTool(inert),
     createNorthStarTool(inert), createNotifyTool(inert),
     createGenerateImageTool(inert), createSelfieTool(inert), createSubagentTool(inert),
     createJournalTool(inert), createPublicationTool(inert),

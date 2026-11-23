@@ -79,12 +79,12 @@ export function createWebTool(
     label: 'web',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.web,
     parameters: Type.Object({
-      action: Type.Optional(Type.Union(
+      action: Type.Union(
         WEB_ACTIONS.map((value) => Type.Literal(value)),
         {
-          description: 'Web action. Defaults to fetch.',
+          description: 'Required web action: fetch or search.',
         },
-      )),
+      ),
       target: Type.Optional(Type.String({
         description: 'Absolute URL for fetch, or a research query for search.',
       })),

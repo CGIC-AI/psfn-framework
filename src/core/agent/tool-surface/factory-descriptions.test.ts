@@ -67,6 +67,24 @@ function countCompleteSentences(description: string): number {
   return description.match(/[.!?](?=\s|$)/gu)?.length ?? 0;
 }
 
+function schemaRequiresField(schema: unknown, field: string): boolean {
+  if (!isRecord(schema)) return false;
+  if (Array.isArray(schema.required) && schema.required.includes(field)) {
+    return true;
+  }
+  const unionBranches = [
+    ...(Array.isArray(schema.anyOf) ? schema.anyOf : []),
+    ...(Array.isArray(schema.oneOf) ? schema.oneOf : []),
+  ];
+  if (unionBranches.length > 0) {
+    return unionBranches.every(branch => schemaRequiresField(branch, field));
+  }
+  if (Array.isArray(schema.allOf) && schema.allOf.length > 0) {
+    return schema.allOf.some(branch => schemaRequiresField(branch, field));
+  }
+  return false;
+}
+
 describe('canonical first-party tool factories', () => {
   it('enumerates every canonical registry surface exactly once', () => {
     const factoryNames = createProviderFactoryToolCatalog().map(tool => tool.name).sort();
@@ -145,6 +163,24 @@ describe('canonical first-party tool factories', () => {
         ]) {
           expect(propertyNames.has(field), `${tool.name}/${action.id} unknown field ${field}`).toBe(true);
         }
+      }
+    }
+  });
+
+  it('marks action required in JSON Schema on every action-multiplexed canonical tool (b3h5p.2)', () => {
+    for (const tool of createProviderFactoryToolCatalog()) {
+      const surface = CANONICAL_FIRST_PARTY_TOOL_SURFACES.find(entry => entry.name === tool.name);
+      if (!surface?.actions || surface.actions.length === 0) continue;
+      expect(
+        schemaRequiresField(tool.parameters, 'action'),
+        `${tool.name}.parameters must mark action required in JSON Schema`,
+      ).toBe(true);
+      const modelParams = (tool as { modelParameters?: unknown }).modelParameters;
+      if (modelParams !== undefined) {
+        expect(
+          schemaRequiresField(modelParams, 'action'),
+          `${tool.name}.modelParameters must mark action required in JSON Schema`,
+        ).toBe(true);
       }
     }
   });

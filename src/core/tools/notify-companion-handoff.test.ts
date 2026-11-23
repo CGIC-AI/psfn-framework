@@ -151,19 +151,25 @@ function candidateSchedulerMessage() {
 describe('permit-governed notify companion handoff', () => {
   it('advertises content-free open-dyad discovery and private-intent continuation', () => {
     const schema = tool(runtime()).parameters;
+    expect(Value.Check(schema, { action: 'list_dyads' })).toBe(true);
     expect(Value.Check(schema, { action: 'list_dyads', target_kind: 'companion' })).toBe(true);
     expect(Value.Check(schema, {
-      action: 'send',
-      target_kind: 'companion',
+      action: 'send_companion',
       dyad_id: '77777777-7777-4777-8777-777777777777',
       private_intent: 'Check in naturally.',
     })).toBe(true);
     expect(Value.Check(schema, {
+      action: 'send_companion',
+      dyad_id: '77777777-7777-4777-8777-777777777777',
+      private_intent: 'Check in naturally.',
+      message: 'raw peer-visible content',
+    })).toBe(false);
+    // action=send is strictly external-only (un-overloaded in b3h5p.2).
+    expect(Value.Check(schema, {
       action: 'send',
       target_kind: 'companion',
       dyad_id: '77777777-7777-4777-8777-777777777777',
       private_intent: 'Check in naturally.',
-      message: 'raw peer-visible content',
     })).toBe(false);
   });
 
@@ -238,8 +244,7 @@ describe('permit-governed notify companion handoff', () => {
     'queues an owned open-dyad continuation from %s without an initiation permit', async channelId => {
     const owner = runtime();
     const params = {
-      action: 'send' as const,
-      target_kind: 'companion' as const,
+      action: 'send_companion' as const,
       dyad_id: '77777777-7777-4777-8777-777777777777',
       private_intent: 'Check in naturally.',
     };
@@ -273,8 +278,7 @@ describe('permit-governed notify companion handoff', () => {
   it('allows direct authored sibling DM messages on an open dyad during free time and blocks reflection/journal turns (eoj3s.5)', async () => {
     const owner = runtime();
     const directParams = {
-      action: 'send' as const,
-      target_kind: 'companion' as const,
+      action: 'send_companion' as const,
       dyad_id: '77777777-7777-4777-8777-777777777777',
       message: 'Hey! I was just sketching an idea during free time and thought of you.',
     };
@@ -467,8 +471,7 @@ describe('permit-governed notify companion handoff', () => {
   it('advertises an exact companion variant that excludes raw delivery fields', () => {
     const schema = tool(runtime()).parameters;
     const exact = {
-      action: 'send',
-      target_kind: 'companion',
+      action: 'initiate_companion',
       contact_id: 'peer-contact-b',
       initiation_permit: PERMIT_ID,
     };
@@ -481,8 +484,7 @@ describe('permit-governed notify companion handoff', () => {
   it('queues a content-free exact contact/permit handoff and redacts the permit from output', async () => {
     const owner = runtime();
     const result = await ordinaryContext(async () => await tool(owner).execute('call-1', {
-      action: 'send',
-      target_kind: 'companion',
+      action: 'initiate_companion',
       contact_id: 'peer-contact-b',
       initiation_permit: PERMIT_ID,
     }));
@@ -499,8 +501,7 @@ describe('permit-governed notify companion handoff', () => {
   ])('strictly rejects mixed/raw companion send fields: %j', async extra => {
     const owner = runtime();
     const result = await ordinaryContext(async () => await tool(owner).execute('call-2', {
-      action: 'send',
-      target_kind: 'companion',
+      action: 'initiate_companion',
       contact_id: 'peer-contact-b',
       initiation_permit: PERMIT_ID,
       ...extra,
@@ -517,8 +518,7 @@ describe('permit-governed notify companion handoff', () => {
       requesterProvenance: 'human',
       icpCorrelation: {} as never,
     }, async () => await tool(owner).execute('call-3', {
-      action: 'send',
-      target_kind: 'companion',
+      action: 'initiate_companion',
       contact_id: 'peer-contact-b',
       initiation_permit: PERMIT_ID,
     }));
@@ -540,8 +540,7 @@ describe('permit-governed notify companion handoff', () => {
             id: 'call-outreach',
             name: 'notify',
             arguments: {
-              action: 'send',
-              target_kind: 'companion',
+              action: 'initiate_companion',
               contact_id: 'peer-contact-b',
               initiation_permit: PERMIT_ID,
             },
@@ -585,8 +584,7 @@ describe('permit-governed notify companion handoff', () => {
             id: 'call-outreach',
             name: 'notify',
             arguments: {
-              action: 'send',
-              target_kind: 'companion',
+              action: 'initiate_companion',
               contact_id: 'peer-contact-b',
               initiation_permit: PERMIT_ID,
             },
@@ -617,8 +615,7 @@ describe('permit-governed notify companion handoff', () => {
             id: 'call-outreach',
             name: 'notify',
             arguments: {
-              action: 'send',
-              target_kind: 'companion',
+              action: 'initiate_companion',
               contact_id: 'peer-contact-b',
               initiation_permit: PERMIT_ID,
             },

@@ -186,7 +186,6 @@ function resolveContactRequirement(
 
 const ORIENT_READ_ACTIONS = new Set([
   'values_list',
-  'list_concerns',
 ]);
 const ORIENT_WRITE_ACTIONS = new Set([
   'append',
@@ -194,14 +193,20 @@ const ORIENT_WRITE_ACTIONS = new Set([
   'reorient',
   'values_add',
   'values_update',
-  'create_concern',
-  'resolve_concern',
-  'transition_concern',
 ]);
 
 function resolveOrientRequirement(action: string | null): CapabilityRequirement {
   if (actionIn(action, ORIENT_READ_ACTIONS)) return 'identity.read';
   if (actionIn(action, ORIENT_WRITE_ACTIONS)) return 'identity.write.runtime';
+  return IDENTITY_READ_RUNTIME_WRITE;
+}
+
+const CONCERNS_READ_ACTIONS = new Set(['list']);
+const CONCERNS_WRITE_ACTIONS = new Set(['create', 'resolve', 'transition']);
+
+function resolveConcernsRequirement(action: string | null): CapabilityRequirement {
+  if (actionIn(action, CONCERNS_READ_ACTIONS)) return 'identity.read';
+  if (actionIn(action, CONCERNS_WRITE_ACTIONS)) return 'identity.write.runtime';
   return IDENTITY_READ_RUNTIME_WRITE;
 }
 
@@ -292,15 +297,23 @@ function resolveNotifyRequirement(
   action: string | null,
   params: Record<string, unknown>,
 ): CapabilityRequirement {
-  if (action === 'brief' || action === 'notify_operator' || action === 'approval_request') {
+  if (action === 'brief' || action === 'notify_operator' || action === 'approval_request' || action === 'clarify') {
     return 'external.web';
   }
-  if (action === 'consider' && params.target_kind === 'companion') {
+  if (
+    action === 'initiate_companion'
+    || action === 'send_companion'
+    || action === 'consider'
+    || action === 'list_dyads'
+    || action === 'dyad_lifecycle'
+    || action === 'relay'
+  ) {
     return 'external.companion';
   }
+  if (action === 'outreach_send' || action === 'outreach_later') {
+    return NO_CAPABILITY_REQUIREMENT;
+  }
   if (action !== 'send') return NOTIFY_REQUIREMENTS;
-
-  if (params.target_kind === 'companion') return 'external.companion';
 
   const channel = typeof params.delivery_channel === 'string'
     ? params.delivery_channel.trim()
@@ -337,6 +350,7 @@ const UNIFIED_TOOL_REQUIREMENT_RESOLVERS: Readonly<Partial<Record<string, Unifie
   scratchpad: (action) => resolveScratchpadRequirement(action),
   contact: resolveContactRequirement,
   orient: (action) => resolveOrientRequirement(action),
+  concerns: (action) => resolveConcernsRequirement(action),
   session: (action) => resolveSessionRequirement(action),
   skill: (action) => resolveSkillRequirement(action),
   subagent: (action) => resolveSubagentRequirement(action),
@@ -382,6 +396,7 @@ const IMPLEMENTATION_ANNOTATED_TOOL_CAPABILITY_POLICIES = new Set([
   'schedule',
   'toolset',
   'wiki',
+  'projects',
   'publication',
 ]);
 

@@ -1228,8 +1228,7 @@ describe('production ICP candidate control-plane reachability', () => {
                 id: 'call-production-candidate-notify',
                 name: 'notify',
                 arguments: {
-                  action: 'send',
-                  target_kind: 'companion',
+                  action: 'initiate_companion',
                   contact_id: candidate.peerContactId,
                   initiation_permit: permit.permitId,
                 },
@@ -1284,7 +1283,6 @@ describe('production ICP candidate control-plane reachability', () => {
           'action',
           'contact_id',
           'initiation_permit',
-          'target_kind',
         ]);
         const stream = agentLoopWithScheduler(
           [promptMessage],
@@ -6373,8 +6371,7 @@ describe('SubstrateAgent steering + follow-up', () => {
               id: `idle-follow-up-notify-${callIndex}`,
               name: 'notify',
               arguments: {
-                action: 'send',
-                target_kind: 'companion',
+                action: 'initiate_companion',
                 contact_id: candidate.peerContactId,
                 initiation_permit: permit.permitId,
               },
@@ -6740,8 +6737,7 @@ describe('SubstrateAgent steering + follow-up', () => {
       if (this.hasQueuedMessages()) {
         const candidateNotify = agent.getActiveTurnTools().find(tool => tool.name === 'notify');
         await candidateNotify?.execute('foreign-ingress-candidate-notify', {
-          action: 'send',
-          target_kind: 'companion',
+          action: 'initiate_companion',
           contact_id: candidate.peerContactId,
           initiation_permit: permit.permitId,
         });
@@ -6958,8 +6954,7 @@ describe('SubstrateAgent steering + follow-up', () => {
       const candidateNotify = agent.getActiveTurnTools().find(tool => tool.name === 'notify');
       expect(candidateNotify).toBeDefined();
       await candidateNotify!.execute('candidate-owned-tool-phase', {
-        action: 'send',
-        target_kind: 'companion',
+        action: 'initiate_companion',
         contact_id: candidate.peerContactId,
         initiation_permit: permit.permitId,
       });

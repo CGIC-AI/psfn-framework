@@ -30,7 +30,7 @@ export const CONTINUITY_TOOL_CONTRACTS = {
     example: { action: 'search', query: 'known failure modes for this task' },
   },
   orient: {
-    purpose: 'Maintain scoped continuity blocks, values, and open threads.',
+    purpose: 'Maintain short-term working orientation blocks and your values journal.',
     actions: [
       action('append', ['block', 'text'], ['separator']),
       action('replace', ['block', 'text']),
@@ -38,14 +38,22 @@ export const CONTINUITY_TOOL_CONTRACTS = {
       action('values_list', [], ['limit']),
       action('values_add', ['value'], ['context']),
       action('values_update', ['version', 'value'], ['context']),
-      action('create_concern', ['text'], ['priority', 'status', 'salience', 'sensitivity', 'owner', 'evidenceRefs', 'reopenResolved', 'nextReviewAt', 'contactId', 'source']),
-      action('list_concerns', [], ['contactId', 'includeResolved', 'includeExpired', 'limit']),
-      action('resolve_concern', [], ['outcome', 'evidenceRefs'], { id: 'resolve_concern', requiredAnyOf: [['concernId'], ['concernIds']] }),
-      action('transition_concern', ['status'], ['outcome', 'evidenceRefs', 'nextReviewAt', 'clearNextReview', 'salience'], { id: 'transition_concern', requiredAnyOf: [['concernId'], ['concernIds']] }),
     ],
-    output: 'It writes scoped orientation state and returns exact IDs or revisions without redefining identity.',
-    guidance: 'Do not store durable facts or personal reflections here; use memory, journal, north_star, or identity for their respective domains.',
-    example: { action: 'create_concern', text: 'Check whether the promised follow-up happened tomorrow.', priority: 'medium' },
+    output: 'It writes scoped working orientation or values state and returns exact revisions without redefining identity.',
+    guidance: 'Use orient for short-term working direction and values, not active commitments (use concerns), enduring goals (use north_star), atomic memories (use memory), personal reflections (use journal), or persona edits (use identity).',
+    example: { action: 'append', block: 'goals', text: 'Finish reviewing the greenhouse layout this afternoon.' },
+  },
+  concerns: {
+    purpose: 'Track active commitments, open threads, and care items that need follow-through.',
+    actions: [
+      action('list', [], ['contactId', 'includeResolved', 'includeExpired', 'limit']),
+      action('create', ['text'], ['priority', 'status', 'salience', 'sensitivity', 'owner', 'evidenceRefs', 'reopenResolved', 'nextReviewAt', 'contactId', 'source']),
+      action('resolve', [], ['outcome', 'evidenceRefs'], { id: 'resolve', requiredAnyOf: [['concernId'], ['concernIds']] }),
+      action('transition', ['status'], ['outcome', 'evidenceRefs', 'nextReviewAt', 'clearNextReview', 'salience'], { id: 'transition', requiredAnyOf: [['concernId'], ['concernIds']] }),
+    ],
+    output: 'It returns exact concern IDs and lifecycle state filtered to the current viewer.',
+    guidance: 'Use concerns for untimed active commitments and open threads, not timed reminders (use schedule), short-term working blocks (use orient), enduring goals (use north_star), or personal reflections (use journal).',
+    example: { action: 'create', text: 'Check whether the promised follow-up happened tomorrow.', priority: 'medium' },
   },
   identity: {
     purpose: 'Inspect and deliberately revise prompt layers or character-card persona fields through the audited identity boundary.',
@@ -62,17 +70,17 @@ export const CONTINUITY_TOOL_CONTRACTS = {
       action('cancel_stage', ['stage_id'], ['reason']),
     ],
     output: 'It returns layer, diff, revision, persona, or staged-change state and never bypasses safeguards.',
-    guidance: 'Do not use identity for current open threads or long-horizon intent; use orient or north_star.',
+    guidance: 'Do not use identity for current working direction, active commitments, or enduring goals; use orient, concerns, or north_star.',
     example: { action: 'diff_layer', layer_id: 'runtime', version: 2 },
   },
   memory: {
-    purpose: 'Store and retrieve durable typed memories that should survive beyond the current session.',
+    purpose: 'Store and retrieve durable atomic memory fragments, emotions, and episodic recall.',
     actions: [
       action('write', ['text', 'type'], ['importance', 'emotional_valence', 'confidence', 'tags', 'sensitivity', 'formation_vad']),
       action('search', ['query'], ['limit']),
       action('episode_search', ['query'], ['limit', 'channel_id', 'trust_level', 'channel_visibility', 'canonical_contact_id'], {
         id: 'episode_search',
-        rule: 'hybrid-searches visible canonical episodes, reports lexical/semantic mode health, and returns exact episode ids for action=get drill-down',
+        rule: 'hybrid-searches visible canonical episodes and returns exact episode ids for action=get drill-down',
       }),
       action('get', ['episode_id'], ['limit', 'channel_id', 'trust_level', 'channel_visibility', 'canonical_contact_id'], {
         id: 'get',
@@ -86,27 +94,27 @@ export const CONTINUITY_TOOL_CONTRACTS = {
       action('patch', ['memory_id'], ['text', 'importance', 'emotional_valence', 'confidence', 'tags', 'append_tags', 'formation_vad', 'clear_formation_vad', 'reason']),
       action('redact', ['memory_id'], ['operation', 'reason'], {
         id: 'redact',
-        rule: 'retired because redaction removes active memory; use the justified deletion proposal action',
+        rule: 'retired; use action=delete to submit a justified deletion proposal',
       }),
       action('delete', ['memory_id', 'justification_category', 'explanation'], [], {
         id: 'delete',
-        rule: 'creates a durable Partner-alerted proposal; only an authenticated Operator approval applies the reversible soft delete',
+        rule: 'creates a durable Partner-alerted deletion proposal; Operator approval applies the reversible soft delete',
       }),
       action('restore', ['delete_id']),
     ],
     output: 'It returns exact memory, episode-turn, event, deletion-proposal, delete, or provenance identifiers instead of changing unrelated records silently.',
-    guidance: 'Use episode_search for deliberate event recall, then get with an exact returned episode ID for source-turn evidence. Do not use durable memory as a scratch file, journal, transcript index, or reference wiki.',
+    guidance: 'Use memory for atomic facts, emotions, and episodic recall (episode_search then get), not personal reflections (use journal), structured plans or reference docs (use wiki), same-day working notes (use scratchpad), or active commitments (use concerns).',
     example: { action: 'episode_search', query: 'the planter repair', limit: 5 },
   },
   scratchpad: {
-    purpose: 'Keep temporary working notes and excerpts that may expire after the current day.',
+    purpose: 'Keep short-term ephemeral working notes and excerpts that expire after the current day.',
     actions: [
       action('list', [], ['limit']), action('add', ['content']),
       action('replace', ['id', 'content']), action('append', ['id', 'content']),
       action('remove', ['id']),
     ],
     output: 'It returns ephemeral note IDs and never creates a durable reminder or stable memory.',
-    guidance: 'Do not use it for lasting facts or authored notes; use memory or journal.',
+    guidance: 'Use scratchpad only for short-term same-day working notes, not structured reference docs or plans (use wiki), lasting facts (use memory), personal reflections (use journal), or active commitments (use concerns).',
     example: { action: 'add', content: 'Compare the two deployment logs after the next run.' },
   },
   contact: {

@@ -1,30 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surface/descriptions.js';
-import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
-import type { SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
+import type { AgentToolResult, SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import { textResult, textResultWithError } from '../../core/tools/results.js';
-import {
-  ACTIVE_CONCERN_EVIDENCE_KINDS,
-  ACTIVE_CONCERN_OWNERS,
-  ACTIVE_CONCERN_PRIORITIES,
-  ACTIVE_CONCERN_SENSITIVITIES,
-  ACTIVE_CONCERN_STATUSES,
-  isConcernTerminalStatus,
-  type ActiveConcern,
-  type ActiveConcernEvidenceRef,
-  type ActiveConcernOwner,
-  type ActiveConcernPriority,
-  type ActiveConcernSensitivity,
-  type ActiveConcernStatus,
-  type ActiveConcernVAD,
-} from '../../core/intention/concerns.js';
-import { emitConcernResolutionAppraisal } from '../../core/intention/concern-resolution-appraisal.js';
-import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
-import type { EventBus } from '../../shared/event-bus.js';
-import {
-  executeCreateConcernAction,
-  executeListConcernsAction,
-} from '../../core/intention/tools.js';
 import {
   executeValuesAddAction,
   executeValuesListAction,
@@ -49,10 +26,6 @@ import {
 } from './store.js';
 
 const LABEL_ENUM = [...CORE_MEMORY_LABELS];
-type AgentManagedConcernStatus = Exclude<ActiveConcernStatus, 'candidate'>;
-const AGENT_MANAGED_CONCERN_STATUSES = ACTIVE_CONCERN_STATUSES.filter(
-  (status): status is AgentManagedConcernStatus => status !== 'candidate',
-);
 const ORIENT_ACTIONS = [
   'append',
   'replace',
@@ -60,10 +33,6 @@ const ORIENT_ACTIONS = [
   'values_list',
   'values_add',
   'values_update',
-  'create_concern',
-  'list_concerns',
-  'resolve_concern',
-  'transition_concern',
 ] as const;
 type OrientAction = (typeof ORIENT_ACTIONS)[number];
 
@@ -80,16 +49,6 @@ interface CoreMemoryToolStore {
 
 export interface OrientToolOptions {
   valuesJournal?: ValuesJournalStore | null;
-  concernStore?: ConcernStorePort | null;
-  /**
-   * Live emotional VAD provider (vw3w.1). When the companion decides to resolve
-   * or transition a concern into a terminal status, this snapshots the current
-   * VAD as resolutionVAD (symmetric to formation capture). Undefined when no
-   * current state is available — no fabrication (charter 8.3).
-   */
-  resolutionVadProvider?: (concern: ActiveConcern) => ActiveConcernVAD | undefined;
-  /** Event bus for the resolution-as-appraisal relief-delta event (vw3w.1). */
-  eventBus?: EventBus | null;
 }
 
 interface OrientToolParams extends ValuesListParams {
@@ -103,42 +62,7 @@ interface OrientToolParams extends ValuesListParams {
   persona?: string;
   human?: string;
   goals?: string;
-  priority?: ActiveConcernPriority;
-  status?: AgentManagedConcernStatus;
-  salience?: number;
-  sensitivity?: ActiveConcernSensitivity;
-  owner?: ActiveConcernOwner;
-  evidenceRefs?: ActiveConcernEvidenceRef[];
-  reopenResolved?: boolean;
-  nextReviewAt?: string;
-  clearNextReview?: boolean;
-  contactId?: string;
-  source?: 'appraisal' | 'agent' | 'heartbeat';
-  includeResolved?: boolean;
-  includeExpired?: boolean;
-  concernId?: string;
-  concernIds?: string[];
-  outcome?: string;
 }
-
-const CONCERN_EVIDENCE_REF_SCHEMA = Type.Object({
-  kind: Type.Unsafe<ActiveConcernEvidenceRef['kind']>({
-    type: 'string',
-    enum: [...ACTIVE_CONCERN_EVIDENCE_KINDS],
-    description: 'Safe evidence reference kind. Do not include raw sensitive content.',
-  }),
-  ref: Type.String({
-    minLength: 1,
-    maxLength: 240,
-    description: 'Opaque id, pointer, or stable reference. Do not include raw source text.',
-  }),
-  sensitivity: Type.Optional(Type.Unsafe<ActiveConcernSensitivity>({
-    type: 'string',
-    enum: [...ACTIVE_CONCERN_SENSITIVITIES],
-  })),
-  redacted: Type.Optional(Type.Boolean()),
-  hash: Type.Optional(Type.String({ minLength: 1, maxLength: 240 })),
-});
 
 function ensureAction(raw: unknown): OrientAction | null {
   if (typeof raw !== 'string') return null;
@@ -153,20 +77,13 @@ function ensureLabel(raw: unknown): CoreMemoryLabel | null {
 }
 
 function ensureString(raw: unknown): string | null {
-  if (typeof raw !== 'string') {
-    return null;
-  }
+  if (typeof raw !== 'string') return null;
   const normalized = raw.trim();
-  if (normalized.length === 0) {
-    return null;
-  }
-  return normalized;
+  return normalized.length > 0 ? normalized : null;
 }
 
 function ensureReplacementText(raw: unknown): string | null {
-  if (typeof raw !== 'string') {
-    return null;
-  }
+  if (typeof raw !== 'string') return null;
   return raw;
 }
 
@@ -175,13 +92,6 @@ function requireValuesJournal(valuesJournal: ValuesJournalStore | null | undefin
     throw new Error('orient values support is not wired');
   }
   return valuesJournal;
-}
-
-function requireConcernStore(concernStore: ConcernStorePort | null | undefined): ConcernStorePort {
-  if (!concernStore) {
-    throw new Error('orient concern support is not wired');
-  }
-  return concernStore;
 }
 
 function validateOrientCandidacy(text: string, context: string): string | null {
@@ -220,17 +130,15 @@ export function createOrientTool(
       action: Type.Unsafe<OrientAction>({
         type: 'string',
         enum: [...ORIENT_ACTIONS],
-        description: 'Orientation action.',
+        description: 'Required orientation action.',
       }),
       block: Type.Optional(Type.Unsafe<CoreMemoryLabel>({
         type: 'string',
         enum: LABEL_ENUM,
-        description: 'Internal storage block for append/replace. persona=local continuity, human=participant or room context, goals=continuity commitments.',
+        description: 'Short-term working block for append/replace: persona=local continuity, human=participant or room context, goals=near-term focus.',
       })),
       text: Type.Optional(Type.String({
-        description:
-          'Block text for append or replace actions, or open-thread text for action=create_concern. '
-          + 'Use action=create_concern in the same turn to note something to revisit when deciding to follow up later, ask again tomorrow, or reach out tonight.',
+        description: 'Block text for action=append or action=replace.',
       })),
       separator: Type.Optional(
         Type.String({
@@ -244,12 +152,12 @@ export function createOrientTool(
         description: 'Complete replacement text for participant or room context when action=reorient.',
       })),
       goals: Type.Optional(Type.String({
-        description: 'Complete replacement text for scoped continuity commitments when action=reorient.',
+        description: 'Complete replacement text for short-term scoped goals when action=reorient.',
       })),
       limit: Type.Optional(Type.Integer({
         minimum: 1,
         maximum: 200,
-        description: 'Optional bounded limit for action=values_list or action=list_concerns.',
+        description: 'Optional bounded limit for action=values_list.',
       })),
       value: Type.Optional(Type.String({
         minLength: 1,
@@ -263,82 +171,10 @@ export function createOrientTool(
         minimum: 1,
         description: 'Existing values journal version for action=values_update.',
       })),
-      priority: Type.Optional(Type.Unsafe<ActiveConcernPriority>({
-        type: 'string',
-        enum: [...ACTIVE_CONCERN_PRIORITIES],
-        description: 'Relative priority metadata for the open thread noted with action=create_concern; prefer salience for how present it should be.',
-      })),
-      status: Type.Optional(Type.Unsafe<AgentManagedConcernStatus>({
-        type: 'string',
-        enum: [...AGENT_MANAGED_CONCERN_STATUSES],
-        description: 'Open-thread lifecycle status for action=create_concern or action=transition_concern.',
-      })),
-      salience: Type.Optional(Type.Number({
-        minimum: 0,
-        maximum: 1,
-        description: 'How present the open thread should be, from 0 to 1, for action=create_concern or action=transition_concern.',
-      })),
-      sensitivity: Type.Optional(Type.Unsafe<ActiveConcernSensitivity>({
-        type: 'string',
-        enum: [...ACTIVE_CONCERN_SENSITIVITIES],
-        description: 'Sensitivity metadata for the open thread noted with action=create_concern.',
-      })),
-      owner: Type.Optional(Type.Unsafe<ActiveConcernOwner>({
-        type: 'string',
-        enum: [...ACTIVE_CONCERN_OWNERS],
-        description: 'Lifecycle owner for the open thread noted with action=create_concern.',
-      })),
-      evidenceRefs: Type.Optional(Type.Array(CONCERN_EVIDENCE_REF_SCHEMA, {
-        maxItems: 20,
-        description: 'Safe evidence references for open-thread creation, resolution, or transition. Do not include raw sensitive content.',
-      })),
-      reopenResolved: Type.Optional(Type.Boolean({
-        description: 'For action=create_concern, true only when new evidence should reopen a matching terminal open thread.',
-      })),
-      nextReviewAt: Type.Optional(Type.String({
-        minLength: 1,
-        description: 'Optional ISO timestamp for deferred/watching lifecycle review.',
-      })),
-      clearNextReview: Type.Optional(Type.Boolean({
-        description: 'For action=transition_concern, clear any existing next review timestamp.',
-      })),
-      contactId: Type.Optional(Type.String({
-        minLength: 1,
-        description: 'Optional contact scope for open threads used by action=create_concern or action=list_concerns.',
-      })),
-      source: Type.Optional(Type.Union([
-        Type.Literal('appraisal'),
-        Type.Literal('agent'),
-        Type.Literal('heartbeat'),
-      ], {
-        description: 'Creation source for the open thread noted with action=create_concern.',
-      })),
-      includeResolved: Type.Optional(Type.Boolean({
-        description: 'Include resolved open threads for action=list_concerns.',
-      })),
-      includeExpired: Type.Optional(Type.Boolean({
-        description: 'Include expired open threads for action=list_concerns.',
-      })),
-      concernId: Type.Optional(Type.String({
-        minLength: 1,
-        description: 'Used for action=resolve_concern. Copy the exact open-thread id returned by create_concern or list_concerns.',
-      })),
-      concernIds: Type.Optional(Type.Array(Type.String({
-        minLength: 1,
-      }), {
-        minItems: 1,
-        maxItems: 20,
-        description: 'Used for action=resolve_concern to resolve multiple open thread ids in one call.',
-      })),
-      outcome: Type.Optional(Type.String({
-        minLength: 1,
-        description: 'Optional concise resolution note for action=resolve_concern.',
-      })),
     }),
     execute: async (
       _toolCallId: string,
       params: OrientToolParams,
-      _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       const action = ensureAction(params.action);
       if (!action) {
@@ -375,147 +211,6 @@ export function createOrientTool(
               ...(params.context !== undefined ? { context: params.context } : {}),
             },
           );
-        }
-
-        if (action === 'create_concern') {
-          return executeCreateConcernAction(
-            requireConcernStore(options.concernStore),
-            {
-              text: params.text ?? '',
-              priority: params.priority,
-              contactId: params.contactId,
-              source: params.source,
-              status: params.status,
-              salience: params.salience,
-              sensitivity: params.sensitivity,
-              owner: params.owner,
-              evidenceRefs: params.evidenceRefs,
-              reopenResolved: params.reopenResolved,
-              nextReviewAt: params.nextReviewAt,
-            },
-          );
-        }
-
-        if (action === 'list_concerns') {
-          return executeListConcernsAction(
-            requireConcernStore(options.concernStore),
-            {
-              contactId: params.contactId,
-              includeResolved: params.includeResolved,
-              includeExpired: params.includeExpired,
-              limit: params.limit,
-            },
-          );
-        }
-
-        if (action === 'resolve_concern') {
-          const concernIds = Array.isArray(params.concernIds)
-            ? params.concernIds.map(ensureString).filter((id): id is string => Boolean(id))
-            : [];
-          const singleConcernId = ensureString(params.concernId);
-          if (singleConcernId) {
-            concernIds.unshift(singleConcernId);
-          }
-          const uniqueConcernIds = [...new Set(concernIds)];
-          if (uniqueConcernIds.length === 0) {
-            return textResultWithError(JSON.stringify({
-              error: 'missing_required_parameter',
-              action: 'resolve_concern',
-              required: 'concernId or concernIds',
-              hint: 'Retry orient with action="resolve_concern" and concernId or concernIds set to ids returned by create_concern or list_concerns. Do not use tool_search, fs, or analysis_workbench for this.',
-            }, null, 2), true);
-          }
-          const concernStore = requireConcernStore(options.concernStore);
-          const resolved = [];
-          const missing = [];
-          for (const concernId of uniqueConcernIds) {
-            const beforeResolution = await concernStore.getById(concernId);
-            const resolutionVAD = beforeResolution
-              ? options.resolutionVadProvider?.(beforeResolution)
-              : undefined;
-            const concern = await concernStore.resolveConcern(concernId, {
-              outcome: params.outcome,
-              evidenceRefs: params.evidenceRefs,
-              ...(resolutionVAD ? { resolutionVAD } : {}),
-            });
-            if (concern) {
-              resolved.push(concern);
-              await emitConcernResolutionAppraisal(options.eventBus, {
-                concern,
-                source: 'decision',
-              });
-            } else {
-              missing.push(concernId);
-            }
-          }
-          const resultText = JSON.stringify({
-            resolved: resolved.length,
-            missing,
-            concerns: resolved,
-          }, null, 2);
-          return missing.length > 0
-            ? textResultWithError(resultText, true)
-            : textResult(resultText);
-        }
-
-        if (action === 'transition_concern') {
-          const concernIds = Array.isArray(params.concernIds)
-            ? params.concernIds.map(ensureString).filter((id): id is string => Boolean(id))
-            : [];
-          const singleConcernId = ensureString(params.concernId);
-          if (singleConcernId) {
-            concernIds.unshift(singleConcernId);
-          }
-          const uniqueConcernIds = [...new Set(concernIds)];
-          if (uniqueConcernIds.length === 0 || !params.status) {
-            return textResultWithError(JSON.stringify({
-              error: 'missing_required_parameter',
-              action: 'transition_concern',
-              required: 'concernId or concernIds, and status',
-              hint: 'Retry orient with action="transition_concern", status, and concern id(s) returned by list_concerns.',
-            }, null, 2), true);
-          }
-          const concernStore = requireConcernStore(options.concernStore);
-          // vw3w.1: a transition into a terminal status is also a resolution —
-          // capture the live VAD so the arc is complete on this path too.
-          const transitioned = [];
-          const missing = [];
-          for (const concernId of uniqueConcernIds) {
-            const beforeTransition = await concernStore.getById(concernId);
-            const transitionResolutionVAD = isConcernTerminalStatus(params.status)
-              && beforeTransition
-              ? options.resolutionVadProvider?.(beforeTransition)
-              : undefined;
-            const concern = await concernStore.transitionConcernStatus(concernId, {
-              status: params.status,
-              outcome: params.outcome,
-              evidenceRefs: params.evidenceRefs,
-              resolutionEvidenceRefs: params.evidenceRefs,
-              nextReviewAt: params.nextReviewAt,
-              clearNextReview: params.clearNextReview,
-              salience: params.salience,
-              ...(transitionResolutionVAD ? { resolutionVAD: transitionResolutionVAD } : {}),
-            });
-            if (concern) {
-              transitioned.push(concern);
-              if (isConcernTerminalStatus(concern.status)) {
-                await emitConcernResolutionAppraisal(options.eventBus, {
-                  concern,
-                  source: 'decision',
-                });
-              }
-            } else {
-              missing.push(concernId);
-            }
-          }
-          const resultText = JSON.stringify({
-            transitioned: transitioned.length,
-            missing,
-            concerns: transitioned,
-          }, null, 2);
-          return missing.length > 0
-            ? textResultWithError(resultText, true)
-            : textResult(resultText);
         }
 
         if (action === 'append') {

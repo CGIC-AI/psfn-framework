@@ -196,6 +196,7 @@ describe('skills tools', () => {
       expect(updatedPayload.version).toBe(2);
 
       const listResult = await skillTool.execute('call-4', {
+        action: 'list',
         includeSkipped: false,
       });
       const listPayload = JSON.parse(readText(listResult)) as {
@@ -247,7 +248,7 @@ describe('skills tools', () => {
       const missingAction = await skillTool.execute('call-0', {
         name: 'needs-action',
       });
-      expect(readText(missingAction)).toContain('action is required unless using the default list behavior');
+      expect(readText(missingAction)).toContain('action is required');
       expect(missingAction.details.isError).toBe(true);
 
       const invalidCreate = await skillTool.execute('call-1', {

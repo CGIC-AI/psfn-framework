@@ -8538,14 +8538,14 @@
     },
     {
       "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.provenance_refs.minLength@L243",
+      "name": "createWikiTool.tool.parameters.provenance_refs.minLength@L237",
       "value": "1",
       "form": "object-member",
       "note": "TypeBox non-empty string schema guard (line-shifted after b3h5p.2 megatool split)"
     },
     {
       "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.provenance_refs.minLength@L244",
+      "name": "createWikiTool.tool.parameters.provenance_refs.minLength@L238",
       "value": "1",
       "form": "object-member",
       "note": "TypeBox non-empty string schema guard (line-shifted after b3h5p.2 megatool split)"
@@ -8580,14 +8580,14 @@
     },
     {
       "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.tags.minLength@L233",
+      "name": "createWikiTool.tool.parameters.tags.minLength@L227",
       "value": "1",
       "form": "object-member",
       "note": "TypeBox non-empty string schema guard (line-shifted after b3h5p.2 megatool split)"
     },
     {
       "file": "src/faculties/wiki/tools.ts",
-      "name": "createWikiTool.tool.parameters.tags.minLength@L234",
+      "name": "createWikiTool.tool.parameters.tags.minLength@L228",
       "value": "1",
       "form": "object-member",
       "note": "TypeBox non-empty string schema guard (line-shifted after b3h5p.2 megatool split)"

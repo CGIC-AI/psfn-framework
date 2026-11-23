@@ -99,12 +99,6 @@ interface WikiToolParams {
 function normalizeAction(params: WikiToolParams): WikiAction {
   const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
   if (!rawAction) {
-    const hasQuery = typeof params.query === 'string' && params.query.trim().length > 0;
-    const hasId = typeof params.id === 'string' && params.id.trim().length > 0;
-    const hasWriteFields = typeof params.title === 'string' || typeof params.body === 'string';
-    if (hasQuery) return 'search';
-    if (hasId && !hasWriteFields) return 'read';
-    if (!hasId && !hasWriteFields) return 'list';
     throw new Error(`action is required. Supported actions: ${WIKI_ACTIONS.join(', ')}`);
   }
   if (isWikiAction(rawAction)) return rawAction;

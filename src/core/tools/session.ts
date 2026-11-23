@@ -253,15 +253,7 @@ function rejectBackgroundSessionMutation(action: 'new' | 'resume') {
 function normalizeSessionAction(params: SessionToolParams): SessionToolAction {
   const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
   if (!rawAction) {
-    const hasNonListParams = Object.entries(params).some(([key, value]) => (
-      key !== 'action'
-      && key !== 'limit'
-      && value !== undefined
-    ));
-    if (!hasNonListParams) {
-      return 'list';
-    }
-    throw new Error(`action is required unless using the default list behavior (${SESSION_TOOL_ACTION_HELP})`);
+    throw new Error(`action is required. Supported actions: ${SESSION_TOOL_ACTION_HELP}`);
   }
 
   switch (rawAction) {
@@ -531,11 +523,17 @@ export function createSessionTool(options: UnifiedSessionToolOptions): Substrate
     }),
     execute: async (
       _toolCallId: string,
-      params: SessionToolParams,
+      params: SessionToolParams = {},
       signal?: AbortSignal,
     ): Promise<AgentToolResult<Record<string, unknown>>> => {
+      let action: SessionToolAction;
       try {
-        switch (normalizeSessionAction(params)) {
+        action = normalizeSessionAction(params);
+      } catch (error) {
+        return textResultWithError(`session failed: ${toErrorMessage(error)}`, true);
+      }
+      try {
+        switch (action) {
           case 'list':
             return executeSessionListAction(options.manager, options, {
               ...(typeof params.limit === 'number' ? { limit: params.limit } : {}),

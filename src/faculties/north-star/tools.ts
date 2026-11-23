@@ -68,9 +68,8 @@ function resolveItemByPrefix(store: NorthStarStore, rawId: unknown): NorthStarIt
 }
 
 function normalizeAction(value: unknown): NorthStarAction {
-  if (value === undefined) return 'list';
-  if (typeof value !== 'string') {
-    throw new Error(`action must be one of: ${NORTH_STAR_ACTIONS.join(', ')}`);
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`action is required. Supported actions: ${NORTH_STAR_ACTIONS.join(', ')}`);
   }
   const normalized = value.trim();
   if ((NORTH_STAR_ACTIONS as readonly string[]).includes(normalized)) {

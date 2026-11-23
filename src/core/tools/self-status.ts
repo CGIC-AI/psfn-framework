@@ -577,6 +577,15 @@ export async function buildSelfStatusResult(
   return buildSelfStatusSnapshot(runtime, params);
 }
 
+const SELF_STATUS_ACTIONS = [
+  'capabilities',
+  'snapshot',
+  'diagnose',
+  'logs',
+  'conformance',
+  ...SELF_AVAILABILITY_ACTIONS,
+] as const;
+
 export function createSelfStatusTool(runtime: SelfStatusToolRuntime): SubstrateAgentTool {
   return {
     name: 'self_status',
@@ -584,14 +593,7 @@ export function createSelfStatusTool(runtime: SelfStatusToolRuntime): SubstrateA
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.self_status,
     parameters: Type.Object({
       action: Type.Union(
-        [
-          Type.Literal('capabilities'),
-          Type.Literal('snapshot'),
-          Type.Literal('diagnose'),
-          Type.Literal('logs'),
-          Type.Literal('conformance'),
-          ...SELF_AVAILABILITY_ACTIONS.map(action => Type.Literal(action)),
-        ],
+        SELF_STATUS_ACTIONS.map(action => Type.Literal(action)),
         {
           description: 'Required self_status action: capabilities, snapshot, diagnose, logs, conformance, or availability_*.',
         },
@@ -642,27 +644,41 @@ export function createSelfStatusTool(runtime: SelfStatusToolRuntime): SubstrateA
       _toolCallId: string,
       params: SelfStatusParams = {},
     ): Promise<AgentToolResult<unknown>> => {
-      if (params.action && SELF_AVAILABILITY_ACTIONS.includes(params.action as SelfAvailabilityAction)) {
+      const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
+      if (!rawAction) {
+        return textResultWithError(
+          `self_status failed: action is required. Supported actions: ${SELF_STATUS_ACTIONS.join(', ')}.`,
+          true,
+        );
+      }
+      if (!SELF_STATUS_ACTIONS.includes(rawAction as (typeof SELF_STATUS_ACTIONS)[number])) {
+        return textResultWithError(
+          `self_status failed: action must be one of: ${SELF_STATUS_ACTIONS.join(', ')}.`,
+          true,
+        );
+      }
+      const action = rawAction as NonNullable<SelfStatusParams['action']>;
+      if (SELF_AVAILABILITY_ACTIONS.includes(action as SelfAvailabilityAction)) {
         if (!runtime.availability) {
           return textResultWithError(
-            `self_status action="${params.action}" is unavailable: ICP availability runtime is not wired.`,
+            `self_status action="${action}" is unavailable: ICP availability runtime is not wired.`,
             true,
           );
         }
         return await executeSelfAvailabilityAction({
           runtime: runtime.availability,
-          params: params as Parameters<typeof executeSelfAvailabilityAction>[0]['params'],
+          params: { ...params, action } as Parameters<typeof executeSelfAvailabilityAction>[0]['params'],
           nowMs: runtime.now?.(),
         });
       }
-      if (params.action === 'conformance') {
+      if (action === 'conformance') {
         if (!runtime.runConformance) {
           return textResultWithError('self_status action="conformance" is unavailable: conformance runner is not wired.', true);
         }
         const result = await runtime.runConformance('manual');
         return textResult(JSON.stringify(result, null, 2));
       }
-      return textResult(JSON.stringify(await buildSelfStatusResult(runtime, params), null, 2));
+      return textResult(JSON.stringify(await buildSelfStatusResult(runtime, { ...params, action }), null, 2));
     },
   };
 }

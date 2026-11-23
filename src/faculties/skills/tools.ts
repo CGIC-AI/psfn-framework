@@ -392,16 +392,7 @@ async function screenSkillWrite(
 function normalizeSkillAction(params: SkillToolParams): SkillToolAction {
   const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
   if (!rawAction) {
-    const hasNonListParams = Object.entries(params).some(([key, value]) => (
-      key !== 'action'
-      && key !== 'includeSkipped'
-      && key !== 'includeContent'
-      && value !== undefined
-    ));
-    if (!hasNonListParams) {
-      return 'list';
-    }
-    throw new Error(`action is required unless using the default list behavior (${SKILL_TOOL_ACTION_HELP})`);
+    throw new Error(`action is required. Supported actions: ${SKILL_TOOL_ACTION_HELP}`);
   }
 
   switch (rawAction) {

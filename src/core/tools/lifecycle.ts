@@ -633,8 +633,10 @@ function executeKubeRebuildRefusal(
 
 function normalizeSystemAction(params: SystemToolParams): SystemAction {
   const action = typeof params.action === 'string' ? params.action.trim() : '';
+  if (!action) {
+    throw new Error('action is required. Use action=read|restart|rebuild.');
+  }
   switch (action) {
-    case '':
     case 'read':
     case 'settings_get':
       return 'read';

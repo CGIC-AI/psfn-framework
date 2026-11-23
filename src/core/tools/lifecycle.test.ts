@@ -671,14 +671,18 @@ describe('createSystemTool', () => {
     runBuildCommand = vi.fn(async () => {});
   });
 
-  it('reads runtime settings through action=read and defaults to read behavior', async () => {
+  it('reads runtime settings through action=read and rejects missing action', async () => {
     const tool = createSystemTool(makeConfig());
 
     const single = await tool.execute('system-read-single', { action: 'read', key: 'analysisWorkbenchMaxSubQueries' });
     expect(JSON.parse(resultText(single)).value).toBe(9);
 
-    const listed = await tool.execute('system-read-default', { list: true });
+    const listed = await tool.execute('system-read-list', { action: 'read', list: true });
     expect(JSON.parse(resultText(listed)).mode).toBe('list');
+
+    const missingAction = await tool.execute('system-missing-action', {});
+    expect(missingAction.details?.isError).toBe(true);
+    expect(resultText(missingAction)).toContain('action is required');
   });
 
   it('delegates restart and rebuild actions through the current lifecycle runtime', async () => {

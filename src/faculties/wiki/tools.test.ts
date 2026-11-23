@@ -119,18 +119,23 @@ describe('wiki tool', () => {
     expect(read.boundary).toContain('not transcript memory');
 
     const searched = JSON.parse(resultText(await tool.execute('search', {
+      action: 'search',
       query: 'Garden',
     }))) as { count: number; boundary: string; matches: Array<{ id: string }> };
     expect(searched.count).toBe(1);
     expect(searched.matches[0]?.id).toBe(written.document.id);
     expect(searched.boundary).toContain('not lived memory');
 
-    const listed = JSON.parse(resultText(await tool.execute('list', {}))) as {
+    const listed = JSON.parse(resultText(await tool.execute('list', { action: 'list' }))) as {
       documents: Array<{ id: string }>;
       boundary: string;
     };
     expect(listed.documents.map(document => document.id)).toEqual([written.document.id]);
     expect(listed.boundary).toContain('separate from L0/L0.1/L2 memory');
+
+    const missingAction = await tool.execute('missing-action', {});
+    expect(missingAction.details?.isError).toBe(true);
+    expect(resultText(missingAction)).toContain('action is required');
   });
 
   it('screens benign wiki content and applies it through a real envelope', async () => {

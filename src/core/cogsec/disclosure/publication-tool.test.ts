@@ -206,11 +206,11 @@ describe('createPublicationTool — companion-owned publication edit loop', () =
     expect(status.candidates).toMatchObject([{ candidateId: 'cand-1', status: 'denied' }]);
   });
 
-  it('defaults to the status action when none is given', async () => {
+  it('rejects empty arguments when no action is given', async () => {
     const tool = makeTool();
-    const parsed = parseResult(await tool.execute('t', {}));
-    expect(parsed.action).toBe('status');
-    expect(parsed.candidates).toEqual([]);
+    const res = await tool.execute('t', {});
+    expect(res.details.isError).toBe(true);
+    expect(resultText(res)).toContain('action is required');
   });
 
   // ── Revise = fresh candidate; prior approval invalidated for the edit ───────

@@ -11,8 +11,11 @@
   import type { ConsoleNavigationGroup } from '$lib/nav/presentation';
   import {
     ATTENTION_SOURCES,
+    createAttentionRefreshController,
     mergeAttentionPollResults,
+    resetInboxTabCounts,
     type AttentionCounts,
+    type AttentionRefreshController,
     type AttentionScopeKey,
     shouldResetAttentionCounts,
     updateAttentionCountsIfChanged,
@@ -72,14 +75,17 @@
   const sidebarSubtitle = $derived(resolveThemeTemplate(activeTheme.ui.sidebarSubtitleTemplate, { companionName }));
   const appTitle = $derived(resolveThemeTemplate(activeTheme.ui.appTitleTemplate, { companionName }));
 
-  // ── Human-in-the-loop attention badges (polled, fail-quiet) ──
+  // ── Human-in-the-loop attention badges (push-driven via WS, fallback poll only when disconnected) ──
   let attentionCounts = $state<AttentionCounts>({});
   let attentionPollGeneration = 0;
   let attentionScopeKey: AttentionScopeKey | undefined;
+  let attentionController: AttentionRefreshController | null = null;
+  let activeAttentionFeedScope: string | null = null;
 
   function clearAttentionCounts(): void {
     attentionPollGeneration += 1;
     attentionCounts = {};
+    resetInboxTabCounts();
   }
 
   async function refreshAttentionCounts(): Promise<void> {
@@ -209,12 +215,18 @@
     }
     attentionScopeKey = nextAttentionScopeKey;
     clearToasts();
-    if (isLoginPage || isFleetPage) return;
+    if (isLoginPage || isFleetPage) {
+      activeAttentionFeedScope = null;
+      attentionController?.stop();
+      return;
+    }
     if (!isAuthResolved()) {
       void ensureAuthResolved();
       return;
     }
     if (!isAuthenticated()) {
+      activeAttentionFeedScope = null;
+      attentionController?.stop();
       clearJournalDisclosures();
       if (companionScope) {
         window.location.assign('/fleet/login');
@@ -226,6 +238,14 @@
     void ensureCompanionNameLoaded(true);
     void ensureUiPreferencesLoaded();
     if (companionScope) void refreshFleetProjection();
+    if (attentionController) {
+      const feedScope = activeCompanionId ?? 'single-companion';
+      if (activeAttentionFeedScope !== feedScope) {
+        activeAttentionFeedScope = feedScope;
+        attentionController.stop();
+        attentionController.start();
+      }
+    }
   });
 
   $effect(() => {
@@ -349,23 +369,29 @@
     mediaQuery.addEventListener('change', syncViewport);
     document.addEventListener('keydown', handleGlobalKeydown);
 
-    const attentionPoller = createVisibilityAwarePoller({
-      intervalMs: 30_000,
+    const controller = createAttentionRefreshController({
+      fallbackIntervalMs: 60_000,
       refresh: refreshAttentionCounts,
     });
+    attentionController = controller;
+    if (!isLoginPage && !isFleetPage && isAuthenticated()) {
+      activeAttentionFeedScope = activeCompanionId ?? 'single-companion';
+      controller.start();
+    }
     const fleetProjectionPoller = createVisibilityAwarePoller({
       intervalMs: 30_000,
       refresh: () => {
         if (activeCompanionId) return refreshFleetProjection();
       },
     });
-    attentionPoller.start();
     fleetProjectionPoller.start();
 
     return () => {
       mediaQuery.removeEventListener('change', syncViewport);
       document.removeEventListener('keydown', handleGlobalKeydown);
-      attentionPoller.stop();
+      activeAttentionFeedScope = null;
+      controller.stop();
+      attentionController = null;
       fleetProjectionPoller.stop();
       stopServerSessionRefresh();
       fleetProjectionController?.abort();

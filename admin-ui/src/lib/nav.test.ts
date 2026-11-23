@@ -66,3 +66,26 @@ test('Conversations is the single chat and session destination in the operator n
     groupId: 'operate',
   }]);
 });
+
+test('Inbox unifies operator approval and review queues and drops retired Letters and Doing Mirror nav items', () => {
+  const queueIds = new Set([
+    'inbox',
+    'confirmations',
+    'escalations',
+    'contact-approvals',
+    'graph-proposals',
+    'cogsec-approvals',
+    'cogsec-remediation',
+    'letters',
+    'doing-mirror',
+  ]);
+  const matched = navItems.filter(item => queueIds.has(item.id));
+
+  assert.deepEqual(matched, [{
+    id: 'inbox',
+    path: '/inbox',
+    defaultLabel: 'Inbox',
+    icon: '\u{1F4E5}',
+    groupId: 'operate',
+  }]);
+});

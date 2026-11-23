@@ -8,12 +8,15 @@
     type ContactApprovalEntry,
   } from '$lib/api/endpoints/contact-approvals';
   import { pushToast } from '$lib/stores/toast.svelte';
+  import { notifyInboxAttentionChanged } from '$lib/nav/attention';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import { createGardenQueueRefresh } from '$lib/polling/garden-queue-refresh';
   import {
     createSilentBackgroundRevalidation,
     reconcilePollingSnapshot,
   } from '$lib/polling/silent-background-revalidation';
+
+  let { embedded = false } = $props<{ embedded?: boolean }>();
 
   // ── State ──
   let entries = $state<ContactApprovalEntry[]>([]);
@@ -89,6 +92,7 @@
         pushToast(result.message || `Failed to ${action} contact approval.`, 'error');
       }
       await loadData();
+      notifyInboxAttentionChanged();
     } catch (e) {
       pushToast(e instanceof Error ? e.message : 'Action failed', 'error');
     }
@@ -101,7 +105,7 @@
   });
 
   onMount(() => {
-    queueRefresh.start();
+    if (embedded) queueRefresh.start();
   });
 
   onDestroy(() => {
@@ -110,15 +114,12 @@
   });
 </script>
 
-<div class="garden-page space-y-5 pb-8">
-  <GardenPageHeader
-    eyebrow="Memory & Identity"
-    title="Contact Approvals"
-    description="Review new speakers from approval-gated channels before contact tracking begins."
-  >
-    {#snippet actions()}
-      <div class="flex items-center gap-3">
-      <span class="text-xs text-shadow-600">Auto-refreshes every 15s</span>
+<div class={embedded ? 'space-y-5 pb-8' : 'garden-page space-y-5 pb-8'}>
+  {#if embedded}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">
+        Review new speakers from approval-gated channels before contact tracking begins.
+      </p>
       <button
         onclick={loadData}
         disabled={loading}
@@ -128,9 +129,7 @@
       >
         {loading ? 'Loading...' : 'Refresh'}
       </button>
-      </div>
-    {/snippet}
-  </GardenPageHeader>
+    </div>
 
   {#if backgroundError}
     <p class="garden-error rounded border border-wilt-200 bg-wilt-50 px-3 py-2 text-sm text-wilt-700" role="status">
@@ -290,5 +289,12 @@
       {/each}
       </section>
     </div>
+  {/if}
+  {:else}
+    <GardenPageHeader
+      eyebrow="Live Operations"
+      title="Inbox"
+      description="Contact approvals now live in the Inbox. Redirecting…"
+    />
   {/if}
 </div>

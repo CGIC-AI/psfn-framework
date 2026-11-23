@@ -1,24 +1,26 @@
-<script lang="ts">
+<script lang="ts" generics="P extends Record<string, unknown> = Record<string, never>">
   import { onMount } from 'svelte';
   import type { Component } from 'svelte';
 
   interface LazyComponentModule {
-    default: Component;
+    default: Component<P>;
   }
 
   interface Props {
     loader: () => Promise<LazyComponentModule>;
+    componentProps?: P;
     loadingLabel?: string;
     errorLabel?: string;
   }
 
   let {
     loader,
+    componentProps,
     loadingLabel = 'Loading Garden page...',
     errorLabel = 'Failed to load Garden page.',
   }: Props = $props();
 
-  let LoadedComponent = $state<Component | null>(null);
+  let LoadedComponent = $state<Component<P> | null>(null);
   let loadError = $state('');
   let loadGeneration = 0;
 
@@ -52,7 +54,8 @@
 </script>
 
 {#if LoadedComponent}
-  <LoadedComponent />
+  {@const DynamicComponent = LoadedComponent as Component<Record<string, unknown>>}
+  <DynamicComponent {...(componentProps ?? {})} />
 {:else if loadError}
   <div class="garden-error" role="alert">
     <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-wilt-100 font-semibold text-wilt-700" aria-hidden="true">!</div>

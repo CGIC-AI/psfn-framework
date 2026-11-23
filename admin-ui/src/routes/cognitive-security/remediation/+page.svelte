@@ -17,6 +17,7 @@
   } from '$lib/api/endpoints/sessions';
   import ConfirmationModal from '$lib/components/ConfirmationModal.svelte';
   import { scopeGardenPath } from '$lib/fleet/companion-scope';
+  import { notifyInboxAttentionChanged } from '$lib/nav/attention';
   import {
     listOpenSessionIntegrityIncidents,
     listRemediationSourceChannelOptions,
@@ -32,6 +33,8 @@
     ChannelInfo,
     SessionEntry,
   } from '$lib/types';
+
+  let { embedded = false } = $props<{ embedded?: boolean }>();
 
   let routes = $state<AdminSessionRouteView[]>([]);
   let channels = $state<ChannelInfo[]>([]);
@@ -270,7 +273,7 @@
   });
 
   onMount(() => {
-    void loadRoutes();
+    if (embedded) void loadRoutes();
   });
 
   function parseOptionalPositiveInteger(value: string): number | undefined {
@@ -371,6 +374,7 @@
       const cogSecData = await listCogSecEvents();
       cogSecEvents = cogSecData.events;
       await loadRoutes();
+      notifyInboxAttentionChanged();
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to apply CogSec remediation';
     } finally {
@@ -381,21 +385,17 @@
   }
 </script>
 
-<svelte:head>
-  <title>Cognitive Security: Remediation</title>
-</svelte:head>
-
-<div class="garden-page flex w-full flex-col gap-5">
-    <GardenPageHeader
-      eyebrow="Cognitive Security · Post-incident response"
-      title="CogSec Remediation"
-      description="Seal selected L0 rows, replace them with tombstones, revoke derived cognition, and optionally cut a fresh lane. Preview is required before the destructive confirmation."
-    >
-      {#snippet actions()}
-        <a class="rounded-xl border border-bark-300 bg-surface px-3 py-2 text-sm font-medium text-shadow-700 shadow-sm transition-colors hover:border-gold-300" href={scopeGardenPath('/session-recovery')}>Session recovery</a>
-        <a class="rounded-xl border border-bark-300 bg-surface px-3 py-2 text-sm font-medium text-shadow-700 shadow-sm transition-colors hover:border-gold-300" href={scopeGardenPath('/cognitive-security/approvals')}>Held content</a>
-      {/snippet}
-    </GardenPageHeader>
+<div class={embedded ? 'flex w-full flex-col gap-5' : 'garden-page flex w-full flex-col gap-5'}>
+  {#if embedded}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">
+        Seal selected L0 rows, replace them with tombstones, revoke derived cognition, and optionally cut a fresh lane. Preview is required before the destructive confirmation.
+      </p>
+      <div class="flex items-center gap-2">
+        <a class="rounded-xl border border-bark-300 bg-surface px-3 py-2 text-sm font-medium text-shadow-700 shadow-sm transition-colors hover:border-gold-300" href={scopeGardenPath('/chat?tab=recovery')}>Session recovery</a>
+        <a class="rounded-xl border border-bark-300 bg-surface px-3 py-2 text-sm font-medium text-shadow-700 shadow-sm transition-colors hover:border-gold-300" href={scopeGardenPath('/inbox?tab=cogsec')}>Held content</a>
+      </div>
+    </div>
 
     {#if error}
       <div class="garden-error rounded border border-wilt-300 bg-wilt-50 px-4 py-3 text-sm text-wilt-800">
@@ -787,6 +787,13 @@
         </div>
       </div>
     </section>
+  {:else}
+    <GardenPageHeader
+      eyebrow="Live Operations"
+      title="Inbox"
+      description="CogSec remediation now lives in the Inbox. Redirecting…"
+    />
+  {/if}
 </div>
 
 <ConfirmationModal

@@ -72,6 +72,18 @@ const modelUsageQuery = Object.freeze({
 
 const queryPolicies: Readonly<Partial<Record<string, Readonly<Partial<Record<string, GardenQueryFieldPolicy>>>>>> =
   Object.freeze({
+    '/autonomy': singleton(['tab']),
+    '/charge-budget': singleton(['tab']),
+    '/chat': singleton(['tab']),
+    '/contacts': singleton(['tab']),
+    '/identity': singleton(['tab']),
+    '/inbox': singleton(['tab']),
+    '/memory': singleton(['tab']),
+    '/models': singleton(['tab']),
+    '/places': singleton(['tab']),
+    '/subsystem-health': singleton(['tab']),
+    '/tools': singleton(['tab']),
+    '/wiki': singleton(['tab']),
     '/api/admin/audit/history': singleton([
       'limit', 'offset', 'actionType', 'decision', 'timeRange', 'source', 'query',
     ]),
@@ -383,6 +395,7 @@ export const GARDEN_CLIENT_ROUTES = Object.freeze([
   '/cognitive-security/remediation', '/concerns', '/confirmations', '/contact-approvals', '/contacts',
   '/enrollment', '/escalations', '/evals/emotion-sidecar', '/episodic-memory', '/graph-proposals',
   '/identity',
+  '/inbox',
   '/fleet-costs', '/images', '/memory', '/model-room', '/models', '/places', '/primer', '/prompt-monitor',
   '/prompts', '/room-arbiter', '/rooms', '/satellites', '/scheduler', '/session-recovery', '/sessions',
   '/settings', '/shards', '/shards/:shardId', '/skills', '/subsystem-health', '/telemetry', '/theme', '/tools',

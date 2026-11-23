@@ -12,11 +12,14 @@
     PublicationProvenanceView,
   } from '$lib/types';
   import { pushToast } from '$lib/stores/toast.svelte';
+  import { notifyInboxAttentionChanged } from '$lib/nav/attention';
   import { createGardenQueueRefresh } from '$lib/polling/garden-queue-refresh';
   import {
     createSilentBackgroundRevalidation,
     reconcilePollingSnapshot,
   } from '$lib/polling/silent-background-revalidation';
+
+  let { embedded = false } = $props<{ embedded?: boolean }>();
 
   // ── State ──
   let entries = $state<ConfirmationQueueEntryView[]>([]);
@@ -171,6 +174,7 @@
       }
       // Reload after action
       await loadData();
+      notifyInboxAttentionChanged();
     } catch (e) {
       actionMessage = e instanceof Error ? e.message : 'Action failed';
       actionIsError = true;
@@ -185,7 +189,7 @@
   });
 
   onMount(() => {
-    queueRefresh.start();
+    if (embedded) queueRefresh.start();
   });
 
   onDestroy(() => {
@@ -194,14 +198,12 @@
   });
 </script>
 
-<div class="garden-page space-y-5">
-  <GardenPageHeader
-    eyebrow="Review & Safety · Action queue"
-    title="The Gate"
-    description="Review the exact scope, provenance, and parameters of actions awaiting an operator decision."
-  >
-    {#snippet actions()}
-      <span class="text-xs text-shadow-600">Auto-refreshes every 15s</span>
+<div class={embedded ? 'space-y-5' : 'garden-page space-y-5'}>
+  {#if embedded}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="text-sm text-shadow-600">
+        Review the exact scope, provenance, and parameters of actions awaiting an operator decision.
+      </p>
       <button
         onclick={loadData}
         disabled={loading}
@@ -211,8 +213,7 @@
       >
         {loading ? 'Loading...' : 'Refresh'}
       </button>
-    {/snippet}
-  </GardenPageHeader>
+    </div>
 
   {#if backgroundError}
     <p class="garden-error rounded border border-wilt-200 bg-wilt-50 px-3 py-2 text-sm text-wilt-700" role="status">
@@ -569,5 +570,12 @@
         </article>
       {/each}
     </div>
+  {/if}
+  {:else}
+    <GardenPageHeader
+      eyebrow="Live Operations"
+      title="Inbox"
+      description="Confirmations now live in the Inbox. Redirecting…"
+    />
   {/if}
 </div>

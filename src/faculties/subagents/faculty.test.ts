@@ -932,10 +932,10 @@ describe('SubagentFaculty', () => {
         ...makeUnannotatedCatalogTool('fs'),
       },
       {
-        name: 'beads',
-        params: { action: 'create', title: 'Child-created work' },
-        requirement: 'issue.write' as const,
-        ...makeUnannotatedCatalogTool('beads'),
+        name: 'repo',
+        params: { action: 'commit', message: 'Child commit', intent: 'test' },
+        requirement: 'git.write' as const,
+        ...makeUnannotatedCatalogTool('repo'),
       },
     ];
     const faculty = new SubagentFaculty({
@@ -979,7 +979,7 @@ describe('SubagentFaculty', () => {
 
   it('grants an explicitly requested tool capability only when the parent grants it', async () => {
     const writableFs = makeUnannotatedCatalogTool('fs');
-    const writableBeads = makeUnannotatedCatalogTool('beads');
+    const writableWorld = makeUnannotatedCatalogTool('world');
     const snapshotParentCapabilityGrant = vi.fn(() => Object.freeze({
       tier: 'custom' as const,
       customTokens: Object.freeze(['identity.read', 'git.write'] as const),
@@ -995,7 +995,7 @@ describe('SubagentFaculty', () => {
       parentSystemPrompt: 'test prompt',
       snapshotParentCapabilityGrant,
       toolCatalogProvider: () => ({
-        core: [writableFs.tool, writableBeads.tool],
+        core: [writableFs.tool, writableWorld.tool],
         extended: [],
       }),
     });
@@ -1015,15 +1015,15 @@ describe('SubagentFaculty', () => {
     expect(fsResult.details).toEqual({ toolName: 'fs' });
     expect(writableFs.execute).toHaveBeenCalledTimes(1);
 
-    const beadsResult = await installedByName.get('beads')!.execute(
-      'call-beads-create',
-      { action: 'create', title: 'Unrequested mutation' },
+    const worldResult = await installedByName.get('world')!.execute(
+      'call-world-control',
+      { action: 'control', affordanceId: 'lamp-1', command: 'toggle' },
     );
-    expect(beadsResult.details).toMatchObject({
+    expect(worldResult.details).toMatchObject({
       capabilityDenied: true,
-      missingTokens: ['issue.write'],
+      missingTokens: ['world.control'],
     });
-    expect(writableBeads.execute).not.toHaveBeenCalled();
+    expect(writableWorld.execute).not.toHaveBeenCalled();
     expect(snapshotParentCapabilityGrant).toHaveBeenCalledTimes(1);
   });
 
@@ -2298,7 +2298,7 @@ describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
   function makeGovernanceCatalog() {
     const names = [
       'orient', 'identity', 'north_star', 'contact',
-      'journal', 'wiki', 'skill', 'vault', 'scratchpad',
+      'journal', 'wiki', 'skill', 'scratchpad',
     ] as const;
     const tools = Object.fromEntries(
       names.map(name => [name, makeCatalogTool(name, 'identity.read')]),
@@ -2335,7 +2335,7 @@ describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
     expect(injectedNames).not.toContain('north_star');
     expect(injectedNames).not.toContain('contact');
 
-    for (const name of ['orient', 'journal', 'wiki', 'skill', 'vault'] as const) {
+    for (const name of ['orient', 'journal', 'wiki', 'skill'] as const) {
       const injected = mockFirstPromptTools.find(tool => tool.name === name);
       expect(injected, name).toBeDefined();
       expect(injected, name).not.toBe(tools[name].tool);
@@ -2401,13 +2401,11 @@ describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
 
     // Every reproduced escalation from the bead is denied and audit-trailed.
     const deniedCalls: Array<[string, Record<string, unknown>]> = [
-      ['orient', { action: 'introspection_consent_set', enabled: false }],
       ['orient', { action: 'values_update', values: 'rewritten', version: 1 }],
       ['orient', { action: 'create_concern', content: 'planted concern' }],
       ['journal', { action: 'write', path: 'p', content: 'x' }],
       ['wiki', { action: 'write', title: 't', body: 'b' }],
       ['skill', { action: 'update', name: 's', content: 'x' }],
-      ['vault', { action: 'write', name: 'n', content: 'x' }],
     ];
     for (const [name, params] of deniedCalls) {
       const denied = await find(name).execute('call-denied', params, undefined);
@@ -2424,7 +2422,6 @@ describe('SubagentFaculty core-authoritative tool governance (p0le)', () => {
     expect(tools.journal.execute).not.toHaveBeenCalled();
     expect(tools.wiki.execute).not.toHaveBeenCalled();
     expect(tools.skill.execute).not.toHaveBeenCalled();
-    expect(tools.vault.execute).not.toHaveBeenCalled();
   });
 
   // bead 7ym.2.1 — role profiles: identity-inheritance layering + fail-closed resolution.

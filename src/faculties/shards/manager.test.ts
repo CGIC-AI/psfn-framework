@@ -2179,15 +2179,15 @@ describe('ShardManager', () => {
     expect((valuesMutation.details as { isError?: boolean }).isError).toBe(true);
     expect((valuesMutation.details as { errorClass?: string }).errorClass).toBe('policy_blocked');
 
-    // Introspection-consent mutation is denied too.
+    // Concern mutation is denied too.
     orient.execute.mockClear();
-    const consentMutation = await injectedOrient!.execute(
-      'call-orient-consent',
-      { action: 'introspection_consent_set', enabled: true } as never,
+    const concernMutation = await injectedOrient!.execute(
+      'call-orient-concern',
+      { action: 'create_concern', text: 'shard planted concern' } as never,
       undefined,
     );
     expect(orient.execute).not.toHaveBeenCalled();
-    expect((consentMutation.details as { isError?: boolean }).isError).toBe(true);
+    expect((concernMutation.details as { isError?: boolean }).isError).toBe(true);
 
     expect(auditTrail.append).toHaveBeenCalledWith('shard.tool.mutation.denied', expect.objectContaining({
       toolName: 'orient',
@@ -2196,7 +2196,7 @@ describe('ShardManager', () => {
     }));
     expect(auditTrail.append).toHaveBeenCalledWith('shard.tool.mutation.denied', expect.objectContaining({
       toolName: 'orient',
-      action: 'introspection_consent_set',
+      action: 'create_concern',
       reason: 'mutation_not_permitted',
     }));
   });

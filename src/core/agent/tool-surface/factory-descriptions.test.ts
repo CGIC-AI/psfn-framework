@@ -8,18 +8,9 @@ import {
 import { CANONICAL_FIRST_PARTY_TOOL_SURFACES } from './registry.js';
 
 const LEGACY_ACTION_ALIASES_BY_TOOL: Readonly<Record<string, ReadonlySet<string>>> = {
-  beads: new Set([
-    'issue_ready',
-    'issue_show',
-    'issue_create',
-    'issue_update',
-    'issue_close',
-    'issue_sync',
-  ]),
   repo: new Set(['status', 'diff', 'create_branch', 'open_pr']),
   skill: new Set(['skill_list', 'skill_view', 'skill_stats', 'skill_create', 'skill_update']),
   system: new Set(['settings_get', 'self_restart', 'self_rebuild']),
-  vault: new Set(['vault_read', 'vault_write', 'vault_search', 'vault_daily']),
 };
 
 function extractLiteralStrings(schema: unknown): string[] {

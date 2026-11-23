@@ -1,12 +1,10 @@
 import type { AgentTool } from '../../../boundary/pi-agent/index.js';
-import { createBeadsTool } from '../../../boundary/integrations/beads/tools.js';
 import { createFsTool } from '../../../boundary/integrations/filesystem/tools.js';
 import { createRepoTool } from '../../../boundary/integrations/git/tools.js';
 import { createJournalTool } from '../../../boundary/integrations/journal/tools.js';
 import { createAutomataBusTool } from '../../../faculties/automata/bus/worker-access.js';
 import { createMcpTool } from '../../../boundary/integrations/mcp/tools.js';
 import { createShellTool } from '../../../boundary/integrations/shell/tools.js';
-import { createVaultTool } from '../../../boundary/integrations/vault/tools.js';
 import { createWebTool } from '../../../boundary/integrations/web/tools.js';
 import { createWorldTool } from '../../../boundary/integrations/world/tools.js';
 import { createContactTool } from '../../contacts/tools.js';
@@ -17,7 +15,6 @@ import { createSystemTool } from '../../tools/lifecycle.js';
 import { createNotifyTool } from '../../tools/ntfy.js';
 import { createSelfStatusTool } from '../../tools/self-status.js';
 import { createSessionTool } from '../../tools/session.js';
-import { createLetterTool } from '../../tools/letter.js';
 import { createOrientTool } from '../../../faculties/core-memory/tools.js';
 import { createMemoryTool } from '../../../faculties/memory/tools.js';
 import { createScratchpadTool } from '../../../faculties/memory/tools/scratchpad.js';
@@ -90,12 +87,12 @@ export function createProviderFactoryToolCatalog(): AgentTool<any>[] {
     createMemoryTool(inert, inert), automataBus, createScratchpadTool(inert), createContactTool(inert, {
       intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
     }),
-    createSessionTool(inert), createLetterTool(inert), createSelfStatusTool(inert), createSystemTool(inert),
+    createSessionTool(inert), createSelfStatusTool(inert), createSystemTool(inert),
     createSkillTool(inert), createWikiTool(inert, {
       intake: INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME,
     }), createScheduleTool(inert),
-    createNorthStarTool(inert), createBeadsTool(inert), createNotifyTool(inert),
+    createNorthStarTool(inert), createNotifyTool(inert),
     createGenerateImageTool(inert), createSelfieTool(inert), createSubagentTool(inert),
-    createVaultTool(inert), createJournalTool(inert), createPublicationTool(inert),
+    createJournalTool(inert), createPublicationTool(inert),
   ];
 }

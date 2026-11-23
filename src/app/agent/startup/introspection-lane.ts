@@ -33,6 +33,7 @@ import {
 } from '../../../persistence/layout.js';
 import type { createAgentPersistenceRuntime } from '../../../persistence/runtime-factory.js';
 import type { SchedulerRuntimeConfig as SchedulerConfig } from '../../../system/config/scheduler-config.js';
+import type { JournalAutoPublisher } from '../../../boundary/integrations/journal/auto-publish.js';
 
 export interface IntrospectionLaneDeps {
   scheduler: Scheduler;
@@ -44,6 +45,7 @@ export interface IntrospectionLaneDeps {
   introspectionConsentStore: IntrospectionConsentStore;
   persistenceRuntime: Awaited<ReturnType<typeof createAgentPersistenceRuntime>>;
   companionDataDir: string;
+  journalPublisher?: Pick<JournalAutoPublisher, 'publishReflection'>;
 }
 
 export function registerIntrospectionLane(deps: IntrospectionLaneDeps): void {
@@ -57,6 +59,7 @@ export function registerIntrospectionLane(deps: IntrospectionLaneDeps): void {
     introspectionConsentStore,
     persistenceRuntime,
     companionDataDir,
+    journalPublisher,
   } = deps;
 
   const introspectionAuditConfig: IntrospectionAuditConfig = schedulerConfig.introspectionAudit
@@ -87,6 +90,7 @@ export function registerIntrospectionLane(deps: IntrospectionLaneDeps): void {
       introspectionAuditConfig,
     ),
     persistence: persistenceRuntime.introspectionLandmarkStore,
+    ...(journalPublisher ? { journalPublisher } : {}),
   });
   const introspectionValuesConsistencyRuntime = new IntrospectionValuesConsistencyRuntime({
     landmarks: persistenceRuntime.introspectionLandmarkStore,

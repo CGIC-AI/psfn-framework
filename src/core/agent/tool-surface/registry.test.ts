@@ -290,9 +290,18 @@ describe('first-party tool surface registry', () => {
       expect(getCanonicalToolSurface(name)?.exposure, `${name} should be core`).toBe('core');
     }
     // Extended = dev / admin / infrequent / heavy, reached via toolset + promotion.
-    const expectedExtended = ['repo', 'shell', 'north_star', 'beads', 'notify', 'vault'];
+    const expectedExtended = ['repo', 'shell', 'north_star', 'notify'];
     for (const name of expectedExtended) {
       expect(getCanonicalToolSurface(name)?.exposure, `${name} should be extended`).toBe('extended');
+    }
+    // Retired redundant writing/tracker surfaces and internal automatic passes
+    // must not be registered as canonical foreground companion tools (b3h5p.1).
+    for (const retiredOrBackground of [
+      'vault', 'letter', 'beads',
+      'dream', 'dream_pass', 'episodic_consolidation', 'introspection',
+    ]) {
+      expect(getCanonicalToolSurface(retiredOrBackground), `${retiredOrBackground} should not be canonical`).toBeUndefined();
+      expect(isCanonicalFirstPartyToolName(retiredOrBackground)).toBe(false);
     }
   });
 
@@ -306,10 +315,10 @@ describe('first-party tool surface registry', () => {
     }
   });
 
-  it('ranks memory, journal, and orient ahead of async letters and media/admin surfaces (e46hi)', () => {
+  it('ranks memory, journal, and orient ahead of async notify and media/admin surfaces (e46hi)', () => {
     for (const primaryTool of ['memory', 'journal', 'orient']) {
       expect(resolveToolPresentationRank(primaryTool))
-        .toBeLessThan(resolveToolPresentationRank('letter'));
+        .toBeLessThan(resolveToolPresentationRank('notify'));
       expect(resolveToolPresentationRank(primaryTool))
         .toBeLessThan(resolveToolPresentationRank('selfie_create'));
       expect(resolveToolPresentationRank(primaryTool))
@@ -319,7 +328,7 @@ describe('first-party tool surface registry', () => {
     }
     for (const syncTool of ['memory', 'journal', 'orient', 'contact', 'session', 'wiki']) {
       expect(resolveToolPresentationRank(syncTool))
-        .toBeLessThan(resolveToolPresentationRank('letter'));
+        .toBeLessThan(resolveToolPresentationRank('notify'));
     }
   });
 

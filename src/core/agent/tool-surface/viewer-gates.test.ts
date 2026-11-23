@@ -304,13 +304,13 @@ describe('central viewer read gate (o5wf5)', () => {
     expect(trustedResult.content[0]?.text).toBe('contact records');
   });
 
-  it('keeps private letters to primary trust and holds an unknown action to the strictest level', async () => {
-    const { tool, calls } = fakeTool('letter');
-    expect((await asViewer('trusted', () => tool.execute('l1', { action: 'read' }))).content[0]?.text)
+  it('holds an unknown action on a gated tool to the strictest level', async () => {
+    const { tool, calls } = fakeTool('wiki');
+    expect((await asViewer('public', () => tool.execute('w1', { action: 'read' }))).content[0]?.text)
       .toContain('withheld by visibility gating');
-    expect((await asViewer('trusted', () => tool.execute('l2', {}))).content[0]?.text)
+    expect((await asViewer('public', () => tool.execute('w2', {}))).content[0]?.text)
       .toContain('withheld by visibility gating');
-    expect((await asViewer('primary', () => tool.execute('l3', { action: 'read' }))).content[0]?.text)
+    expect((await asViewer('trusted', () => tool.execute('w3', { action: 'read' }))).content[0]?.text)
       .toBe('contact records');
     expect(calls).toHaveLength(1);
   });

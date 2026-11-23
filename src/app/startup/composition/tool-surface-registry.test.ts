@@ -8,7 +8,6 @@ describe('startup composition tool surface registry coverage', () => {
   it('keeps first-party tool names registered by shared composition paths canonical', () => {
     const compositionToolNames = [
       'analysis_workbench',
-      'beads',
       'fs',
       'identity',
       'north_star',

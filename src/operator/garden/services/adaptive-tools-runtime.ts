@@ -5,7 +5,6 @@ import {
   type RuntimeToolCatalogSnapshot,
 } from '../../../core/agent/tool-catalog.js';
 import { cloneToolWiringMeta } from '../../../core/agent/tool-wiring-validator.js';
-import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../../core/agent/tool-surface/descriptions.js';
 import type {
   RuntimeServiceHealth,
   RuntimeServiceHealthSnapshot,
@@ -29,16 +28,7 @@ interface DerivedToolDefinition {
 const CONDITIONAL_SERVICE_TOOL_DEFINITIONS = new Map<
   RuntimeServiceHealth['serviceId'],
   Omit<DerivedToolDefinition, 'registered'>
->([
-  ['vault', {
-    name: 'vault',
-    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.vault,
-    scope: 'conditional',
-    wiringMeta: {
-      requiredServices: ['vault'],
-    },
-  }],
-]);
+>();
 
 export function cloneRuntimeState(state: AdaptiveToolRuntimeState): AdaptiveToolRuntimeState {
   return {

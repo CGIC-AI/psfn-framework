@@ -18,8 +18,7 @@ export type FirstPartyToolDomain =
   | 'self_expression'
   | 'sessions'
   | 'subagents'
-  | 'system'
-  | 'tracked_work';
+  | 'system';
 
 export interface ToolCapabilityMetadata {
   kind: 'static' | 'action_aware' | 'external_policy';
@@ -200,9 +199,6 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
       'list_concerns',
       'resolve_concern',
       'transition_concern',
-      'introspection_consent_get',
-      'introspection_consent_set',
-      'introspection_turn_sensitivity_set',
     ],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
@@ -315,19 +311,6 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     ],
   },
   {
-    name: 'letter',
-    domain: 'self_expression',
-    exposure: 'core',
-    // Letters are asynchronous correspondence, not primary turn-to-turn tools;
-    // keep them ranked behind continuity, memory, orientation, and sync tools
-    // (psfn-framework-e46hi).
-    presentationRankOverride: 95,
-    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.letter,
-    actions: ['compose', 'list', 'read', 'place', 'archive', 'disposition_list', 'disposition_read'],
-    capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
-    retiredAliases: [],
-  },
-  {
     name: 'self_status',
     domain: 'system',
     exposure: 'core',
@@ -415,22 +398,6 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     ],
   },
   {
-    name: 'beads',
-    domain: 'tracked_work',
-    exposure: 'extended',
-    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.beads,
-    actions: ['ready', 'show', 'create', 'update', 'close', 'sync'],
-    capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
-    retiredAliases: [
-      retiredAlias('issue_ready', 'beads', 'hidden', 'ready', 'Tracked-work reads belong on beads.'),
-      retiredAlias('issue_show', 'beads', 'hidden', 'show', 'Tracked-work reads belong on beads.'),
-      retiredAlias('issue_create', 'beads', 'hidden', 'create', 'Tracked-work creation belongs on beads.'),
-      retiredAlias('issue_update', 'beads', 'hidden', 'update', 'Tracked-work updates belong on beads.'),
-      retiredAlias('issue_close', 'beads', 'hidden', 'close', 'Tracked-work closure belongs on beads.'),
-      retiredAlias('issue_sync', 'beads', 'hidden', 'sync', 'Tracked-work sync belongs on beads.'),
-    ],
-  },
-  {
     name: 'notify',
     domain: 'notification',
     exposure: 'extended',
@@ -487,20 +454,6 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     ],
   },
   {
-    name: 'vault',
-    domain: 'knowledge',
-    exposure: 'extended',
-    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.vault,
-    actions: ['write', 'read', 'search', 'daily'],
-    capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
-    retiredAliases: [
-      retiredAlias('vault_write', 'vault', 'hidden', 'write', 'Vault writes belong on vault.'),
-      retiredAlias('vault_read', 'vault', 'hidden', 'read', 'Vault reads belong on vault.'),
-      retiredAlias('vault_search', 'vault', 'hidden', 'search', 'Vault search belongs on vault.'),
-      retiredAlias('vault_daily', 'vault', 'hidden', 'daily', 'Vault daily-note access belongs on vault.'),
-    ],
-  },
-  {
     name: 'journal',
     domain: 'memory',
     exposure: 'core',
@@ -535,7 +488,6 @@ const TOOL_PRESENTATION_DOMAIN_RANK: Readonly<Record<FirstPartyToolDomain, numbe
   scheduler: 100,
   analysis: 110,
   subagents: 120,
-  tracked_work: 130,
   adaptive_tooling: 140,
   boundary: 160,
   system: 170,

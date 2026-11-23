@@ -1477,20 +1477,6 @@
       "value": "20"
     },
     {
-      "file": "src/boundary/integrations/beads/runtime-wiring.ts",
-      "name": "BEADS_POLICY_HYDRATION_SOURCE",
-      "value": "'beads caller-action policy'",
-      "form": "string",
-      "note": "Fixed diagnostic/protocol label BEADS_POLICY_HYDRATION_SOURCE; code-owned because callers and tests consume its semantic value as part of the implementation contract, not operator tuning."
-    },
-    {
-      "file": "src/boundary/integrations/beads/tools.ts",
-      "name": "createBeadsTool.parameters.deps.maxItems",
-      "value": "16",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createBeadsTool.parameters.deps.maxItems; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
       "file": "src/boundary/integrations/filesystem/local-ops.ts",
       "name": "DEFAULT_LIST_MAX_ENTRIES",
       "value": "200"
@@ -1787,32 +1773,6 @@
       "value": "15_000",
       "form": "object-member",
       "note": "Existing mutable policy candidate VaultOps.restartObsidianServices.execFileSync.arg2.timeout; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/boundary/integrations/vault/tools.ts",
-      "name": "createVaultTool.parameters.folder.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createVaultTool.parameters.folder.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/boundary/integrations/vault/tools.ts",
-      "name": "createVaultTool.parameters.name.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createVaultTool.parameters.name.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/boundary/integrations/vault/tools.ts",
-      "name": "createVaultTool.parameters.query.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createVaultTool.parameters.query.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/boundary/integrations/vault/tools.ts",
-      "name": "MAX_READ_CHARS",
-      "value": "12_000"
     },
     {
       "file": "src/boundary/integrations/web/search.ts",
@@ -3147,24 +3107,10 @@
     },
     {
       "file": "src/core/agent/tool-conformance/probe-registry.ts",
-      "name": "TOOL_CONFORMANCE_ACTION_REGISTRY.vault.search.limit",
-      "value": "1",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate TOOL_CONFORMANCE_ACTION_REGISTRY.vault.search.limit; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/core/agent/tool-conformance/probe-registry.ts",
       "name": "TOOL_CONFORMANCE_PROBE_REGISTRY.self_status.args.recentChannelLimit",
       "value": "1",
       "form": "object-member",
       "note": "Existing mutable policy candidate TOOL_CONFORMANCE_PROBE_REGISTRY.self_status.args.recentChannelLimit; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/core/agent/tool-conformance/probe-registry.ts",
-      "name": "TOOL_CONFORMANCE_PROBE_REGISTRY.vault.args.limit",
-      "value": "1",
-      "form": "object-member",
-      "note": "Existing mutable policy candidate TOOL_CONFORMANCE_PROBE_REGISTRY.vault.args.limit; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/core/agent/tool-conformance/store.ts",
@@ -3661,7 +3607,7 @@
     {
       "file": "src/core/cogsec/memory-candidacy.ts",
       "name": "ZERO_WIDTH_OR_DIRECTIONAL_PATTERN",
-      "value": "/[\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u206F\\uFEFF]/u",
+      "value": "/[\\u200B\\u200C\\u200E\\u200F\\u202A-\\u202E\\u2060-\\u206F\\uFEFF]/u",
       "form": "regex",
       "note": "Security/conformance policy matcher ZERO_WIDTH_OR_DIRECTIONAL_PATTERN; inventoried as named ownership debt for the security subsystem and not silently accepted as immutable configuration."
     },
@@ -6871,27 +6817,6 @@
     },
     {
       "file": "src/faculties/core-memory/tools.ts",
-      "name": "createOrientTool.parameters.allowedPublicChannelIds.maxItems",
-      "value": "64",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createOrientTool.parameters.allowedPublicChannelIds.maxItems; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/core-memory/tools.ts",
-      "name": "createOrientTool.parameters.allowedPublicChannelIds.maxLength",
-      "value": "240",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createOrientTool.parameters.allowedPublicChannelIds.maxLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/core-memory/tools.ts",
-      "name": "createOrientTool.parameters.allowedPublicChannelIds.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createOrientTool.parameters.allowedPublicChannelIds.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/core-memory/tools.ts",
       "name": "createOrientTool.parameters.concernId.minLength",
       "value": "1",
       "form": "object-member",
@@ -6952,20 +6877,6 @@
       "value": "1",
       "form": "object-member",
       "note": "Immutable parser/wire/schema contract createOrientTool.parameters.outcome.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/core-memory/tools.ts",
-      "name": "createOrientTool.parameters.reason.maxLength",
-      "value": "500",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createOrientTool.parameters.reason.maxLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
-    },
-    {
-      "file": "src/faculties/core-memory/tools.ts",
-      "name": "createOrientTool.parameters.reason.minLength",
-      "value": "1",
-      "form": "object-member",
-      "note": "Immutable parser/wire/schema contract createOrientTool.parameters.reason.minLength; code-owned because changing this lexical or protocol vocabulary requires a reviewed code release rather than mutable tuning."
     },
     {
       "file": "src/faculties/core-memory/tools.ts",
@@ -7397,7 +7308,7 @@
     {
       "file": "src/faculties/memory/episodic/synthesis/consolidation.ts",
       "name": "MIN_RELATED_THEME_OVERLAP",
-      "value": "1"
+      "value": "2"
     },
     {
       "file": "src/faculties/memory/episodic/thread-assignment.ts",
@@ -8444,7 +8355,7 @@
     {
       "file": "src/faculties/subagents/tool-governance.ts",
       "name": "ORIENT_POLICY",
-      "value": "{ readActionsHelp: 'values_list, list_concerns, introspection_consent_get', classify(params) { return classifyByActionSets( resolveExplicitAction(params), ORIENT_READ_ACTIONS, ORIENT_MUTATION_ACTIONS, ); }, }",
+      "value": "{ readActionsHelp: 'values_list, list_concerns', classify(params) { return classifyByActionSets( resolveExplicitAction(params), ORIENT_READ_ACTIONS, ORIENT_MUTATION_ACTIONS, ); }, }",
       "form": "object",
       "note": "Existing mutable policy candidate ORIENT_POLICY; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
@@ -8454,13 +8365,6 @@
       "value": "{ readActionsHelp: 'list, view, stats', classify(params) { const explicit = resolveExplicitAction(params); if (explicit !== null || !isRecord(params)) { return classifyByActionSets(explicit, SKILL_READ_ACTIONS, SKILL_MUTATION_ACTIONS); } // Mirrors normalizeSkillAction in faculties/skills/tools.ts: an omitted // action is the list read only when no action-specific params are set. const hasNonListParams = Object.entries(params).some(([key, value]) => ( key !== 'action' && key !== 'includeSkipped' && key !== 'includeContent' && value !== undefined )); if (!hasNonListParams) return { action: 'list', kind: 'read' }; return { action: null, kind: 'unresolved' }; }, }",
       "form": "object",
       "note": "Existing mutable policy candidate SKILL_POLICY; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
-    },
-    {
-      "file": "src/faculties/subagents/tool-governance.ts",
-      "name": "VAULT_POLICY",
-      "value": "{ readActionsHelp: 'read, search, daily (without content)', classify(params) { const explicit = resolveExplicitAction(params); if (!isRecord(params)) { return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } if (explicit !== null) { if (VAULT_DAILY_ACTIONS.has(explicit)) { // daily appends when content is a string and reads otherwise // (executeVaultDaily in boundary/integrations/vault/tools.ts). return typeof params.content === 'string' ? { action: explicit, kind: 'mutation' } : { action: explicit, kind: 'read' }; } return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS); } // Mirrors normalizeVaultAction's omitted-action inference, which can // resolve to a write or daily-append — classify those as mutations. const hasName = typeof params.name === 'string'; const hasContent = typeof params.content === 'string'; const hasQuery = typeof params.query === 'string'; const hasFolder = typeof params.folder === 'string'; const hasMode = typeof params.mode === 'string'; const hasLimit = typeof params.limit === 'number'; if (hasQuery && !hasName && !hasContent && !hasFolder && !hasMode) { return { action: 'search', kind: 'read' }; } if (hasName && hasContent) return { action: 'write', kind: 'mutation' }; if (hasName && !hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'read', kind: 'read' }; } if (!hasName && hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) { return { action: 'daily', kind: 'mutation' }; } return { action: null, kind: 'unresolved' }; }, }",
-      "form": "object",
-      "note": "Existing mutable policy candidate VAULT_POLICY; explicitly baselined as named migration debt by psfn-framework-7qeo1.18 and not approved as immutable code ownership."
     },
     {
       "file": "src/faculties/subagents/tools.ts",
@@ -12045,7 +11949,7 @@
     {
       "file": "src/system/config/free-time-chooser-config.ts",
       "name": "createDefaultFreeTimeChooserSettings.chooserMaxOutputTokens",
-      "value": "200",
+      "value": "1_024",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata createDefaultFreeTimeChooserSettings.chooserMaxOutputTokens; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
     },
@@ -12866,7 +12770,7 @@
     {
       "file": "src/system/config/participation-config.ts",
       "name": "createDefaultRoomParticipationLeaseSettings.maxConsecutiveMachineContinuations",
-      "value": "2",
+      "value": "4",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata createDefaultRoomParticipationLeaseSettings.maxConsecutiveMachineContinuations; the code literal is the scheduler.json socialAutonomy.roomParticipationLease bootstrap default (seeded in config/scheduler.seed.json and added by the owner migration), not a parallel runtime override."
     },
@@ -12894,7 +12798,7 @@
     {
       "file": "src/system/config/participation-config.ts",
       "name": "createDefaultRoomSignalSettings.classifier.maxOutputTokens",
-      "value": "16",
+      "value": "256",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata createDefaultRoomSignalSettings.classifier.maxOutputTokens; the code literal is the scheduler.json socialAutonomy.roomSignal bootstrap default (seeded in config/scheduler.seed.json and added by the owner migration), not a parallel runtime override."
     },
@@ -13059,14 +12963,14 @@
     {
       "file": "src/system/config/scheduler-config/background-work.ts",
       "name": "DEFAULT_BACKGROUND_WORK_TUNING.postTurn.extractionDrainRequeueDelayMs",
-      "value": "1_000",
+      "value": "5_000",
       "form": "object-member",
       "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 domain split; seed/default literal preserved, not an operator-tunable policy constant."
     },
     {
       "file": "src/system/config/scheduler-config/background-work.ts",
       "name": "DEFAULT_BACKGROUND_WORK_TUNING.postTurn.foregroundPreemptionDeferDelayMs",
-      "value": "1_000",
+      "value": "15_000",
       "form": "object-member",
       "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 domain split; seed/default literal preserved, not an operator-tunable policy constant."
     },
@@ -13094,7 +12998,7 @@
     {
       "file": "src/system/config/scheduler-config/background-work.ts",
       "name": "DEFAULT_BACKGROUND_WORK_TUNING.supervisor.retryBaseDelayMs",
-      "value": "1_000",
+      "value": "15_000",
       "form": "object-member",
       "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 domain split; seed/default literal preserved, not an operator-tunable policy constant."
     },
@@ -13255,7 +13159,7 @@
     {
       "file": "src/system/config/scheduler-config/free-time.ts",
       "name": "DEFAULT_FREE_TIME_CONFIG.budget.maxTurns",
-      "value": "1",
+      "value": "6",
       "form": "object-member",
       "note": "Scheduler owner-file default; operator-editable via scheduler.json."
     },

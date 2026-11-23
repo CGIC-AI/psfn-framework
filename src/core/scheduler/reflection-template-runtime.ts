@@ -335,7 +335,10 @@ export function createReflectionTemplateRuntime(
       limit: template.id === 'weekly-review' ? 7 : 2,
     });
     const context = assembleReflectionSubstrateContext({
-      recentReflectionJournalEntries: reflectionJournal.listRecent({ limit: 2 }),
+      recentReflectionJournalEntries: reflectionJournal.listRecent({
+        limit: 2,
+        excludeTemplateIds: ['concern_route'],
+      }),
       recentDailyJournalEntries,
       recentProcessLogEntries: reflectionProcessLog.listRecent({
         limit: 2,

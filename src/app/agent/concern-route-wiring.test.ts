@@ -52,6 +52,33 @@ describe('default concern route wiring', () => {
     });
   });
 
+  it('never writes concern_route overflow entries into reflection-journal.jsonl (b3h5p.1)', async () => {
+    const companionDataDir = mkdtempSync(join(tmpdir(), 'concern-route-no-journal-'));
+    const dispatcher = createDefaultConcernRouteDispatcher({
+      companionDataDir,
+      eventBus: new EventBus(),
+    });
+
+    const outcome = await dispatcher.dispatch({
+      target: 'introspection',
+      source: 'grooming_cap_overflow',
+      title: 'Overflow concern',
+      summary: 'Overflow concern should not pollute reflection-journal.jsonl.',
+      priority: 'low',
+      reason: 'cap reached',
+      evidenceRefs: [],
+      concernId: 'concern-overflow-1',
+    });
+
+    expect(outcome).toMatchObject({
+      disposition: 'blocked',
+      substrate: 'none',
+    });
+    const { existsSync } = await import('node:fs');
+    const { resolveReflectionJournalPath } = await import('../../persistence/layout.js');
+    expect(existsSync(resolveReflectionJournalPath(companionDataDir))).toBe(false);
+  });
+
   it('rejects partially configured pending-follow-up routing at startup', () => {
     expect(() => createDefaultConcernRouteDispatcher({
       companionDataDir: mkdtempSync(join(tmpdir(), 'concern-route-wiring-')),

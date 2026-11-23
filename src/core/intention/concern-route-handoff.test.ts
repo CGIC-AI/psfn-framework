@@ -1,10 +1,9 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../shared/event-bus.js';
 import { NorthStarStore } from '../../faculties/north-star/store.js';
-import { ReflectionJournalStore } from '../../persistence/journals/reflection-journal.js';
 import { createTestPostgresIntentionPorts } from '../../test-support/postgres-intention-ports.js';
 import { applyConcernCandidateReview, type ConcernCandidate } from './concern-candidates.js';
 import { groomConcernSet } from './concern-grooming.js';
@@ -14,7 +13,6 @@ import {
   type ConcernRouteRequest,
 } from './concern-route-handoff.js';
 import {
-  createIntrospectionRouteHandler,
   createNorthStarRouteHandler,
   createPendingFollowUpConcernRouteHandler,
 } from './concern-route-adapters.js';
@@ -187,37 +185,6 @@ describe('north-star route adapter', () => {
   });
 });
 
-describe('introspection route adapter', () => {
-  it('appends to the reflection journal with candidate/concern provenance', () => {
-    const journalPath = join(makeTempDir(), 'reflection.jsonl');
-    const store = new ReflectionJournalStore(journalPath);
-    const handler = createIntrospectionRouteHandler(store);
-
-    const result = handler.route(makeRequest({ concernId: 'concern-9' }));
-
-    expect(result.disposition).toBe('routed');
-    expect(result.substrate).toBe('reflection_journal');
-    const entries = store.listRecent({ limit: 5 });
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.substrateBoundary).toBe('intention.concern_route');
-    expect(entries[0]?.substrateProvenanceRefs).toEqual(
-      expect.arrayContaining(['message:42', 'candidate:cand-1', 'concern:concern-9', 'route-source:candidate_review']),
-    );
-    const raw = readFileSync(journalPath, 'utf-8').trim();
-    expect(raw.length).toBeGreaterThan(0);
-  });
-
-  it('falls back to the system channel id when the request carries none', () => {
-    const store = new ReflectionJournalStore(join(makeTempDir(), 'reflection.jsonl'));
-    const handler = createIntrospectionRouteHandler(store);
-    const request = makeRequest();
-    delete (request as { channelId?: string }).channelId;
-    const result = handler.route(request);
-    expect(result.disposition).toBe('routed');
-    expect(store.listRecent({ limit: 1 })[0]?.channelId).toBe('system:intention');
-  });
-});
-
 describe('pending-follow-up concern route adapter', () => {
   it('persists a due reminder as an internal review nudge without authoring an outbound message', async () => {
     const now = new Date('2026-06-29T12:00:00.000Z');
@@ -352,7 +319,7 @@ describe('applyConcernCandidateReview with route dispatcher', () => {
 });
 
 describe('groomConcernSet with route dispatcher', () => {
-  it('routes cap-overflow retirements to a durable substrate and reports outcomes', async () => {
+  it('keeps cap-overflow retirements in the concern store by default without writing to reflection-journal.jsonl (b3h5p.1)', async () => {
     const concernStore = makeConcernStore();
     const texts = [
       'Cardiology appointment logistics',
@@ -368,9 +335,14 @@ describe('groomConcernSet with route dispatcher', () => {
         expiresAt: `2026-06-30T1${i}:00:00.000Z`,
       });
     }
-    const store = new ReflectionJournalStore(join(makeTempDir(), 'reflection.jsonl'));
+    const routeSpy = vi.fn();
     const dispatcher = new ConcernRouteDispatcher({
-      handlers: { introspection: createIntrospectionRouteHandler(store) },
+      handlers: {
+        introspection: {
+          substrate: 'reflection_journal',
+          route: routeSpy,
+        },
+      },
     });
 
     const result = await groomConcernSet({
@@ -381,10 +353,44 @@ describe('groomConcernSet with route dispatcher', () => {
     });
 
     expect(result.capResolved).toHaveLength(2);
+    expect(result.routeOutcomes).toEqual([]);
+    expect(routeSpy).not.toHaveBeenCalled();
+  });
+
+  it('routes cap-overflow retirements when an explicit target substrate is requested', async () => {
+    const concernStore = makeConcernStore();
+    const texts = [
+      'Cardiology appointment logistics',
+      'Database migration rollback checklist',
+      'Voice latency regression follow up',
+      'Hydration routine check after medication change',
+      'Backup verification audit evidence',
+    ];
+    for (const [i, text] of texts.entries()) {
+      await concernStore.create({
+        text,
+        priority: i === 0 ? 'high' : 'low',
+        expiresAt: `2026-06-30T1${i}:00:00.000Z`,
+      });
+    }
+    const store = new NorthStarStore(join(makeTempDir(), 'north-star.json'));
+    const dispatcher = new ConcernRouteDispatcher({
+      handlers: { north_star: createNorthStarRouteHandler(store) },
+    });
+
+    const result = await groomConcernSet({
+      concernStore,
+      asOf: '2026-06-29T12:00:00.000Z',
+      maxActiveConcerns: 3,
+      routeDispatcher: dispatcher,
+      routeTarget: 'north_star',
+    });
+
+    expect(result.capResolved).toHaveLength(2);
     expect(result.routeOutcomes).toHaveLength(2);
     expect(result.routeOutcomes.every(o => o.disposition === 'routed')).toBe(true);
     expect(result.routeOutcomes.every(o => o.source === 'grooming_cap_overflow')).toBe(true);
-    expect(store.listRecent({ limit: 10 })).toHaveLength(2);
+    expect(store.list()).toHaveLength(2);
   });
 
   it('emits an explicit blocked-route result when the target has no handler', async () => {

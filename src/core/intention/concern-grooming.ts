@@ -18,7 +18,6 @@ import { emitConcernResolutionAppraisal } from './concern-resolution-appraisal.j
 
 const CONCERN_GROOMING_OPERATION_ID = 'concern-grooming';
 const CONCERN_GROOMING_TASK_NAME = 'Concern Grooming';
-const DEFAULT_GROOMING_ROUTE_TARGET: ConcernRouteTarget = 'introspection';
 const STALE_RESOLUTION_OUTCOME =
   'Retired from the short-time concern set after the review window elapsed.';
 const CAP_RESOLUTION_OUTCOME =
@@ -44,7 +43,7 @@ export interface GroomConcernSetOptions {
   maxActiveConcerns?: number;
   /** Durable-substrate dispatcher for retired concerns (etj1). */
   routeDispatcher?: ConcernRouteDispatcher;
-  /** Target substrate for retired concerns; defaults to introspection. */
+  /** Optional explicit target substrate for retired concerns; omitted keeps retired concerns in the concern ledger without polluting reflection-journal.jsonl. */
   routeTarget?: ConcernRouteTarget;
   /**
    * Live emotional VAD provider (vw3w.1). Grooming resolves off-turn, so it
@@ -131,15 +130,17 @@ export async function groomConcernSet(options: GroomConcernSetOptions): Promise<
     if (resolved) capResolved.push(resolved);
   }
 
-  // etj1: each retired concern becomes a concrete durable route (or an explicit
-  // blocked-route result) instead of a free-text resolution. The concern stays
-  // resolved regardless — routing failure never reopens it.
-  const routeOutcomes = await routeRetiredConcerns({
-    ...(options.routeDispatcher ? { routeDispatcher: options.routeDispatcher } : {}),
-    routeTarget: options.routeTarget ?? DEFAULT_GROOMING_ROUTE_TARGET,
-    staleResolved,
-    capResolved,
-  });
+  // Route retired concerns only when an explicit target substrate is supplied.
+  // Overflow/stale retirements stay durably recorded in the concern store and
+  // no longer pollute reflection-journal.jsonl (psfn-framework-b3h5p.1).
+  const routeOutcomes = options.routeTarget
+    ? await routeRetiredConcerns({
+        ...(options.routeDispatcher ? { routeDispatcher: options.routeDispatcher } : {}),
+        routeTarget: options.routeTarget,
+        staleResolved,
+        capResolved,
+      })
+    : [];
 
   return {
     staleResolved,

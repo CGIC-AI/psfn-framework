@@ -93,8 +93,6 @@ import { CoreMemoryStore } from '../../../faculties/core-memory/store.js';
 import { createOrientTool } from '../../../faculties/core-memory/tools.js';
 import { resolveCurrentInternalStateConcernVAD } from '../../../core/intention/concern-grooming.js';
 import { ValuesJournalStore } from '../../../faculties/values/store.js';
-import type { IntrospectionConsentStore } from '../../../faculties/introspection/consent-store.js';
-import type { IntrospectionTurnSensitivityDecisions } from '../../../faculties/introspection/turn-sensitivity.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../core/tools/analysis-workbench/types.js';
 import type {
   SandboxExecutionPort,
@@ -645,8 +643,6 @@ export interface CoreMemoryRuntimeOptions {
   sessionManager: SessionManager;
   config: SubstrateConfig;
   concernStore?: ConcernStorePort | null;
-  introspectionConsentStore?: IntrospectionConsentStore | null;
-  introspectionTurnSensitivityDecisions?: IntrospectionTurnSensitivityDecisions | null;
   /** Event bus for the concern resolution-as-appraisal relief-delta event (vw3w.1). */
   eventBus?: EventBus | null;
 }
@@ -663,8 +659,6 @@ export function wireCoreMemoryRuntime(options: CoreMemoryRuntimeOptions): CoreMe
   options.agentLoop.registerTool(createOrientTool(store, {
     valuesJournal,
     concernStore: options.concernStore ?? null,
-    introspectionConsentStore: options.introspectionConsentStore ?? null,
-    introspectionTurnSensitivityDecisions: options.introspectionTurnSensitivityDecisions ?? null,
     eventBus: options.eventBus ?? null,
     // Resolution-as-appraisal (vw3w.1): snapshot the agent's live VAD when the
     // companion decides to resolve/terminally-transition a concern.

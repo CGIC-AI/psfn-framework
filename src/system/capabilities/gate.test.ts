@@ -725,21 +725,21 @@ describe('capability tool gating', () => {
       orient.tool,
       () => accessForTier('custom', ['identity.read']),
     );
-    await orientReadOnly.execute('orient-consent-get', { action: 'introspection_consent_get' });
+    await orientReadOnly.execute('orient-list-concerns', { action: 'list_concerns' });
     expect(orient.executeSpy).toHaveBeenCalledTimes(1);
 
-    const consentSetDenied = await orientReadOnly.execute('orient-consent-set-denied', {
-      action: 'introspection_consent_set',
+    const concernCreateDenied = await orientReadOnly.execute('orient-create-concern-denied', {
+      action: 'create_concern',
     });
     expect(orient.executeSpy).toHaveBeenCalledTimes(1);
-    expect(fromAny(consentSetDenied.content[0]).text).toContain('identity.write.runtime');
+    expect(fromAny(concernCreateDenied.content[0]).text).toContain('identity.write.runtime');
 
     const orientWriteOnly = gateToolWithCapabilities(
       orient.tool,
       () => accessForTier('custom', ['identity.write.runtime']),
     );
-    await orientWriteOnly.execute('orient-consent-set', { action: 'introspection_consent_set' });
-    await orientWriteOnly.execute('orient-sensitivity-set', { action: 'introspection_turn_sensitivity_set' });
+    await orientWriteOnly.execute('orient-create-concern', { action: 'create_concern' });
+    await orientWriteOnly.execute('orient-append', { action: 'append' });
     expect(orient.executeSpy).toHaveBeenCalledTimes(3);
 
     const automataBus = createTool('automata_bus');
@@ -816,42 +816,6 @@ describe('capability tool gating', () => {
     expect(session.executeSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('gates unified vault actions by read versus runtime-write capability tokens', async () => {
-    const vault = createTool('vault');
-    const readGated = gateToolWithCapabilities(
-      vault.tool,
-      () => accessForTier('custom', ['memory.write']),
-    );
-    const readDenied = await readGated.execute('vault-read', { action: 'read', name: 'Inbox' });
-    expect(vault.executeSpy).not.toHaveBeenCalled();
-    expect(fromAny(readDenied.content[0]).text).toContain('identity.read');
-
-    const searchDenied = await readGated.execute('vault-search', { action: 'vault_search', query: 'focus' });
-    expect(vault.executeSpy).not.toHaveBeenCalled();
-    expect(fromAny(searchDenied.content[0]).text).toContain('identity.read');
-
-    const writeGated = gateToolWithCapabilities(
-      vault.tool,
-      () => accessForTier('custom', ['identity.read']),
-    );
-    const writeDenied = await writeGated.execute('vault-write', {
-      action: 'write',
-      name: 'Inbox',
-      content: 'entry',
-    });
-    expect(vault.executeSpy).not.toHaveBeenCalled();
-    expect(fromAny(writeDenied.content[0]).text).toContain('identity.write.runtime');
-
-    const dailyDenied = await writeGated.execute('vault-daily', { action: 'daily', content: 'journal' });
-    expect(vault.executeSpy).not.toHaveBeenCalled();
-    expect(fromAny(dailyDenied.content[0]).text).toContain('identity.write.runtime');
-
-    const ambiguousDenied = await writeGated.execute('vault-ambiguous', { name: 'Inbox', query: 'focus' });
-    expect(vault.executeSpy).not.toHaveBeenCalled();
-    expect(fromAny(ambiguousDenied.content[0]).text).toContain('identity.read');
-    expect(fromAny(ambiguousDenied.content[0]).text).toContain('identity.write.runtime');
-  });
-
   it('gates unified fs actions using git read/write capability requirements', async () => {
     const fsTool = createTool('fs');
     const readGated = gateToolWithCapabilities(
@@ -910,46 +874,6 @@ describe('capability tool gating', () => {
     );
     await allowedRead.execute('repo-allowed', {});
     expect(repoTool.executeSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it('gates unified beads actions by issue.* capability tokens', async () => {
-    const beads = createTool('beads');
-    const readyGated = gateToolWithCapabilities(
-      beads.tool,
-      () => accessForTier('custom', ['identity.read']),
-    );
-    const readyDenied = await readyGated.execute('beads-ready', { action: 'ready' });
-    expect(beads.executeSpy).not.toHaveBeenCalled();
-    expect(fromAny(readyDenied.content[0]).text).toContain('issue.read');
-
-    const implicitReadyGated = gateToolWithCapabilities(
-      beads.tool,
-      () => accessForTier('custom', ['issue.read']),
-    );
-    await implicitReadyGated.execute('beads-implicit-ready', {});
-    expect(beads.executeSpy).toHaveBeenCalledTimes(1);
-
-    const createGated = gateToolWithCapabilities(
-      beads.tool,
-      () => accessForTier('custom', ['issue.read']),
-    );
-    const createDenied = await createGated.execute('beads-create', { action: 'create', title: 'Tracked work' });
-    expect(beads.executeSpy).toHaveBeenCalledTimes(1);
-    expect(fromAny(createDenied.content[0]).text).toContain('issue.write');
-
-    const updateGated = gateToolWithCapabilities(
-      beads.tool,
-      () => accessForTier('apprentice'),
-    );
-    await updateGated.execute('beads-update', { action: 'issue_update', id: 'PSFN-1', status: 'in_progress' });
-    expect(beads.executeSpy).toHaveBeenCalledTimes(2);
-
-    const closeGated = gateToolWithCapabilities(
-      beads.tool,
-      () => accessForTier('autonomous'),
-    );
-    await closeGated.execute('beads-close', { action: 'close', id: 'PSFN-1', reason: 'done' });
-    expect(beads.executeSpy).toHaveBeenCalledTimes(3);
   });
 
   it('evaluates toolset capability requirements by action', async () => {

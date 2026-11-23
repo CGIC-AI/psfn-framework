@@ -71,18 +71,8 @@ export const AGENCY_TOOL_CONTRACTS = {
     guidance: 'Do not use a bounded automaton as a long-horizon shard; inspect status before messaging or cancelling, and use discover then inspect to recover durable task lineage.',
     example: { action: 'spawn', name: 'log-check', task: 'Compare the two bounded error excerpts.' },
   },
-  vault: {
-    purpose: 'Access the optional external Obsidian bridge for bounded compatibility with an existing vault.',
-    actions: [
-      action('read', ['name']), action('write', ['name', 'content'], ['folder', 'mode']),
-      action('search', ['query'], ['limit']), action('daily', [], ['content']),
-    ],
-    output: 'It returns external note material or write acknowledgement and never becomes the canonical runtime knowledge store.',
-    guidance: 'Do not use it for canonical reference knowledge or companion journals; use wiki or journal.',
-    example: { action: 'search', query: 'seedling rotation' },
-  },
   journal: {
-    purpose: 'Read and write durable companion-authored markdown notes, reflections, and topic journals.',
+    purpose: 'Read and write durable companion-authored markdown notes, personal reflections, introspection, and topic journals.',
     actions: [
       action('list'),
       action('read', [], ['offset_bytes'], { id: 'read', requiredAnyOf: [['path'], ['title']] }),
@@ -91,7 +81,7 @@ export const AGENCY_TOOL_CONTRACTS = {
       action('search', ['query'], ['limit']),
     ],
     output: 'It returns note paths or bounded markdown and writes only journal documents.',
-    guidance: 'Read long notes page by page using each next_offset_bytes value. Prefer a bounded automaton or the analysis workbench for lengthy multi-note analysis so the primary channel stays responsive. Do not use journal for same-day scratch work, follow-ups, typed facts, or reference knowledge; use their semantic tools.',
+    guidance: 'Use journal for personal reflections, introspection, and lived thoughts about what happened. Read long notes page by page using each next_offset_bytes value. Prefer a bounded automaton or the analysis workbench for lengthy multi-note analysis so the primary channel stays responsive. Do not use journal for same-day scratch work, follow-ups, typed facts, or reference knowledge; use their semantic tools.',
     example: { action: 'write', title: 'Garden observations', content: 'The basil recovered after moving into indirect light.' },
   },
 } as const satisfies Record<string, CanonicalToolSurfaceContract>;

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import {
     bulkDeleteMemories,
     bulkUpdateMemories,
@@ -44,7 +44,7 @@
   import MemoryDetailModal from './MemoryDetailModal.svelte';
 
   const memoryTabs: GardenTabItem[] = MEMORY_TABS.map(tab => ({ ...tab }));
-  const activeTab = $derived(resolveMemoryTab($page.url.searchParams));
+  const activeTab = $derived(resolveMemoryTab(page.url.searchParams));
   const loadEpisodicMemoryPage = () => import('../episodic-memory/LazyPageContent.svelte');
   let memoriesLoadStarted = false;
 
@@ -52,7 +52,6 @@
     const tab = MEMORY_TABS.find(candidate => candidate.id === id)?.id;
     if (!tab || tab === activeTab) return;
     void goto(scopeGardenPath(canonicalMemoryPath(tab)), {
-      keepFocus: true,
       noScroll: true,
     });
   }

@@ -1,25 +1,11 @@
 import { render } from 'svelte/server';
 import { describe, expect, it, vi } from 'vitest';
 
-const { mockPage } = vi.hoisted(() => {
-  let current = { url: new URL('http://localhost/inbox') };
-  const subscribers = new Set<(value: typeof current) => void>();
-  return {
-    mockPage: {
-      subscribe(run: (value: typeof current) => void) {
-        run(current);
-        subscribers.add(run);
-        return () => subscribers.delete(run);
-      },
-      set(next: typeof current) {
-        current = next;
-        for (const run of subscribers) run(current);
-      },
-    },
-  };
-});
+const { mockPage } = vi.hoisted(() => ({
+  mockPage: { url: new URL('http://localhost/inbox') },
+}));
 
-vi.mock('$app/stores', () => ({
+vi.mock('$app/state', () => ({
   page: mockPage,
 }));
 
@@ -37,7 +23,7 @@ import CogSecRemediationPage from '../cognitive-security/remediation/+page.svelt
 
 describe('canonical Inbox surface', () => {
   it('renders all 6 unified approval and review tabs with canonical URLs', () => {
-    mockPage.set({ url: new URL('http://localhost/inbox') });
+    mockPage.url = new URL('http://localhost/inbox');
     const body = render(InboxPage).body;
 
     expect(body).toContain('Inbox');

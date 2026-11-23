@@ -1,6 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { buildPrivacyChangeCandidates, contactPrivacyKey, contactChannelPrivacy, saveContactPolicyPrivacy } from './contact-privacy';
   import ContactChannelPrivacy from './ContactChannelPrivacy.svelte';
   import { getChannelEnvelopeData, type ChannelEnvelopeData } from '$lib/api/endpoints/channels';
@@ -44,7 +44,7 @@
   } from '$lib/nav/canonical-routes';
 
   const contactsTabs: GardenTabItem[] = CONTACTS_TABS.map(tab => ({ ...tab }));
-  const activeTab = $derived(resolveContactsTab($page.url.searchParams));
+  const activeTab = $derived(resolveContactsTab(page.url.searchParams));
   const loadEnrollmentPage = () => import('../enrollment/+page.svelte');
   let contactsLoadStarted = false;
 
@@ -52,7 +52,6 @@
     const tab = CONTACTS_TABS.find(candidate => candidate.id === id)?.id;
     if (!tab || tab === activeTab) return;
     void goto(scopeGardenPath(canonicalContactsPath(tab)), {
-      keepFocus: true,
       noScroll: true,
     });
   }

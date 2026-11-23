@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import ConfirmationModal from '$lib/components/ConfirmationModal.svelte';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
@@ -173,7 +173,7 @@
   }
 
   const autonomyTabs: GardenTabItem[] = AUTONOMY_TABS.map(tab => ({ ...tab }));
-  const activeTab = $derived(resolveAutonomyTab($page.url.searchParams));
+  const activeTab = $derived(resolveAutonomyTab(page.url.searchParams));
   const loadSchedulerPage = () => import('../scheduler/+page.svelte');
   const loadActionPipePage = () => import('../action-pipe/+page.svelte');
   const loadAutomataPage = () => import('../automata/+page.svelte');
@@ -182,7 +182,6 @@
     const tab = AUTONOMY_TABS.find(candidate => candidate.id === id)?.id;
     if (!tab || tab === activeTab) return;
     void goto(scopeGardenPath(canonicalAutonomyPath(tab)), {
-      keepFocus: true,
       noScroll: true,
     });
   }

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { base } from '$app/paths';
+  import { resolve } from '$app/paths';
+  const base = resolve('/').replace(/\/$/, '');
   import { setContext } from 'svelte';
   import ContextAllocationWidget from '$lib/components/garden/ContextAllocationWidget.svelte';
   import BackgroundMaintenanceControl from '$lib/components/settings/BackgroundMaintenanceControl.svelte';

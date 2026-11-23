@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import {
     fetchFleetCardDetails,
     fetchFleetPortalProjection,
@@ -23,7 +23,7 @@
     type CompanionAttentionResult,
   } from '$lib/fleet/attention-digest';
 
-  const activeView = $derived(resolveFleetView($page.url.search, $page.url.hash));
+  const activeView = $derived(resolveFleetView(page.url.search, page.url.hash));
 
   let projection = $state<FleetPortalProjection | null>(null);
   let cardDetails = $state<Record<string, FleetCardDetails>>({});

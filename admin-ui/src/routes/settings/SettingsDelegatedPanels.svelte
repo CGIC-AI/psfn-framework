@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { base } from '$app/paths';
+  import { resolve } from '$app/paths';
+  const base = resolve('/').replace(/\/$/, '');
   import ProviderRegistrySection from '$lib/components/settings/ProviderRegistrySection.svelte';
   import { settingsSimpleSectionAnchorId } from '$lib/components/settings/navigation';
   import type {

@@ -51,7 +51,6 @@ const IDENTITY_LAYER_REQUIREMENTS = [
   'identity.write.operator',
 ] as const;
 const GIT_READ_WRITE = ['git.read', 'git.write'] as const;
-const ISSUE_REQUIREMENTS = ['issue.read', 'issue.write', 'issue.close'] as const;
 const LIFECYCLE_REQUIREMENTS = ['internal.read', 'lifecycle.restart', 'lifecycle.rebuild'] as const;
 const MEMORY_REQUIREMENTS = ['identity.read', 'memory.write', 'memory.delete'] as const;
 const NOTIFY_REQUIREMENTS = ['external.web', 'external.discord', 'external.email'] as const;
@@ -188,7 +187,6 @@ function resolveContactRequirement(
 const ORIENT_READ_ACTIONS = new Set([
   'values_list',
   'list_concerns',
-  'introspection_consent_get',
 ]);
 const ORIENT_WRITE_ACTIONS = new Set([
   'append',
@@ -199,8 +197,6 @@ const ORIENT_WRITE_ACTIONS = new Set([
   'create_concern',
   'resolve_concern',
   'transition_concern',
-  'introspection_consent_set',
-  'introspection_turn_sensitivity_set',
 ]);
 
 function resolveOrientRequirement(action: string | null): CapabilityRequirement {
@@ -215,15 +211,6 @@ const SESSION_WRITE_ACTIONS = new Set(['new', 'resume', 'wake_return', 'start_fo
 function resolveSessionRequirement(action: string | null): CapabilityRequirement {
   if (actionIn(action, SESSION_READ_ACTIONS)) return 'identity.read';
   if (actionIn(action, SESSION_WRITE_ACTIONS)) return 'identity.write.runtime';
-  return IDENTITY_READ_RUNTIME_WRITE;
-}
-
-const LETTER_READ_ACTIONS = new Set(['list', 'disposition_list', 'disposition_read']);
-const LETTER_WRITE_ACTIONS = new Set(['compose', 'read', 'place', 'archive']);
-
-function resolveLetterRequirement(action: string | null): CapabilityRequirement {
-  if (actionIn(action, LETTER_READ_ACTIONS)) return 'identity.read';
-  if (actionIn(action, LETTER_WRITE_ACTIONS)) return 'identity.write.runtime';
   return IDENTITY_READ_RUNTIME_WRITE;
 }
 
@@ -255,15 +242,6 @@ function resolveSubagentRequirement(action: string | null): CapabilityRequiremen
   return ['identity.read', 'shard.spawn'];
 }
 
-const VAULT_READ_ACTIONS = new Set(['read', 'search', 'vault_search']);
-const VAULT_WRITE_ACTIONS = new Set(['write', 'daily', 'vault_write', 'vault_daily']);
-
-function resolveVaultRequirement(action: string | null): CapabilityRequirement {
-  if (actionIn(action, VAULT_READ_ACTIONS)) return 'identity.read';
-  if (actionIn(action, VAULT_WRITE_ACTIONS)) return 'identity.write.runtime';
-  return IDENTITY_READ_RUNTIME_WRITE;
-}
-
 const FS_READ_ACTIONS = new Set(['read', 'list', 'search']);
 const FS_WRITE_ACTIONS = new Set(['write', 'edit']);
 
@@ -280,17 +258,6 @@ function resolveRepoRequirement(action: string | null): CapabilityRequirement {
   if (actionIn(action, REPO_WRITE_ACTIONS)) return 'git.write';
   if (action === null || actionIn(action, REPO_READ_ACTIONS)) return 'git.read';
   return GIT_READ_WRITE;
-}
-
-const BEADS_READ_ACTIONS = new Set(['ready', 'issue_ready', 'show', 'issue_show']);
-const BEADS_WRITE_ACTIONS = new Set(['create', 'issue_create', 'update', 'issue_update']);
-const BEADS_CLOSE_ACTIONS = new Set(['close', 'issue_close', 'sync', 'issue_sync']);
-
-function resolveBeadsRequirement(action: string | null): CapabilityRequirement {
-  if (action === null || actionIn(action, BEADS_READ_ACTIONS)) return 'issue.read';
-  if (actionIn(action, BEADS_WRITE_ACTIONS)) return 'issue.write';
-  if (actionIn(action, BEADS_CLOSE_ACTIONS)) return 'issue.close';
-  return ISSUE_REQUIREMENTS;
 }
 
 // `move` (vinz.26) is deliberate navigation — virtual places and, since S13
@@ -371,16 +338,13 @@ const UNIFIED_TOOL_REQUIREMENT_RESOLVERS: Readonly<Partial<Record<string, Unifie
   contact: resolveContactRequirement,
   orient: (action) => resolveOrientRequirement(action),
   session: (action) => resolveSessionRequirement(action),
-  letter: (action) => resolveLetterRequirement(action),
   skill: (action) => resolveSkillRequirement(action),
   subagent: (action) => resolveSubagentRequirement(action),
   shard: () => 'shard.spawn',
   generate_image: () => NO_CAPABILITY_REQUIREMENT,
   selfie_create: () => NO_CAPABILITY_REQUIREMENT,
-  vault: (action) => resolveVaultRequirement(action),
   fs: (action) => resolveFsRequirement(action),
   repo: (action) => resolveRepoRequirement(action),
-  beads: (action) => resolveBeadsRequirement(action),
   world: resolveWorldRequirement,
   mcp: (action) => resolveMcpRequirement(action),
   notify: resolveNotifyRequirement,
@@ -404,21 +368,11 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   repo_diff: 'git.read',
   repo_open_pr: 'git.write',
   repo_status: 'git.read',
-  issue_ready: 'issue.read',
-  issue_show: 'issue.read',
-  issue_create: 'issue.write',
-  issue_update: 'issue.write',
-  issue_close: 'issue.close',
-  issue_sync: 'issue.close',
   settings_get: 'internal.read',
   response_control: 'identity.read',
   analysis_workbench: 'repl.execute',
   web: NO_CAPABILITY_REQUIREMENT,
   web_fetch: NO_CAPABILITY_REQUIREMENT,
-  vault_write: 'identity.write.runtime',
-  vault_read: 'identity.read',
-  vault_search: 'identity.read',
-  vault_daily: 'identity.write.runtime',
 };
 
 // These canonical tools keep their policy beside their implementation because

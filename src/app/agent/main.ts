@@ -14,7 +14,7 @@ import { resolveMemoryRetrievalPolicy } from '../../system/config/memory-retriev
 // Runs inside an isolated container. Connects to gateway via the configured RPC endpoint.
 // Run: npx tsx src/app/agent/main.ts
 
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { createComponentLogger, configureOperationalLogPersistence, closeOperationalLogPersistence } from '../../shared/logger.js';
 import { requireOperationalMetadataRetentionDays } from '../../shared/diagnostics/retention-policy.js';
@@ -87,16 +87,6 @@ import { registerShellTools } from '../../boundary/integrations/shell/runtime-wi
 import { GatewayShellOps } from '../../boundary/integrations/shell/gateway-ops.js';
 import type { SandboxExecutionPort } from '../../boundary/sandbox/capabilities/contracts.js';
 import { GatewayGitOps } from '../../boundary/integrations/git/gateway-ops.js';
-import {
-  BEADS_POLICY_HYDRATION_SOURCE,
-  registerBeadsTools,
-} from '../../boundary/integrations/beads/runtime-wiring.js';
-import {
-  resolveBeadsActionsForCaller,
-  resolveBeadsToolsEnablement,
-} from '../../boundary/integrations/beads/enablement.js';
-import { assertPolicyToolHydration } from '../../core/agent/tool-surface/hydration.js';
-import { GatewayBeadsOps } from '../../boundary/integrations/beads/gateway-ops.js';
 import { registerWorldTools } from '../../boundary/integrations/world/runtime-wiring.js';
 import { GatewayWorldOps } from '../../boundary/integrations/world/gateway-ops.js';
 import { WorldPlaneMapCache } from '../../shared/contracts/world-plane-map.js';
@@ -258,7 +248,6 @@ import { resolveTestingHarnessDevicesConfig } from '../../channels/backplane/tes
 import { isEidoversePlace } from '../../shared/contracts/places-registry.js';
 import { createAgentFleetPostureProvider } from './fleet-posture.js';
 import { loadGatewayOperatorAlerting } from './startup/operator-alerting.js';
-import { wireAgentVaultRuntime } from './vault-runtime.js';
 import { PostgresIcpLocalPolicyAuthority } from '../../persistence/postgres/icp-local-policy-authority.js';
 import { IcpLocalInitiationCapacityAuthority } from '../../core/agent/fatigue/initiation-capacity.js';
 import {
@@ -1135,6 +1124,10 @@ async function main(): Promise<void> {
       })
     : undefined;
 
+  // Local markdown journal publisher shared across reflection templates and
+  // unified introspection reflections (psfn-framework-b3h5p.1).
+  const journalAutoPublisher = createOptionalJournalAutoPublisher(pathSnapshot.workspaceRoot, config);
+
   // ── Introspection audit runtime (Laws 28-30): extracted to
   // startup/introspection-lane.ts (charter 12.1 split).
   registerIntrospectionLane({
@@ -1147,6 +1140,7 @@ async function main(): Promise<void> {
     introspectionConsentStore,
     persistenceRuntime,
     companionDataDir: pathSnapshot.companionDataDir,
+    journalPublisher: journalAutoPublisher,
   });
 
   const moduleLoader = new ModuleLoader({
@@ -1577,51 +1571,6 @@ async function main(): Promise<void> {
     log.info('Sandboxed shell tool disabled by policy (gateway denies shell.exec)');
   }
 
-  // Beads issue-management tools — policy-scoped gateway RPC access (no shell
-  // passthrough). Gate registration on the same enablement signal the gateway
-  // policy uses so registration and policy agree; the gateway DENYs beads.*
-  // when disabled, so advertising the tool anyway makes it fail at every call
-  // (psfn-framework-e7s0). Fail-closed: policy wins.
-  const beadsEnablement = resolveBeadsToolsEnablement(process.env.BEADS_TOOLS_ENABLED, {
-    workspaceRoot: pathSnapshot.workspaceRoot,
-    codebaseRoot: resolve('.'),
-    ...(process.env.BEADS_DIR ? { beadsDir: process.env.BEADS_DIR } : {}),
-  });
-  if (!beadsEnablement.enabled && beadsEnablement.reason === 'database_missing') {
-    // Fail closed at registration (psfn-framework-povuo): advertising a tool
-    // whose every call fails with "no beads database found" is worse than not
-    // offering it. Provision the database (bd init in the Personal Workspace,
-    // or BEADS_DIR) to enable it.
-    log.error('BEADS_TOOLS_ENABLED=true but no Beads database is provisioned; beads tool not registered', {
-      searched: beadsEnablement.searched,
-    });
-  }
-  const beadsToolsEnabled = beadsEnablement.enabled;
-  const beadsAllowedActions = resolveBeadsActionsForCaller(
-    process.env.BEADS_ALLOW_ACTIONS,
-    'companion',
-  );
-  const beadsToolRegistered = beadsToolsEnabled && beadsAllowedActions.length > 0;
-  if (beadsToolRegistered) {
-    registerBeadsTools(agentLoop, new GatewayBeadsOps(gatewayOps), {
-      gatewayMode: true,
-      allowedActions: beadsAllowedActions,
-    });
-    log.info('Beads issue-management tools enabled');
-  } else {
-    log.info('Beads issue-management tools disabled by policy (gateway denies beads.*)');
-  }
-
-  if (wireAgentVaultRuntime({
-    target: agentLoop,
-    gateway,
-    config,
-  })) {
-    log.info('External Obsidian vault tool enabled (gateway vault.* policy path)');
-  } else {
-    log.info('External Obsidian vault tool disabled by policy (gateway denies vault.*)');
-  }
-
   // World tool — perceive/list/control physical & virtual affordances via the
   // places registry and the privileged Satellite Hub world transport,
   // plus deliberate virtual navigation (`move`, vinz.26 / contract s10wm).
@@ -1697,12 +1646,6 @@ async function main(): Promise<void> {
   registerMarkdownJournalTools(agentLoop, pathSnapshot.workspaceRoot);
 
   // Validate tool wiring — catch misconfigured tools before they crash at invocation
-  assertPolicyToolHydration(agentLoop.getToolCatalog(), [{
-    toolName: 'beads',
-    enabled: beadsToolRegistered,
-    allowedActions: beadsAllowedActions,
-    source: BEADS_POLICY_HYDRATION_SOURCE,
-  }]);
   agentLoop.validateToolWiring('gateway', gateway, DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE);
 
   const moduleSummary = await moduleLoader.loadEnabledModules();
@@ -2282,7 +2225,7 @@ async function main(): Promise<void> {
   registerEmoSimProactivitySampling(scheduler, observerEvalSidecar);
 
   // Journal auto-publisher (for reflections -> markdown journal).
-  const journalAutoPublisher = createOptionalJournalAutoPublisher(pathSnapshot.workspaceRoot, config);
+  // journalAutoPublisher initialized earlier for shared reflection + introspection use.
 
   // Group-memory observation scheduler doubles as the canonical direct-vs-group
   // scope classifier for sleeptime cadence, so it is built before the reflection

@@ -20,10 +20,16 @@ const AUDITOR_SYSTEM_PROMPT = [
   'Return exactly one JSON object and no markdown.',
 ].join(' ');
 
+function stripJsonFence(content: string): string {
+  const trimmed = content.trim();
+  const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n?```\s*$/iu.exec(trimmed);
+  return fenced?.[1] !== undefined ? fenced[1].trim() : trimmed;
+}
+
 function parseJsonObject(content: string, label: string): Record<string, unknown> {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(content);
+    parsed = JSON.parse(stripJsonFence(content));
   } catch {
     throw new Error(`${label} returned malformed JSON`);
   }

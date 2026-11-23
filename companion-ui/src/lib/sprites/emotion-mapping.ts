@@ -150,7 +150,7 @@ export function emotionalBaseFromSnapshot(snapshot: EmotionSnapshotStreamEntry):
 /** Default icon bucket for an unrecognised tool name (matches catalog default). */
 export const DEFAULT_TOOL_ICON: ToolDomain = 'wrench';
 
-/** FirstPartyToolDomain -> sprite icon bucket (16 domains -> 7 icons). */
+/** FirstPartyToolDomain -> sprite icon bucket (15 domains -> 7 icons). */
 export const TOOL_DOMAIN_ICON: Readonly<Record<FirstPartyToolDomain, ToolDomain>> = Object.freeze({
   memory: 'notebook',
   knowledge: 'notebook',
@@ -158,7 +158,6 @@ export const TOOL_DOMAIN_ICON: Readonly<Record<FirstPartyToolDomain, ToolDomain>
   orientation: 'magnifier',
   boundary: 'wrench',
   system: 'wrench',
-  tracked_work: 'wrench',
   identity: 'wrench',
   media: 'painting',
   self_expression: 'painting',
@@ -195,14 +194,11 @@ export const TOOL_NAME_DOMAIN: Readonly<Record<string, FirstPartyToolDomain>> = 
   wiki: 'knowledge',
   schedule: 'scheduler',
   north_star: 'orientation',
-  beads: 'tracked_work',
   notify: 'notification',
   generate_image: 'media',
   selfie_create: 'self_expression',
   publication: 'self_expression',
-  letter: 'self_expression',
   subagent: 'subagents',
-  vault: 'knowledge',
   journal: 'memory',
 });
 

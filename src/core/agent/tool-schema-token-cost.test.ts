@@ -72,9 +72,9 @@ describe('full callable catalog schema token cost', () => {
       parameterSchemaHash: sha256(parameterSchemas),
     }).toEqual({
       fixture: 'agent-state-tools-provider-v2',
-      coreTools: 25,
-      extendedTools: 7,
-      totalTools: 32,
+      coreTools: 24,
+      extendedTools: 5,
+      totalTools: 29,
       includesLibrary: false,
       // n66dn.3 (Eidoverse plane: world move/perceive/act) +1440 bytes / +383 tokens pre, +2096 / +545 post.
       // psfn-framework-lpxg3.3 added the optional skill `base_version` binding:
@@ -106,13 +106,16 @@ describe('full callable catalog schema token cost', () => {
       // first, async letters demoted): +0 bytes / +0 tokens, hash updated.
       // psfn-framework-eoj3s.5 added direct companion DM `message` variant on
       // approved open dyads in `notify`: +511 bytes / +108 tokens.
-      beforeTokens: 20_361,
-      afterTokens: 24_657,
-      deltaTokens: 4_296,
-      beforeBytes: 95_069,
-      afterBytes: 114_171,
-      providerSchemaHash: 'bdaa3dbca9857058ee0972f1cf90171a53a1088ae78a0d74e51f7a9a5b20988f',
-      parameterSchemaHash: 'a70642ce5cfc01f31bfa8874e564221451f96a0b2aa228fac0972f9e6393b4bc',
+      // psfn-framework-b3h5p.1 retired vault, letter, and companion beads tools
+      // and removed standalone introspection consent actions from orient:
+      // -6700 bytes / -1500 tokens before, -7544 bytes / -1682 tokens after.
+      beforeTokens: 18_861,
+      afterTokens: 22_975,
+      deltaTokens: 4_114,
+      beforeBytes: 88_369,
+      afterBytes: 106_627,
+      providerSchemaHash: 'a6773d0734b18daef28299150d94e8eb3f52872c0cc9e14990dddf7d4c0b78fe',
+      parameterSchemaHash: '544415d80d9716186a90ba408b5ddeba4eee8ded7b0ddec8d53659c3f25bcec9',
     });
 
     // The additional description tokens affect an uncached request. A stable

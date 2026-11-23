@@ -214,7 +214,6 @@ import type { PostgresAutomataRetentionStore } from '../../faculties/automata/re
 import type { PostgresExactSessionPurgeSagaStore } from '../../persistence/postgres/automata-exact-session-purge-store.js';
 import type { LetterStorePort } from '../../core/letters/contracts.js';
 import { LetterService } from '../../core/letters/service.js';
-import { createLetterTool } from '../../core/tools/letter.js';
 import type { DoingMirrorStorePort } from '../../core/doing-mirror/contracts.js';
 import { DoingMirrorService } from '../../core/doing-mirror/service.js';
 import {
@@ -1020,7 +1019,6 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   });
   wireSettingsRuntime(agentLoop, config, { registerSystemTool: false });
   wireSessionToolsRuntime(agentLoop, sessionManager, pathSnapshot.companionDataDir, gateway, promptRegistry);
-  agentLoop.registerTool(createLetterTool(letterService, doingMirrorService), 'core');
   const contactRuntimeOptions: ContactRuntimeOptions = {
     exportDir: resolveContactsDir(pathSnapshot.companionDataDir),
     // Reuse the shared confirmation queue (also used by card/module proposals)
@@ -1204,8 +1202,6 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     sessionManager,
     config,
     concernStore: intentionRuntime.concernStore,
-    introspectionConsentStore,
-    introspectionTurnSensitivityDecisions,
     eventBus,
   });
   // vw3w.2: record the emotional arc of every resolved concern (formation VAD →

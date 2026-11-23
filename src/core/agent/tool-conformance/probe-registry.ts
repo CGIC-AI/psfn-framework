@@ -76,10 +76,6 @@ export const TOOL_CONFORMANCE_PROBE_REGISTRY: Readonly<Record<string, ToolProbeS
   // ── Continuity / contacts ──
   session: { kind: 'read_only', action: 'list', args: { action: 'list' } },
   contact: { kind: 'read_only', action: 'list', args: { action: 'list' } },
-  // letter.list is a bounded read of the companion-owned letter bin; read/place/
-  // archive are state transitions and disposition reads depend on an optional
-  // doing-mirror port, so only list is probed live.
-  letter: { kind: 'read_only', action: 'list', args: { action: 'list' } },
 
   // ── Knowledge / scheduling / orientation-extended ──
   skill: { kind: 'read_only', action: 'list', args: { action: 'list' } },
@@ -107,16 +103,6 @@ export const TOOL_CONFORMANCE_PROBE_REGISTRY: Readonly<Record<string, ToolProbeS
   // Bus reads require an authoritative companion/run scope and its write actions
   // append durable state, so the hermetic harness validates only the schema.
   automata_bus: { kind: 'schema_only' },
-  vault: {
-    kind: 'read_only',
-    action: 'search',
-    args: {
-      action: 'search',
-      query: '__psfn_tool_conformance_no_match__',
-      limit: 1,
-    },
-  },
-  beads: { kind: 'schema_only' },
   // world's read actions (perceive/list) require live gateway ops against the
   // Home Assistant places registry, and move/control mutate world state, so no
   // hermetic read-only probe exists.
@@ -279,9 +265,6 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
     list_concerns: safeRead({ action: 'list_concerns' }),
     resolve_concern: SCHEMA_ASSERT,
     transition_concern: SCHEMA_ASSERT,
-    introspection_consent_get: safeRead({ action: 'introspection_consent_get' }),
-    introspection_consent_set: SCHEMA_ASSERT,
-    introspection_turn_sensitivity_set: SCHEMA_ASSERT,
   },
   identity: {
     list_layers: safeRead({ action: 'list_layers' }),
@@ -342,17 +325,6 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
     set_machine_intelligence: SCHEMA_ASSERT,
     block: SCHEMA_ASSERT,
     unblock: SCHEMA_ASSERT,
-  },
-  letter: {
-    compose: SCHEMA_ASSERT,
-    list: safeRead({ action: 'list' }),
-    // read marks a placed letter as read (state transition), never a pure read.
-    read: SCHEMA_ASSERT,
-    place: SCHEMA_ASSERT,
-    archive: SCHEMA_ASSERT,
-    // doing-mirror reads require the optional doing-mirror port; schema only.
-    disposition_list: SCHEMA_ASSERT,
-    disposition_read: SCHEMA_ASSERT,
   },
   session: {
     list: safeRead({ action: 'list' }),
@@ -438,14 +410,6 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
     delete: SCHEMA_ASSERT,
     reorder: SCHEMA_ASSERT,
   },
-  beads: {
-    ready: SCHEMA_ASSERT,
-    show: SCHEMA_ASSERT,
-    create: SCHEMA_ASSERT,
-    update: SCHEMA_ASSERT,
-    close: SCHEMA_ASSERT,
-    sync: SCHEMA_ASSERT,
-  },
   notify: {
     brief: SCHEMA_ASSERT,
     send: SCHEMA_ASSERT,
@@ -478,16 +442,6 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
     status: SCHEMA_ASSERT,
     discover: SCHEMA_ASSERT,
     inspect: SCHEMA_ASSERT,
-  },
-  vault: {
-    write: SCHEMA_ASSERT,
-    read: SCHEMA_ASSERT,
-    search: safeRead({
-      action: 'search',
-      query: '__psfn_tool_conformance_no_match__',
-      limit: 1,
-    }),
-    daily: SCHEMA_ASSERT,
   },
   journal: {
     list: safeRead({ action: 'list' }),

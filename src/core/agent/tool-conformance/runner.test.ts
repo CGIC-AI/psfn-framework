@@ -35,7 +35,7 @@ describe('tool conformance runner', () => {
 
   it('runs the sweep, persists the result, and reads it back', async () => {
     const runner = createToolConformanceRunner({
-      getToolCatalog: () => ({ core: [tool('memory'), tool('notify')], extended: [tool('vault')] }),
+      getToolCatalog: () => ({ core: [tool('memory'), tool('notify')], extended: [tool('north_star')] }),
       systemDataDir,
       now: () => 12_345,
     });

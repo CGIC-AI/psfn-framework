@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { ReflectionPublishInput } from '../../boundary/integrations/reflection-publish-input.js';
 import type { IntrospectionAuditConfig } from '../../system/config/scheduler-config.js';
 import type { IntrospectionConsentStore } from './consent-store.js';
 import {
@@ -123,6 +124,9 @@ export class IntrospectionAuditRuntime {
     auditor: BlindedAuditorPort;
     reflector: CompanionLandmarkReflectorPort;
     persistence: IntrospectionAuditPersistencePort;
+    journalPublisher?: {
+      publishReflection(input: ReflectionPublishInput): Promise<void>;
+    };
     now?: () => Date;
   }) {}
 
@@ -219,6 +223,13 @@ export class IntrospectionAuditRuntime {
         companionReflectorModel: reflection.model,
         provenance,
         createdAt,
+      });
+      await this.options.journalPublisher?.publishReflection({
+        templateId: 'introspection',
+        templateName: `Introspection (${comparison.type})`,
+        mode: 'deliberation',
+        reflection: `${reflection.reflection}\n\n---\n_Observation (${comparison.type}, confidence ${comparison.confidence.toFixed(2)}):_ ${comparison.observation}`,
+        createdAt: new Date(createdAt),
       });
       landmarksCreated += 1;
     }

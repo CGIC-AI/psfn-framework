@@ -310,7 +310,7 @@ describe('deriveToolHealthViews', () => {
     ]);
   });
 
-  it('adds a conditional external vault bridge tool when vault service health is unavailable', () => {
+  it('does not advertise retired vault service health as a conditional companion tool (b3h5p.1)', () => {
     const views = deriveToolHealthViews({
       catalog: {
         generatedAt: 1,
@@ -328,15 +328,6 @@ describe('deriveToolHealthViews', () => {
       recentFailures: [],
     });
 
-    expect(views).toEqual([
-      expect.objectContaining({
-        name: 'vault',
-        scope: 'conditional',
-        health: {
-          status: 'unavailable',
-          detail: 'Gateway vault RPC is enabled but operations are not configured.',
-        },
-      }),
-    ]);
+    expect(views).toEqual([]);
   });
 });

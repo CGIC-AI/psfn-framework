@@ -92,15 +92,12 @@ describe('governed orient tool', () => {
     'create_concern',
     'resolve_concern',
     'transition_concern',
-    'introspection_consent_set',
-    'introspection_turn_sensitivity_set',
   ];
 
   it('passes read actions through unchanged', async () => {
     const harness = makeGoverned('orient');
     await expectPassThrough(harness, { action: 'values_list' });
     await expectPassThrough(harness, { action: 'list_concerns', includeResolved: true });
-    await expectPassThrough(harness, { action: 'introspection_consent_get' });
     expect(harness.audit).not.toHaveBeenCalled();
   });
 
@@ -241,58 +238,10 @@ describe('governed skill tool', () => {
   });
 });
 
-describe('governed vault tool', () => {
-  it('passes reads through, including daily without content', async () => {
-    const harness = makeGoverned('vault');
-    await expectPassThrough(harness, { action: 'read', name: 'note' });
-    await expectPassThrough(harness, { action: 'vault_read', name: 'note' });
-    await expectPassThrough(harness, { action: 'search', query: 'q' });
-    await expectPassThrough(harness, { action: 'daily' });
-    await expectPassThrough(harness, { action: 'vault_daily' });
-  });
-
-  it('denies write and daily-with-content mutations', async () => {
-    const harness = makeGoverned('vault');
-    await expectDenied(harness, { action: 'write', name: 'note', content: 'x' }, {
-      action: 'write',
-      reason: 'mutation_not_permitted',
-    });
-    await expectDenied(harness, { action: 'vault_write', name: 'note', content: 'x' }, {
-      action: 'vault_write',
-      reason: 'mutation_not_permitted',
-    });
-    await expectDenied(harness, { action: 'daily', content: 'append this' }, {
-      action: 'daily',
-      reason: 'mutation_not_permitted',
-    });
-  });
-
-  it('classifies the omitted-action inference fail closed', async () => {
-    const harness = makeGoverned('vault');
-    // Read-shaped inferences keep working.
-    await expectPassThrough(harness, { query: 'q' });
-    await expectPassThrough(harness, { name: 'note' });
-    // Write-shaped inferences are mutations.
-    await expectDenied(harness, { name: 'note', content: 'x' }, {
-      action: 'write',
-      reason: 'mutation_not_permitted',
-    });
-    await expectDenied(harness, { content: 'daily append' }, {
-      action: 'daily',
-      reason: 'mutation_not_permitted',
-    });
-    // Ambiguous calls resolve to nothing and are denied.
-    await expectDenied(harness, { folder: 'notes' }, {
-      action: 'unknown',
-      reason: 'action_unresolved',
-    });
-  });
-});
-
 describe('governance policy map', () => {
   it('covers exactly the core-authoritative multiplexed surfaces', () => {
     expect([...GOVERNED_SUBAGENT_TOOL_POLICIES.keys()].sort()).toEqual([
-      'journal', 'orient', 'skill', 'vault', 'wiki',
+      'journal', 'orient', 'skill', 'wiki',
     ]);
     // scratchpad is deliberately ungoverned: bounded 24h ephemeral working
     // memory (c7d review disposition).

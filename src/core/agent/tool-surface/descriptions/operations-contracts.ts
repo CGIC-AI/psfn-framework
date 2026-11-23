@@ -94,16 +94,4 @@ export const OPERATIONS_TOOL_CONTRACTS = {
     guidance: 'Do not use it for current open threads or persona changes; use orient or identity.',
     example: { action: 'create', title: 'Protect time for art', content: 'Keep a weekly block for self-directed drawing.' },
   },
-  beads: {
-    purpose: 'Read and update the canonical tracked-work database when work must survive the current conversation.',
-    actions: [
-      action('ready', [], ['limit']), action('show', ['id']),
-      action('create', ['title'], ['issue_type', 'priority', 'deps', 'parent', 'actor']),
-      action('update', ['id'], ['status', 'priority', 'actor'], { id: 'update', rule: 'include status or priority' }),
-      action('close', ['id', 'reason'], ['actor']), action('sync'),
-    ],
-    output: 'It returns plain issue IDs and structured tracker state; later calls require the exact ID string.',
-    guidance: 'Do not create throwaway tracked work for temporary notes; use scratchpad.',
-    example: { action: 'show', id: 'psfn-framework-123' },
-  },
 } as const satisfies Record<string, CanonicalToolSurfaceContract>;

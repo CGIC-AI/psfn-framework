@@ -30,7 +30,7 @@ export const CONTINUITY_TOOL_CONTRACTS = {
     example: { action: 'search', query: 'known failure modes for this task' },
   },
   orient: {
-    purpose: 'Maintain scoped continuity blocks, values, open threads, and explicit introspection consent choices.',
+    purpose: 'Maintain scoped continuity blocks, values, and open threads.',
     actions: [
       action('append', ['block', 'text'], ['separator']),
       action('replace', ['block', 'text']),
@@ -42,12 +42,9 @@ export const CONTINUITY_TOOL_CONTRACTS = {
       action('list_concerns', [], ['contactId', 'includeResolved', 'includeExpired', 'limit']),
       action('resolve_concern', [], ['outcome', 'evidenceRefs'], { id: 'resolve_concern', requiredAnyOf: [['concernId'], ['concernIds']] }),
       action('transition_concern', ['status'], ['outcome', 'evidenceRefs', 'nextReviewAt', 'clearNextReview', 'salience'], { id: 'transition_concern', requiredAnyOf: [['concernId'], ['concernIds']] }),
-      action('introspection_consent_get'),
-      action('introspection_consent_set', ['enabled'], ['allowedPublicChannelIds', 'reason'], { id: 'introspection_consent_set', rule: 'requires an active foreground companion turn' }),
-      action('introspection_turn_sensitivity_set', ['auditContentSensitivity'], [], { id: 'introspection_turn_sensitivity_set', rule: 'classifies the exact active foreground turn' }),
     ],
-    output: 'It writes scoped orientation state and returns exact IDs, revisions, or consent state without redefining identity.',
-    guidance: 'Do not store durable facts here; use memory, north_star, or identity for their respective domains.',
+    output: 'It writes scoped orientation state and returns exact IDs or revisions without redefining identity.',
+    guidance: 'Do not store durable facts or personal reflections here; use memory, journal, north_star, or identity for their respective domains.',
     example: { action: 'create_concern', text: 'Check whether the promised follow-up happened tomorrow.', priority: 'medium' },
   },
   identity: {
@@ -143,20 +140,5 @@ export const CONTINUITY_TOOL_CONTRACTS = {
     output: 'It returns exact session, evidence, continuity-artifact, or focus identifiers rather than preview text.',
     guidance: 'Do not treat transcript search as durable memory or a scratchpad; use memory or scratchpad.',
     example: { action: 'search', query: 'promise about the vet appointment', limit: 5 },
-  },
-  letter: {
-    purpose: 'Write and receive unhurried private correspondence through the shared Letters bin.',
-    actions: [
-      action('compose', ['subject', 'body'], ['draft']),
-      action('list', [], ['direction', 'states', 'limit']),
-      action('read', ['letterId']),
-      action('place', ['letterId']),
-      action('archive', ['letterId']),
-      action('disposition_list'),
-      action('disposition_read', ['itemType', 'itemId']),
-    ],
-    output: 'It returns durable letter state or the current companion-visible disposition of companion-originated items; compose and read also become lived L0 entries available to memory extraction.',
-    guidance: 'Do not use letters for urgent or externally delivered messages; they wait in the bin without push, sound, quiet-hour handling, external delivery, or an outbound sender.',
-    example: { action: 'compose', subject: 'For whenever you arrive', body: 'I wanted to leave you this thought.' },
   },
 } as const satisfies Record<string, CanonicalToolSurfaceContract>;

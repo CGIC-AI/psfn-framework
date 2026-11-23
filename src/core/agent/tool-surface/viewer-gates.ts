@@ -27,7 +27,6 @@ export type ToolViewerGateDecision =
 export const TOOL_WITHOUT_ACTIONS = '*';
 
 const PERSONAL: ToolViewerGateDecision = { kind: 'sensitivity', level: 'personal' };
-const CONFIDENTIAL: ToolViewerGateDecision = { kind: 'sensitivity', level: 'confidential' };
 const write = (what: string): ToolViewerGateDecision => ({
   kind: 'not_applicable',
   reason: `write (${what}); returns no other-conversation content`,
@@ -86,9 +85,6 @@ export const TOOL_VIEWER_GATE_DECISIONS: Readonly<Record<string, Readonly<Record
     list_concerns: inTool('filterConcernsForViewer (trust x room sensitivity, contact scope)'),
     resolve_concern: write('concern'),
     transition_concern: write('concern'),
-    introspection_consent_get: PERSONAL,
-    introspection_consent_set: write('introspection consent'),
-    introspection_turn_sensitivity_set: write('introspection turn sensitivity'),
   },
   identity: {
     list_layers: na('companion prompt configuration (identity by design)'),
@@ -160,16 +156,6 @@ export const TOOL_VIEWER_GATE_DECISIONS: Readonly<Record<string, Readonly<Record
     start_focus: inTool('canViewerReadSessionChannel for an explicit channel'),
     complete_focus: inTool('canViewerReadSessionChannel for an explicit channel'),
   },
-  letter: {
-    compose: write('letter'),
-    // Letters between the companion and its partner are private correspondence.
-    list: CONFIDENTIAL,
-    read: CONFIDENTIAL,
-    place: write('letter'),
-    archive: write('letter'),
-    disposition_list: PERSONAL,
-    disposition_read: PERSONAL,
-  },
   self_status: {
     capabilities: na('capability grant'),
     snapshot: inTool('gateSessionSummariesForViewer for recent sessions'),
@@ -235,14 +221,6 @@ export const TOOL_VIEWER_GATE_DECISIONS: Readonly<Record<string, Readonly<Record
     delete: write('north star'),
     reorder: write('north star'),
   },
-  beads: {
-    ready: na('operator work tracker'),
-    show: na('operator work tracker'),
-    create: write('issue'),
-    update: write('issue'),
-    close: write('issue'),
-    sync: write('issue tracker'),
-  },
   notify: {
     brief: write('notification'),
     send: write('notification'),
@@ -268,7 +246,6 @@ export const TOOL_VIEWER_GATE_DECISIONS: Readonly<Record<string, Readonly<Record
     discover: inTool('the spawning conversation always sees its own workers; other conversations\' workers only where their transcript is readable (task-visibility)'),
     inspect: inTool('the spawning conversation always sees its own workers; other conversations\' workers only where their transcript is readable (task-visibility)'),
   },
-  vault: { write: write('vault note'), read: PERSONAL, search: PERSONAL, daily: write('vault daily note') },
   journal: {
     list: inTool('journal note provenance'),
     read: inTool('journal note provenance'),

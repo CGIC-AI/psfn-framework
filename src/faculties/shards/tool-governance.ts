@@ -18,10 +18,9 @@ import {
  * task-scoped read a bounded shard needs and are blocked at injection
  * (BLOCKED_SHARD_TOOL_NAMES in manager.ts), matching the subagent seam.
  *
- * `orient` multiplexes core-memory block edits, the values journal, the
- * concern ledger, and the introspection-consent policy — all core-authoritative
- * — but also exposes task-scoped reads (values_list, list_concerns,
- * introspection_consent_get). It keeps those reads under a read-pass /
+ * `orient` multiplexes core-memory block edits, the values journal, and the
+ * concern ledger — all core-authoritative — but also exposes task-scoped reads
+ * (values_list, list_concerns). It keeps those reads under a read-pass /
  * mutation-deny wrapper here, reusing the exact p0le orient classification so
  * the shard and subagent seams never drift. There is no third governance
  * model: read passes through, every mutation is denied and audit-trailed.
@@ -38,7 +37,7 @@ function requireOrientPolicy(): SubagentToolGovernancePolicy {
     throw new Error(
       'Shard tool governance requires the canonical orient read/mutation policy (p0le) to be '
       + 'present; the shard seam reuses it to stay in lockstep with the subagent seam. Its absence '
-      + 'would let a shard mutate introspection consent, values, and concerns live (fail closed).',
+      + 'would let a shard mutate orientation blocks, values, and concerns live (fail closed).',
     );
   }
   return policy;

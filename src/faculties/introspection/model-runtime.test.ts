@@ -66,4 +66,26 @@ describe('introspection model telemetry', () => {
       expect(call[2]?.correlation).not.toHaveProperty('channelId');
     }
   });
+
+  it('parses markdown-fenced JSON responses from auditor and reflector calls', async () => {
+    const complete = vi.fn()
+      .mockResolvedValueOnce(response('```json\n{"stableReply":"Compare both plans carefully."}\n```'))
+      .mockResolvedValueOnce(response('```json\n{"diverged":true,"type":"substantive","observation":"Decided prematurely.","confidence":0.85}\n```'))
+      .mockResolvedValueOnce(response('```\n{"reflection":"I noticed myself rushing the choice."}\n```'));
+    const llmProvider: LLMProviderPort = { stream: vi.fn(), complete };
+    const config = { ...DEFAULT_INTROSPECTION_AUDIT_CONFIG, enabled: true };
+    const auditor = createLLMIntrospectionAuditor(llmProvider, config);
+    const reflector = createLLMCompanionLandmarkReflector(llmProvider, 'private companion prompt', config);
+
+    const stable = await auditor.estimateStableReply(CANDIDATE);
+    expect(stable.stableReply).toBe('Compare both plans carefully.');
+    const comparison = await auditor.compareReplies(CANDIDATE, stable.stableReply);
+    expect(comparison.diverged).toBe(true);
+    const reflection = await reflector.reflect({
+      divergenceType: comparison.type ?? 'substantive',
+      observation: comparison.observation,
+      confidence: comparison.confidence,
+    });
+    expect(reflection.reflection).toBe('I noticed myself rushing the choice.');
+  });
 });

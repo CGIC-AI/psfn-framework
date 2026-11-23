@@ -15,6 +15,7 @@ const FOLDER_MAP: Array<[RegExp, string]> = [
   [/^emotional/i, 'reflections/emotional'],
   [/^goal/i, 'reflections/goals'],
   [/^values/i, 'reflections/values'],
+  [/^introspection/i, 'reflections/introspection'],
 ];
 
 const DEFAULT_FOLDER = 'reflections';

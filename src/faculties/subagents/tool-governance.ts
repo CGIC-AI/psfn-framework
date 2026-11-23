@@ -63,13 +63,11 @@ function classifyByActionSets(
   return { action, kind: 'unknown' };
 }
 
-// orient multiplexes core-memory block edits, the global values journal, the
-// companion concern ledger, and the single global introspection consent
-// policy — every one of those is core-authoritative truth.
+// orient multiplexes core-memory block edits, the global values journal, and
+// the companion concern ledger — every one of those is core-authoritative truth.
 const ORIENT_READ_ACTIONS: ReadonlySet<string> = new Set([
   'values_list',
   'list_concerns',
-  'introspection_consent_get',
 ]);
 const ORIENT_MUTATION_ACTIONS: ReadonlySet<string> = new Set([
   'append',
@@ -80,8 +78,6 @@ const ORIENT_MUTATION_ACTIONS: ReadonlySet<string> = new Set([
   'create_concern',
   'resolve_concern',
   'transition_concern',
-  'introspection_consent_set',
-  'introspection_turn_sensitivity_set',
 ]);
 
 // journal notes are companion-voice durable content.
@@ -132,19 +128,8 @@ const SKILL_MUTATION_ACTIONS: ReadonlySet<string> = new Set([
   'skill_update',
 ]);
 
-// vault notes are a companion self-modification surface; `daily` is
-// read-or-append depending on whether content is supplied.
-const VAULT_READ_ACTIONS: ReadonlySet<string> = new Set([
-  'read',
-  'vault_read',
-  'search',
-  'vault_search',
-]);
-const VAULT_MUTATION_ACTIONS: ReadonlySet<string> = new Set(['write', 'vault_write']);
-const VAULT_DAILY_ACTIONS: ReadonlySet<string> = new Set(['daily', 'vault_daily']);
-
 const ORIENT_POLICY: SubagentToolGovernancePolicy = {
-  readActionsHelp: 'values_list, list_concerns, introspection_consent_get',
+  readActionsHelp: 'values_list, list_concerns',
   classify(params) {
     return classifyByActionSets(
       resolveExplicitAction(params),
@@ -207,45 +192,6 @@ const SKILL_POLICY: SubagentToolGovernancePolicy = {
   },
 };
 
-const VAULT_POLICY: SubagentToolGovernancePolicy = {
-  readActionsHelp: 'read, search, daily (without content)',
-  classify(params) {
-    const explicit = resolveExplicitAction(params);
-    if (!isRecord(params)) {
-      return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS);
-    }
-    if (explicit !== null) {
-      if (VAULT_DAILY_ACTIONS.has(explicit)) {
-        // daily appends when content is a string and reads otherwise
-        // (executeVaultDaily in boundary/integrations/vault/tools.ts).
-        return typeof params.content === 'string'
-          ? { action: explicit, kind: 'mutation' }
-          : { action: explicit, kind: 'read' };
-      }
-      return classifyByActionSets(explicit, VAULT_READ_ACTIONS, VAULT_MUTATION_ACTIONS);
-    }
-    // Mirrors normalizeVaultAction's omitted-action inference, which can
-    // resolve to a write or daily-append — classify those as mutations.
-    const hasName = typeof params.name === 'string';
-    const hasContent = typeof params.content === 'string';
-    const hasQuery = typeof params.query === 'string';
-    const hasFolder = typeof params.folder === 'string';
-    const hasMode = typeof params.mode === 'string';
-    const hasLimit = typeof params.limit === 'number';
-    if (hasQuery && !hasName && !hasContent && !hasFolder && !hasMode) {
-      return { action: 'search', kind: 'read' };
-    }
-    if (hasName && hasContent) return { action: 'write', kind: 'mutation' };
-    if (hasName && !hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) {
-      return { action: 'read', kind: 'read' };
-    }
-    if (!hasName && hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) {
-      return { action: 'daily', kind: 'mutation' };
-    }
-    return { action: null, kind: 'unresolved' };
-  },
-};
-
 /**
  * Core-authoritative multiplexed tools that only reach a subagent loop
  * behind a read-only governance wrapper (see resolveInjectedTools).
@@ -256,7 +202,6 @@ export const GOVERNED_SUBAGENT_TOOL_POLICIES: ReadonlyMap<string, SubagentToolGo
     ['journal', JOURNAL_POLICY],
     ['wiki', WIKI_POLICY],
     ['skill', SKILL_POLICY],
-    ['vault', VAULT_POLICY],
   ]);
 
 /**

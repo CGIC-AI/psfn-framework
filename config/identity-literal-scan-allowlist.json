@@ -295,12 +295,6 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/boundary/integrations/beads/tools.ts",
-      "contains": "PSFN-",
-      "reason": "Beads tool docs use PSFN-prefixed issue ID examples.",
-      "pattern": "identity-proper-name"
-    },
-    {
       "path": "src/boundary/pi-agent/agent-loop-patch.ts",
       "contains": "psfn-framework-ay73",
       "reason": "Implementation comment cites the bead that owns internal follow-up reply handling.",

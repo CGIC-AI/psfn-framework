@@ -652,4 +652,49 @@ describe('scheduled blinded introspection audit', () => {
 
     await expect(runtime.runOnce()).rejects.toThrow(/echoed source/);
   });
+
+  it('publishes landmark reflections into the unified workspace journal when wired (b3h5p.1)', async () => {
+    root = mkdtempSync(join(tmpdir(), 'introspection-runtime-journal-'));
+    const consentStore = new IntrospectionConsentStore(join(root, 'consent.jsonl'));
+    consentStore.append({
+      enabled: true,
+      allowedPublicChannelIds: [CANDIDATE.channelId],
+      actor: { kind: 'companion', turnId: 'consent-turn', requestId: 'consent-request' },
+      reason: 'bounded consent',
+      createdAt: '2026-07-13T09:00:00.000Z',
+    });
+    const publishReflection = vi.fn(async () => undefined);
+    const runtime = new IntrospectionAuditRuntime({
+      config: { ...DEFAULT_INTROSPECTION_AUDIT_CONFIG, enabled: true },
+      consentStore,
+      source: sourceFor(),
+      auditor: {
+        estimateStableReply: async () => ({ stableReply: 'neutral alternative', model: 'estimator' }),
+        compareReplies: async () => ({
+          diverged: true,
+          type: 'substantive',
+          observation: 'Response moved quickly past a nuance worth unpacking.',
+          confidence: 0.9,
+          model: 'comparator',
+        }),
+      },
+      reflector: {
+        reflect: async () => ({
+          reflection: 'I want to pause longer before settling when a tradeoff feels subtle.',
+          model: 'companion',
+        }),
+      },
+      persistence: new MemoryPersistence(),
+      journalPublisher: { publishReflection },
+    });
+
+    const result = await runtime.runOnce();
+    expect(result.landmarksCreated).toBe(1);
+    expect(publishReflection).toHaveBeenCalledWith(expect.objectContaining({
+      templateId: 'introspection',
+      templateName: 'Introspection (substantive)',
+      mode: 'deliberation',
+      reflection: expect.stringContaining('I want to pause longer before settling'),
+    }));
+  });
 });

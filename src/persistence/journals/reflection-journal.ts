@@ -101,6 +101,7 @@ export interface ReflectionJournalEntry {
 
 export interface ReflectionJournalListOptions {
   limit?: number;
+  excludeTemplateIds?: readonly string[];
 }
 
 export interface ReflectionConcernArcListOptions extends ReflectionJournalListOptions {
@@ -456,12 +457,16 @@ export class ReflectionJournalStore {
     if (!Number.isInteger(limitRaw) || limitRaw < 1) {
       throw new Error('Reflection journal listRecent limit must be a positive integer when provided');
     }
+    const excludedTemplateIds = options.excludeTemplateIds && options.excludeTemplateIds.length > 0
+      ? new Set(options.excludeTemplateIds)
+      : null;
     // Bounded top-K over a streamed scan: the full journal is still inspected,
     // but only `limitRaw` entries are ever retained (psfn-framework-z3e2x).
     const recent: ReflectionJournalEntry[] = [];
     streamJsonLinesSync(this.filePath, this.readLimits, (parsed) => {
       const entry = normalizePersistedReflectionEntry(parsed);
       if (!entry) return;
+      if (excludedTemplateIds?.has(entry.templateId)) return;
       ReflectionJournalStore.retainTop(recent, entry, limitRaw, isNewerReflectionEntry);
     }, { onParseError: reflectionJournalParseError(this.filePath) });
     return recent;

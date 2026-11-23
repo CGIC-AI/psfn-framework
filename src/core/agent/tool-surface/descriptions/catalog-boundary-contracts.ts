@@ -3,14 +3,24 @@ import { FILESYSTEM_READ_PAGE_CONTRACT } from '../../../../shared/contracts/file
 
 export const CATALOG_BOUNDARY_TOOL_CONTRACTS = {
   tool_search: {
-    purpose: 'Look up long-form documentation for a canonical tool by name, purpose, action, or parameter.',
+    purpose: 'Progressively discover canonical companion tools and compact TypeScript SDK signatures filtered by live companion overrides and viewer permissions.',
     actions: [action('search', [], ['query', 'limit'], {
       id: 'search', actionField: false,
       rule: 'the callable schema has no action field and lookup never loads, activates, grants, or changes callability',
     })],
-    output: 'It returns matching documentation for tools that are already present in the callable catalog.',
-    guidance: 'Do not use it to perform a domain operation; call the documented canonical tool directly.',
-    example: { query: 'publish a repository change' },
+    output: 'It returns matching compact TypeScript SDK signatures (`sdk.<tool>(args)` or direct wire tool signatures) and parameter documentation for tools permitted on this turn.',
+    guidance: 'Use it when you need the exact `sdk.<tool>(args)` signature for `execute`; keep direct permit-bound egress tools (`notify`, `mcp`, `publication`, `response_control`) on their top-level schemas.',
+    example: { query: 'memory search' },
+  },
+  execute: {
+    purpose: 'Run a short async JavaScript script in an isolated sandbox VM with direct `await sdk.<tool>(args)` access to your gated canonical companion tools.',
+    actions: [action('run', ['code'], ['timeout_ms'], {
+      id: 'run', actionField: false,
+      rule: 'write an async JS body calling await sdk.<tool>(args); return a value or call print()/FINAL()',
+    })],
+    output: 'It returns the returned value or printed output; every inner sdk.<tool>() call enforces capability gates, viewer visibility, CogSec screening, and disclosure lineage.',
+    guidance: 'Use tool_search first when you need a tool\'s TypeScript SDK signature. Compose multi-step reads and transforms in one execute call; keep permit-bound egress tools (`notify`, `mcp`, `publication`, `response_control`) on their direct wire schemas.',
+    example: { code: 'const found = await sdk.memory({ action: "search", query: "Paris" }); return found;' },
   },
   toolset: {
     purpose: 'Inspect the always-callable catalog, request advisory ranking, or manage presentation-order pins.',

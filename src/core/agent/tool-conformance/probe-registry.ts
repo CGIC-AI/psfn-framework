@@ -86,6 +86,7 @@ export const TOOL_CONFORMANCE_PROBE_REGISTRY: Readonly<Record<string, ToolProbeS
   north_star: { kind: 'read_only', action: 'list', args: { action: 'list' } },
 
   // ── Boundary / external / side-effecting → schema-only ──
+  execute: { kind: 'schema_only' },
   file_editor: { kind: 'schema_only' },
   shell: { kind: 'schema_only' },
   web: { kind: 'schema_only' },

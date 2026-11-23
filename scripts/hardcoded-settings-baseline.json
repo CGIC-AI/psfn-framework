@@ -2756,7 +2756,7 @@
     },
     {
       "file": "src/core/agent/substrate-agent.ts",
-      "name": "SubstrateAgent.constructor.$call:truncation:slice.arg1#1",
+      "name": "SubstrateAgent.constructor.toolResultScreener.$call:truncation:slice.arg1#1",
       "value": "2048",
       "form": "truncation",
       "note": "Reviewed after the full AST child-traversal fix for psfn-framework-aicg6.32; existing call-site policy is acknowledged migration debt, not silently accepted as immutable code ownership."

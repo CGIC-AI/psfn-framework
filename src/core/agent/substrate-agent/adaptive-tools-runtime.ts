@@ -12,6 +12,10 @@ import type { MemoryWriter } from '../../../faculties/memory/writer.js';
 import type { RuntimeServiceHealthStatus } from '../../../operator/tool-health/types.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { AdaptiveToolRuntimeState } from '../adaptive-tools-telemetry.js';
+import { isRecord } from '../../../shared/utils/types.js';
+import { getRequestContext } from '../../../primitives/llm/request-context.js';
+import { viewerAdmitsSensitivity } from '../../session/session-viewer-access.js';
+import { isCodeModeSdkCallableTool } from '../../tools/code-mode-execute.js';
 import {
   buildRuntimeToolCatalogEntry,
   buildRuntimeToolListingEntry,
@@ -23,14 +27,21 @@ import {
   getRetiredToolAlias,
   isRetiredFirstPartyToolAlias,
 } from '../tool-surface/registry.js';
+import {
+  TOOL_VIEWER_GATE_DECISIONS,
+  TOOL_WITHOUT_ACTIONS,
+} from '../tool-surface/viewer-gates.js';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../tool-surface/descriptions.js';
 import type { PromotedToolMutationResult } from './tool-runtime-contracts.js';
 
 export interface ToolDocumentationSearchEntry extends RuntimeToolCatalogEntry {
   parameters: unknown;
+  invocationMode: 'sdk' | 'direct_wire';
+  sdkSignature: string;
   capabilityStatus: 'authorized' | 'denied';
   healthStatus?: RuntimeServiceHealthStatus;
   missingTokens?: CapabilityToken[];
+  viewerWithheldActions?: string[];
 }
 
 function normalizeToolSearchQuery(query: unknown): string {
@@ -103,21 +114,170 @@ interface SearchToolsToolRuntime {
   emitTelemetry: (event: string, payload: Record<string, unknown>) => void;
 }
 
+function renderJsonSchemaType(schema: unknown, depth = 0): string {
+  if (!isRecord(schema) || depth > 3) return 'unknown';
+  if (Object.prototype.hasOwnProperty.call(schema, 'const')) {
+    return JSON.stringify(schema.const);
+  }
+  if (Array.isArray(schema.enum) && schema.enum.length > 0) {
+    return schema.enum.map(item => JSON.stringify(item)).join(' | ');
+  }
+  const unionMembers = Array.isArray(schema.anyOf)
+    ? schema.anyOf
+    : Array.isArray(schema.oneOf)
+      ? schema.oneOf
+      : null;
+  if (unionMembers && unionMembers.length > 0) {
+    const rendered = [...new Set(unionMembers.map(member => renderJsonSchemaType(member, depth + 1)))];
+    return rendered.join(' | ');
+  }
+  if (schema.type === 'array') {
+    const itemType = schema.items ? renderJsonSchemaType(schema.items, depth + 1) : 'unknown';
+    return itemType.includes(' | ') ? `(${itemType})[]` : `${itemType}[]`;
+  }
+  if (schema.type === 'object') {
+    if (isRecord(schema.properties) && Object.keys(schema.properties).length > 0 && depth < 2) {
+      const required = new Set(
+        Array.isArray(schema.required)
+          ? schema.required.filter((entry): entry is string => typeof entry === 'string')
+          : [],
+      );
+      const fields = Object.entries(schema.properties)
+        .map(([key, propSchema]) => `${key}${required.has(key) ? '' : '?'}: ${renderJsonSchemaType(propSchema, depth + 1)}`);
+      return `{ ${fields.join('; ')} }`;
+    }
+    return 'Record<string, unknown>';
+  }
+  if (schema.type === 'integer' || schema.type === 'number') return 'number';
+  if (schema.type === 'string' || schema.type === 'boolean' || schema.type === 'null') {
+    return schema.type;
+  }
+  return 'unknown';
+}
+
+function cloneSchemaWithAllowedActions(
+  parameters: unknown,
+  allowedActions: ReadonlySet<string>,
+): unknown {
+  if (!isRecord(parameters)) return parameters;
+  const cloned = JSON.parse(JSON.stringify(parameters)) as Record<string, unknown>;
+  if (!isRecord(cloned.properties) || !isRecord(cloned.properties.action)) {
+    return cloned;
+  }
+  const actionSchema = cloned.properties.action;
+  if (Array.isArray(actionSchema.anyOf)) {
+    actionSchema.anyOf = actionSchema.anyOf.filter(branch => (
+      isRecord(branch) && typeof branch.const === 'string' && allowedActions.has(branch.const)
+    ));
+  }
+  if (Array.isArray(actionSchema.oneOf)) {
+    actionSchema.oneOf = actionSchema.oneOf.filter(branch => (
+      isRecord(branch) && typeof branch.const === 'string' && allowedActions.has(branch.const)
+    ));
+  }
+  if (Array.isArray(actionSchema.enum)) {
+    actionSchema.enum = actionSchema.enum.filter(value => (
+      typeof value === 'string' && allowedActions.has(value)
+    ));
+  }
+  return cloned;
+}
+
+function formatToolTypeScriptSdkSignature(
+  toolName: string,
+  parameters: unknown,
+): string {
+  const argsType = isRecord(parameters) && isRecord(parameters.properties)
+    ? (() => {
+        const required = new Set(
+          Array.isArray(parameters.required)
+            ? parameters.required.filter((entry): entry is string => typeof entry === 'string')
+            : [],
+        );
+        const entries = Object.entries(parameters.properties);
+        if (entries.length === 0) return '{}';
+        const fields = entries.map(([key, propSchema]) => (
+          `${key}${required.has(key) ? '' : '?'}: ${renderJsonSchemaType(propSchema, 1)}`
+        ));
+        return `{ ${fields.join('; ')} }`;
+      })()
+    : renderJsonSchemaType(parameters, 0);
+
+  if (isCodeModeSdkCallableTool(toolName)) {
+    return `sdk.${toolName}(args: ${argsType}): Promise<unknown>`;
+  }
+  return `${toolName}(args: ${argsType}) /* direct wire tool */`;
+}
+
+interface ViewerFilteredToolResolution {
+  visible: boolean;
+  parameters: unknown;
+  allowedActions?: readonly string[];
+  withheldActions: string[];
+}
+
+function resolveViewerFilteredTool(tool: AgentTool<any>): ViewerFilteredToolResolution {
+  if (!getRequestContext()) {
+    return { visible: true, parameters: tool.parameters, withheldActions: [] };
+  }
+  const decisions = TOOL_VIEWER_GATE_DECISIONS[tool.name];
+  if (!decisions) {
+    return { visible: true, parameters: tool.parameters, withheldActions: [] };
+  }
+  const wildcard = decisions[TOOL_WITHOUT_ACTIONS];
+  if (wildcard) {
+    if (wildcard.kind === 'sensitivity' && !viewerAdmitsSensitivity(wildcard.level)) {
+      return { visible: false, parameters: tool.parameters, withheldActions: [TOOL_WITHOUT_ACTIONS] };
+    }
+    return { visible: true, parameters: tool.parameters, withheldActions: [] };
+  }
+
+  const allowedActions: string[] = [];
+  const withheldActions: string[] = [];
+  for (const [actionName, decision] of Object.entries(decisions)) {
+    if (decision.kind === 'sensitivity' && !viewerAdmitsSensitivity(decision.level)) {
+      withheldActions.push(actionName);
+    } else {
+      allowedActions.push(actionName);
+    }
+  }
+  if (withheldActions.length === 0) {
+    return { visible: true, parameters: tool.parameters, withheldActions: [] };
+  }
+  if (allowedActions.length === 0) {
+    return { visible: false, parameters: tool.parameters, withheldActions };
+  }
+  return {
+    visible: true,
+    parameters: cloneSchemaWithAllowedActions(tool.parameters, new Set(allowedActions)),
+    allowedActions,
+    withheldActions,
+  };
+}
+
 function buildDocumentationEntry(input: {
   tool: AgentTool<any>;
   scope: 'core' | 'extended';
   access: CapabilityAccess;
   healthStatus?: RuntimeServiceHealthStatus;
+  viewerResolution: ViewerFilteredToolResolution;
 }): ToolDocumentationSearchEntry {
   const disabledByOverride = isToolDisabledByAccess(input.access, input.tool.name);
   const requiredTokens = resolveToolRequiredCapabilities(input.tool, {});
   const missingTokens = requiredTokens.filter(token => !input.access.has(token));
+  const baseEntry = buildRuntimeToolCatalogEntry(input.tool, input.scope);
+  const invocationMode = isCodeModeSdkCallableTool(input.tool.name) ? 'sdk' : 'direct_wire';
   return {
-    ...buildRuntimeToolCatalogEntry(input.tool, input.scope),
-    parameters: input.tool.parameters,
+    ...baseEntry,
+    parameters: input.viewerResolution.parameters,
+    invocationMode,
+    sdkSignature: formatToolTypeScriptSdkSignature(input.tool.name, input.viewerResolution.parameters),
     capabilityStatus: disabledByOverride || missingTokens.length > 0 ? 'denied' : 'authorized',
     ...(input.healthStatus ? { healthStatus: input.healthStatus } : {}),
     ...(missingTokens.length > 0 ? { missingTokens } : {}),
+    ...(input.viewerResolution.withheldActions.length > 0
+      ? { viewerWithheldActions: input.viewerResolution.withheldActions }
+      : {}),
   };
 }
 
@@ -158,7 +318,13 @@ export function createToolSearchTool(runtime: SearchToolsToolRuntime): Substrate
           .map(tool => ({ tool, scope: 'core' as const })),
         ...filterCanonicalDiscoverableTools(runtime.getExtendedTools())
           .map(tool => ({ tool, scope: 'extended' as const })),
-      ];
+      ]
+        .filter(entry => !isToolDisabledByAccess(access, entry.tool.name))
+        .map(entry => ({
+          ...entry,
+          viewerResolution: resolveViewerFilteredTool(entry.tool),
+        }))
+        .filter(entry => entry.viewerResolution.visible);
       const matching = catalog
         .map(entry => ({ ...entry, score: scoreToolSearchMatch(entry.tool, query) }))
         .filter(entry => !query || entry.score > 0)
@@ -172,6 +338,7 @@ export function createToolSearchTool(runtime: SearchToolsToolRuntime): Substrate
         scope: entry.scope,
         access,
         healthStatus: healthByName.get(entry.tool.name),
+        viewerResolution: entry.viewerResolution,
       }));
 
       runtime.emitTelemetry('agent.tools.documentation_search', {

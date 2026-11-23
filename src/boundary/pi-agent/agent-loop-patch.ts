@@ -38,6 +38,13 @@ export interface AgentLoopPromptCacheHooks {
    * fall back to another concurrent turn's mutable Agent state.
    */
   resolveTurnTools?: () => readonly AgentTool<any>[] | undefined;
+  /**
+   * Optional compact provider wire tool projection (Hybrid Code Mode, b3h5p.4).
+   * When present, `streamAssistantResponse` advertises these schemas on the wire
+   * while `executeToolCallsWithScheduler` continues to resolve the full
+   * turn-owned tool set from `resolveTurnTools`.
+   */
+  resolveProviderWireTools?: () => readonly AgentTool<any>[] | undefined;
 }
 
 const installedTurnToolResolvers = new WeakMap<
@@ -251,6 +258,17 @@ export function installAgentToolSchedulerPatch(
       getTools: () => promptCacheHooks?.resolveTurnTools
         ? [...resolveInstalledAgentTurnTools(this as unknown as Agent)]
         : [...initialTurnTools],
+      ...(promptCacheHooks?.resolveProviderWireTools
+        ? {
+            getProviderWireTools: () => {
+              const projected = promptCacheHooks.resolveProviderWireTools?.();
+              if (projected) return [...projected];
+              return promptCacheHooks.resolveTurnTools
+                ? [...resolveInstalledAgentTurnTools(this as unknown as Agent)]
+                : [...initialTurnTools];
+            },
+          }
+        : {}),
       ...(promptCacheBoundaries ? { promptCacheBoundaries } : {}),
     };
     const config = this.createLoopConfig(options) as ScheduledAgentLoopConfig;

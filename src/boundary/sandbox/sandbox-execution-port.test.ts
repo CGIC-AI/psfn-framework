@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { describe, expect, it } from 'vitest';
 import {
   normalizeSandboxDebugLogKey,
@@ -17,6 +18,38 @@ describe('withChildProcessSandboxExecutionPort', () => {
 
     expect(result.error).toBeNull();
     expect(result.finalAnswer).toBe('{"fetch":"undefined","WebSocket":"undefined"}');
+  });
+
+  it('preserves AsyncLocalStorage context across IPC and binds frozen sdk.* helpers without leaking sdk into locals', async () => {
+    const storage = new AsyncLocalStorage<{ turnId: string; viewer: string }>();
+    const port = withChildProcessSandboxExecutionPort(null);
+    const result = await storage.run({ turnId: 'turn-als-1', viewer: 'primary' }, async () => (
+      port.executeCode({
+        code: `(async () => {
+          const observed = await sdk.probe({ ping: 'ok' });
+          FINAL(JSON.stringify({ observed, frozen: Object.isFrozen(sdk) }));
+        })()`,
+        timeoutMs: 5_000,
+        initialLocals: {},
+        helperNames: ['sdk.probe'],
+        hostHelpers: {
+          'sdk.probe': async (args: unknown) => ({
+            args,
+            store: storage.getStore() ?? null,
+          }),
+        },
+      })
+    ));
+
+    expect(result.error).toBeNull();
+    expect(JSON.parse(result.finalAnswer ?? '{}')).toEqual({
+      observed: {
+        args: { ping: 'ok' },
+        store: { turnId: 'turn-als-1', viewer: 'primary' },
+      },
+      frozen: true,
+    });
+    expect(result.locals).not.toHaveProperty('sdk');
   });
 });
 

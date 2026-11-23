@@ -26,6 +26,7 @@ import { createProjectsTool } from '../../../faculties/wiki/projects-tool.js';
 import { createPublicationTool } from '../../cogsec/disclosure/publication-tool.js';
 import { createGenerateImageTool, createSelfieTool } from '../../../primitives/images/tools.js';
 import { createResponseControlTool } from '../no-reply-tool.js';
+import { createCodeModeExecuteTool } from '../../tools/code-mode-execute.js';
 import { createToolSearchTool, createToolsetTool } from '../substrate-agent/adaptive-tools-runtime.js';
 import { INTAKE_FIREWALL_OFF_SELF_AUTHORED_MUTATION_RUNTIME } from '../../session/intake-sink-gating.js';
 import type { SensitivityLevel } from '../../../system/trust/types.js';
@@ -78,7 +79,7 @@ export function createProviderFactoryToolCatalog(): AgentTool<any>[] {
     },
   });
   return [
-    createToolSearchTool(inert), createToolsetTool(inert),
+    createToolSearchTool(inert), createCodeModeExecuteTool(inert), createToolsetTool(inert),
     createResponseControlTool(() => null), createFileEditorTool(inert),
     createShellTool(inert), createWebTool(inert), createWorldTool(inert, inert),
     createMcpTool({ gateway: inert }),

@@ -1653,4 +1653,63 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       async () => undefined,
     )).rejects.toThrow('not capability authorized');
   });
+
+  it('projects Hybrid Code Mode provider wire tools while keeping full turn tools executable via execute (b3h5p.4)', async () => {
+    const { facade } = createFacade(null, [
+      'identity.read',
+      'memory.write',
+      'external.web',
+      'external.companion',
+    ]);
+    facade.registerTool(makeTool('memory'), 'core');
+    facade.registerTool(makeTool('journal'), 'core');
+    facade.registerTool(makeTool('wiki'), 'core');
+    facade.registerTool(makeTool('response_control'), 'core');
+    facade.registerTool(facade.createToolSearchTool(), 'core');
+    facade.registerTool(facade.createCodeModeExecuteTool(), 'core');
+    facade.registerTool(makeTool('notify'), 'extended');
+    facade.registerTool(makeTool('mcp'), 'core');
+
+    const correlation = {
+      turnId: 'turn-hcm',
+      requestId: 'req-hcm',
+      channelId: 'discord:general',
+      callType: 'chat' as const,
+      purpose: 'agent.turn',
+    };
+
+    const ordinaryMessage = {
+      id: 'msg-hcm-ordinary',
+      channelId: 'discord:general',
+      channelType: 'discord',
+      authorId: 'user-1',
+      authorName: 'User',
+      content: 'How was our trip to Paris?',
+      timestamp: new Date('2026-07-30T12:00:00Z'),
+    } as never;
+
+    await facade.runWithTurnToolContext(ordinaryMessage, async () => {
+      facade.applyActiveToolsToAgentForTurn(ordinaryMessage, undefined, 'chat', correlation, { intent: null });
+      const ownedNames = facade.resolveOwnedTurnTools()?.map(t => t.name) ?? [];
+      const wireNames = facade.resolveOwnedTurnProviderWireTools()?.map(t => t.name) ?? [];
+      expect(ownedNames).toEqual(expect.arrayContaining(['memory', 'journal', 'wiki', 'execute', 'tool_search', 'notify', 'mcp', 'response_control']));
+      expect(wireNames.sort()).toEqual(['execute', 'mcp', 'notify', 'response_control', 'tool_search']);
+    });
+
+    const explicitMessage = {
+      id: 'msg-hcm-explicit',
+      channelId: 'discord:general',
+      channelType: 'discord',
+      authorId: 'user-1',
+      authorName: 'User',
+      content: 'Please call memory to check our notes about Paris.',
+      timestamp: new Date('2026-07-30T12:01:00Z'),
+    } as never;
+
+    await facade.runWithTurnToolContext(explicitMessage, async () => {
+      facade.applyActiveToolsToAgentForTurn(explicitMessage, undefined, 'chat', correlation, { intent: null });
+      const wireNames = facade.resolveOwnedTurnProviderWireTools()?.map(t => t.name) ?? [];
+      expect(wireNames.sort()).toEqual(['execute', 'mcp', 'memory', 'notify', 'response_control', 'tool_search']);
+    });
+  });
 });

@@ -82,6 +82,14 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     retiredAliases: [],
   },
   {
+    name: 'execute',
+    domain: 'adaptive_tooling',
+    exposure: 'core',
+    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.execute,
+    capabilityMetadata: { kind: 'static', source: CAPABILITIES_REQUIREMENTS },
+    retiredAliases: [],
+  },
+  {
     name: 'toolset',
     domain: 'adaptive_tooling',
     exposure: 'core',

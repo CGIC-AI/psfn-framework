@@ -28,10 +28,36 @@ export function smokeScenario(body) {
   if (deletion) {
     const last = messages.at(-1);
     if (last?.role === 'tool') return { kind: 'deletion', content: 'The memory deletion proposal awaits operator validation.' };
-    if (!body.tools?.some(tool => tool.function?.name === 'memory')) throw new Error('Actual memory tool was not offered');
-    return { kind: 'deletion', toolCall: { id: 'call_smoke_delete_' + createHash('sha256').update(current).digest('hex').slice(0, 24), name: 'memory',
-      arguments: { action: 'delete', memory_id: deletion[1], justification_category: 'privacy_or_consent',
-        explanation: 'Consent withdrawn for this disposable smoke fact.' } } };
+    const callId = 'call_smoke_delete_' + createHash('sha256').update(current).digest('hex').slice(0, 24);
+    const deleteArgs = {
+      action: 'delete',
+      memory_id: deletion[1],
+      justification_category: 'privacy_or_consent',
+      explanation: 'Consent withdrawn for this disposable smoke fact.',
+    };
+    if (body.tools?.some(tool => tool.function?.name === 'execute')) {
+      return {
+        kind: 'deletion',
+        toolCall: {
+          id: callId,
+          name: 'execute',
+          arguments: {
+            code: `return await sdk.memory(${JSON.stringify(deleteArgs)});`,
+          },
+        },
+      };
+    }
+    if (body.tools?.some(tool => tool.function?.name === 'memory')) {
+      return {
+        kind: 'deletion',
+        toolCall: {
+          id: callId,
+          name: 'memory',
+          arguments: deleteArgs,
+        },
+      };
+    }
+    throw new Error('Neither execute nor memory tool was offered');
   }
   if (current.includes('SMOKE_PROVIDER_FAILURE')) return { kind: 'failure', status: 400 };
   if (current.includes('SMOKE_PROVIDER_HOLD')) return { kind: 'hold', delayMs: 60_000 };

@@ -875,66 +875,79 @@ export class SubstrateAgent {
       getActiveTurnCorrelation: () => this.turnSupportRuntime.getActiveTurnCorrelation(),
       getActiveTurnTaskKind: () => this.turnSupportRuntime.getActiveTurnTaskKind(),
     });
+    // hrmrq.54 + b3h5p.4: shared CogSec screener, disclosure lineage hook, and
+    // telemetry emitter used by BOTH the top-level tool scheduler and inner
+    // `execute` REPL SDK calls so every tool result is screened and tracked
+    // identically regardless of invocation path.
+    const toolResultScreener = ({
+      toolName,
+      toolCallId,
+      arguments: toolArguments,
+      text,
+    }: {
+      toolName: string;
+      toolCallId: string;
+      arguments: unknown;
+      text: string;
+    }) => {
+      const screening = this.sessionManager.intakeScreening;
+      if (!screening) return null;
+      const sourceChannelId = this.turnSupportRuntime.getActiveTurnCorrelation()?.channelId?.trim();
+      const toolCallSuffix = toolCallId.trim() ? `:${toolCallId.trim()}` : '';
+      const screened = screening.screenSync(text, {
+        sourceClass: 'tool_output',
+        toolResultProvenance: { toolName, arguments: toolArguments },
+        // Structural clean-bubble provenance: derived from the tool NAME only
+        // (unforgeable by content/model args), so boundary-mode internal
+        // tool results make zero semantic-screening calls.
+        structuralProvenance: classifyToolResultCogSecProvenance(toolName),
+        origin: {
+          ref: `tool:${toolName.trim()}${toolCallSuffix}`.slice(0, 2048),
+          detail: 'seam:tool-scheduler',
+        },
+        scope: 'context',
+        ...(sourceChannelId ? { sourceChannelId } : {}),
+      });
+      return {
+        mode: screened.mode,
+        withheld: screened.withheld,
+        effectiveText: screened.effectiveText,
+        snapshot: screened.snapshot,
+        ...(screened.markingPlan ? { markingPlan: screened.markingPlan } : {}),
+      };
+    };
+    const onToolResultAdmitted = (input: { toolName: string; arguments: unknown }) => {
+      // Discovery/release metadata preserves the admitted context's
+      // sensitivity; remote call results and other tool outputs retain the
+      // disclosure generation's confidential result floor.
+      this.currentTurnDisclosureLineage = applyAdmittedToolResultDisclosureFloor(
+        this.currentTurnDisclosureLineage,
+        input,
+      );
+    };
+    const onToolExecutionTelemetry = (eventName: string, payload: Record<string, unknown>) => {
+      this.turnSupportRuntime.emitTelemetry(eventName, {
+        ...this.turnSupportRuntime.withAdaptiveCorrelation(
+          this.turnSupportRuntime.getActiveTurnCorrelation() ?? undefined,
+          eventName,
+        ),
+        timestamp: Date.now(),
+        taskKind: this.turnSupportRuntime.getActiveTurnTaskKind(),
+        intent: this.turnSupportRuntime.getActiveTurnIntent(),
+        ...payload,
+      });
+    };
+
     installAgentToolSchedulerPatch(this.agent, {
       maxParallelToolCalls: DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL,
       resolveEvidenceDependency: () => this.currentTurnEvidenceDependency,
-      // hrmrq.54: screen tool results at the scheduler seam, BEFORE they
-      // enter the turn — the persistence-time screen alone let quarantined
-      // content (e.g. an fs.read of a withheld document) reach the model
-      // loop unscreened. Resolved lazily: composition assigns
-      // sessionManager.intakeScreening after construction; a null service
-      // means the firewall is off for this runtime.
-      toolResultScreener: ({ toolName, toolCallId, arguments: toolArguments, text }) => {
-        const screening = this.sessionManager.intakeScreening;
-        if (!screening) return null;
-        const sourceChannelId = this.turnSupportRuntime.getActiveTurnCorrelation()?.channelId?.trim();
-        const toolCallSuffix = toolCallId.trim() ? `:${toolCallId.trim()}` : '';
-        const screened = screening.screenSync(text, {
-          sourceClass: 'tool_output',
-          toolResultProvenance: { toolName, arguments: toolArguments },
-          // Structural clean-bubble provenance: derived from the tool NAME only
-          // (unforgeable by content/model args), so boundary-mode internal
-          // tool results make zero semantic-screening calls.
-          structuralProvenance: classifyToolResultCogSecProvenance(toolName),
-          origin: {
-            ref: `tool:${toolName.trim()}${toolCallSuffix}`.slice(0, 2048),
-            detail: 'seam:tool-scheduler',
-          },
-          scope: 'context',
-          ...(sourceChannelId ? { sourceChannelId } : {}),
-        });
-        return {
-          mode: screened.mode,
-          withheld: screened.withheld,
-          effectiveText: screened.effectiveText,
-          snapshot: screened.snapshot,
-          ...(screened.markingPlan ? { markingPlan: screened.markingPlan } : {}),
-        };
-      },
-      onToolResultAdmitted: (input) => {
-        // Discovery/release metadata preserves the admitted context's
-        // sensitivity; remote call results and other tool outputs retain the
-        // disclosure generation's confidential result floor.
-        this.currentTurnDisclosureLineage = applyAdmittedToolResultDisclosureFloor(
-          this.currentTurnDisclosureLineage,
-          input,
-        );
-      },
-      onTelemetry: (eventName, payload) => {
-        this.turnSupportRuntime.emitTelemetry(eventName, {
-          ...this.turnSupportRuntime.withAdaptiveCorrelation(
-            this.turnSupportRuntime.getActiveTurnCorrelation() ?? undefined,
-            eventName,
-          ),
-          timestamp: Date.now(),
-          taskKind: this.turnSupportRuntime.getActiveTurnTaskKind(),
-          intent: this.turnSupportRuntime.getActiveTurnIntent(),
-          ...payload,
-        });
-      },
+      toolResultScreener,
+      onToolResultAdmitted,
+      onTelemetry: onToolExecutionTelemetry,
     }, {
       resolvePromptCacheBoundaries: (systemPrompt) => this.promptCacheRuntime.resolveBoundariesFor(systemPrompt),
       resolveTurnTools: () => this.toolRuntimeFacade.resolveOwnedTurnTools(),
+      resolveProviderWireTools: () => this.toolRuntimeFacade.resolveOwnedTurnProviderWireTools(),
     }, undefined, {
       // z4vhu: a preempted background turn never takes the run slot afterwards.
       isCurrentTurnPreempted: () => this.backgroundTurnPreemption.isCurrentTurnPreempted(),
@@ -945,11 +958,16 @@ export class SubstrateAgent {
     // Persistent event bridge: pi-agent-core events → EventBus
     this.bridge = createEventBridge(this.agent, eventBus);
 
-    // Register the core response/discovery and non-default tool control tools.
+    // Register the core response/discovery, Hybrid Code Mode REPL, and tool control tools.
     this.registerTool(createResponseControlTool((input) => (
       this.turnSupportRuntime.recordIntentionalNoReplyDecision(input)
     )), 'core');
     this.registerTool(this.toolRuntimeFacade.createToolSearchTool(), 'core');
+    this.registerTool(this.toolRuntimeFacade.createCodeModeExecuteTool({
+      toolResultScreener,
+      onToolResultAdmitted,
+      onTelemetry: onToolExecutionTelemetry,
+    }), 'core');
     this.registerTool(this.toolRuntimeFacade.createToolsetTool(), 'core');
 
     // Eagerly resolve the model. Continuous/test runtimes may defer a failed

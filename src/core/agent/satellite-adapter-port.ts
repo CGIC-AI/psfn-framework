@@ -1,7 +1,3 @@
-import type {
-  ChannelAdapterManifestEntry,
-  ChannelAdapterPort,
-} from '../../channels/backplane/types.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type {
@@ -48,18 +44,6 @@ export interface SatelliteRoutingPort {
 export interface SatellitePresencePort {
   resolveCanonicalEmbodiment(value: unknown): EmbodimentPresenceMetadata | undefined;
   resolveCanonicalSatellite(value: unknown): SatellitePresenceMetadata | undefined;
-}
-
-export interface SatelliteChannelAdapterPort {
-  manifest: ChannelAdapterManifestEntry;
-  create(): Promise<ChannelAdapterPort> | ChannelAdapterPort;
-}
-
-export interface SatelliteAdapterPort {
-  id: string;
-  routing?: SatelliteRoutingPort;
-  presence?: SatellitePresencePort;
-  channel?: SatelliteChannelAdapterPort;
 }
 
 export function createNoopSatelliteRoutingPort(): SatelliteRoutingPort {

@@ -1,4 +1,3 @@
-import type { GatewayClient } from '../../boundary/gateway/client.js';
 import type {
   IcpDyadContinuationAuthorization,
   IcpDyadContinuationPrepareResult,
@@ -243,7 +242,7 @@ function requirePermitId(value: string): string {
 
 export function createAgentFacingIcpAutonomyRuntime(input: {
   contactStore: ContactStorePort;
-  gateway: IcpAgentGatewayPort | GatewayClient;
+  gateway: IcpAgentGatewayPort;
   command: IcpTargetChannelCommandPort;
 }): AgentFacingIcpAutonomyRuntime {
   const resolveKnownPeer = async (contactId: string): Promise<KnownCompanionPeer> => {

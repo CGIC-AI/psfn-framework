@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import type { EventBus } from '../../../shared/event-bus.js';
@@ -537,8 +536,4 @@ export function parseCompanionRelayPublishParams(params: unknown): CompanionRela
     ...(channelId ? { channelId } : {}),
     ...(preview ? { preview } : {}),
   };
-}
-
-export function newCompanionArtifactId(): string {
-  return `art-${randomUUID()}`;
 }

@@ -3,7 +3,7 @@ import {
   collectGeneratedImageAttachments,
   type GeneratedImageGalleryContext,
 } from '../../../../primitives/images/generated-media.js';
-import { emitCompanionArtifactCreatedEvents } from '../../../../channels/backplane/companion-relay/artifact-emission.js';
+import { emitCompanionArtifactCreatedEvents } from '../../../../shared/companion-relay-artifact-emission.js';
 import type {
   AgentResponse,
   CorrelationMetadata,

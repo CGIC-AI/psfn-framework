@@ -5,16 +5,16 @@ import {
   VALID_SENSITIVITY_LEVELS,
   normalizeMemoryTypeValue,
 } from '../memory/types.js';
-import type {
-  ShardMergeReview,
-  ShardRuntimeRecord,
-  ShardTaggedOutput,
-  ShardTaggedOutputKind,
-  ShardTaggedOutputProvenance,
-  ShardTaggedOutputSource,
-  ShardWorkLogEntry,
+import {
+  truncateShardContextText,
+  type ShardMergeReview,
+  type ShardRuntimeRecord,
+  type ShardTaggedOutput,
+  type ShardTaggedOutputKind,
+  type ShardTaggedOutputProvenance,
+  type ShardTaggedOutputSource,
+  type ShardWorkLogEntry,
 } from './types.js';
-import { truncateShardContextText } from './context-pack.js';
 
 export interface StagedShardMemoryCandidate {
   text: string;

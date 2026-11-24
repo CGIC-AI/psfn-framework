@@ -7,7 +7,6 @@ import type {
   CompanionApprovalRequestedV2Payload,
   CompanionApprovalResolvedPayload,
   CompanionApprovalResolutionStatus,
-  CompanionArtifactCreatedPayload,
   CompanionEmotionAcacAxisScore,
   CompanionEmotionDiscreteScore,
   CompanionEmotionSnapshotPayload,
@@ -15,6 +14,7 @@ import type {
   CompanionToolActivityPayload,
   CompanionToolActivityPhase,
 } from '../../../shared/contracts/companion-relay.js';
+export { redactArtifactCreated } from '../../../shared/companion-relay-artifact-emission.js';
 import type { ToolCallOutcome } from '../../../shared/contracts/tool-call-outcome.js';
 import { ACAC_AXES, type AcacAxis } from '../../../shared/contracts/emotion-contracts.js';
 import { clampSigned, clampUnit } from '../../../shared/utils/numeric.js';
@@ -43,11 +43,8 @@ const EMOTION_AXIS_PRECISION = 2;
 
 const MAX_TITLE_LENGTH = 160;
 const MAX_CONTEXT_LENGTH = 280;
-const MAX_LABEL_LENGTH = 120;
 const MAX_TOOL_NAME_LENGTH = 120;
 const MAX_ID_LENGTH = 160;
-const MAX_PROVENANCE_LENGTH = 120;
-const MAX_MEDIA_TYPE_LENGTH = 100;
 // v2 approval-envelope field caps (bead psfn-framework-13sk).
 const MAX_ACTION_LENGTH = 120;
 const MAX_SCOPE_LENGTH = 200;
@@ -250,29 +247,6 @@ export function redactToolActivity(input: {
     phase: input.phase,
     ...(input.outcome ? { outcome: input.outcome } : {}),
     timestamp: toIsoTimestamp(input.timestampMs),
-  };
-}
-
-/**
- * Generated media → redacted artifact announcement. The artifact label is a
- * display name only; local filesystem paths, URLs, and bytes never enter the
- * payload (preview access flows through the gated preview endpoint instead).
- */
-export function redactArtifactCreated(input: {
-  artifactId: string;
-  label: string;
-  mediaType: string;
-  provenance: string;
-  createdAtMs: number;
-  previewable: boolean;
-}): CompanionArtifactCreatedPayload {
-  return {
-    id: requireId(input.artifactId, 'artifact id'),
-    label: clampText(input.label, MAX_LABEL_LENGTH) || 'artifact',
-    mediaType: clampText(input.mediaType, MAX_MEDIA_TYPE_LENGTH) || 'application/octet-stream',
-    provenance: clampText(input.provenance, MAX_PROVENANCE_LENGTH) || 'unknown',
-    createdAt: toIsoTimestamp(input.createdAtMs),
-    previewable: input.previewable === true,
   };
 }
 

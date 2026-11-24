@@ -86,16 +86,14 @@ import {
   FLEET_AUTH_PRIMARY_EMBODIMENT_DDL_SQL,
 } from './primary-embodiment-sql.js';
 
+import type { FleetAuthDatabaseRoles } from '../../../shared/contracts/hub-device-assertion-verifier.js';
+
+export type { FleetAuthDatabaseRoles } from '../../../shared/contracts/hub-device-assertion-verifier.js';
+
 export const FLEET_AUTH_SCHEMA_NAME = 'fleet_auth';
 const MIGRATION_LOCK_CLASS = 0x5053464e;
 const MIGRATION_LOCK_ID = 0x46415554;
 const ROLE_PATTERN = /^[a-z][a-z0-9_]{0,62}$/u;
-
-export interface FleetAuthDatabaseRoles {
-  runtime: string;
-  migration: string;
-  backupRestore: string;
-}
 
 /**
  * Complete database authority set for a fleet backup family. The shared-world

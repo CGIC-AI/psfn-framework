@@ -16,8 +16,10 @@ import type { EventBridge } from '../event-bridge.js';
 import type { LLMProviderPort, MemoryExtractor, MemoryProvider, WikiRetrievalPort } from '../contracts.js';
 import type { SatellitePresencePort } from '../satellite-adapter-port.js';
 import type { CompanionPresenceTurnPort } from '../companion-presence-runtime.js';
-import type { SkillsRuntime } from '../../../faculties/skills/runtime.js';
-import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
+import type {
+  SkillsRuntimePromptPort,
+  TurnToolSummary,
+} from '../../../shared/contracts/skills-runtime-port.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { EmotionSelfModelRuntime } from './emotion-self-model-runtime.js';
 import type { ParticipantRelationshipEdgeInput, ResolvedAuthorContext, UserRuntimeProfile } from './runtime-context.js';
@@ -32,7 +34,7 @@ import type { MetacognitiveFlag } from '../../self-model/metacognition.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
 import type { ConversationScopeSpeaker } from '../../session/conversation-scope.js';
 import type { CapturedSessionReads } from '../../session/manager/captured-session-owner.js';
-import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
+import type { ImageVisionReviewer } from '../../../shared/contracts/image-vision-review.js';
 import type { VisionIntakeImageScreenerPort } from './vision-attachments.js';
 import type { ObserverEvalSidecarRuntime } from '../../eval/observer-sidecar/types.js';
 import type { FatigueBudgetPort } from '../fatigue/fatigue-budget.js';
@@ -40,7 +42,7 @@ import type { HumanAttentionPressurePort } from '../fatigue/human-attention-pres
 import type { IcpFatigueRegulationReservationPort } from '../fatigue/regulation-reservation.js';
 import type { IntakeFirewallMode } from '../../../system/config/intake-policy-config.js';
 import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
-import type { NotificationPort } from '../../../boundary/gateway/notification-port.js';
+import type { NotificationPort } from '../../../shared/contracts/notification-port.js';
 import type { Attachment } from '../../../shared/contracts/runtime.js';
 import type { ArtifactEgressDestination } from '../../artifacts/sensitivity-egress.js';
 import type { DisclosureLineage } from '../../cogsec/disclosure/contracts.js';
@@ -204,7 +206,7 @@ export interface TurnExecutionAdapterOptions {
     message: SubstrateMessage,
     author: import('../virtual-room-follow.js').VirtualFollowAuthorContext,
   ) => Promise<void>;
-  skillsRuntime: SkillsRuntime | null;
+  skillsRuntime: SkillsRuntimePromptPort | null;
   evaluateReflectionNudge: (toolSummary: TurnToolSummary) => string | null;
   emotionSelfModelRuntime: EmotionSelfModelRuntime;
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;

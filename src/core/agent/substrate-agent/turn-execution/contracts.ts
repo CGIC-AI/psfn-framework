@@ -8,7 +8,7 @@ import type {
   DurableRunChargeRecorder,
 } from '../../../../shared/telemetry/run-charge.js';
 import type { ComposeContext } from '../../../identity/prompt-types.js';
-import type { ImageVisionReviewer } from '../../../../primitives/images/types.js';
+import type { ImageVisionReviewer } from '../../../../shared/contracts/image-vision-review.js';
 import type { VisionIntakeImageScreenerPort } from '../vision-attachments.js';
 import type { SessionManager } from '../../../session/manager.js';
 import type { CapturedSessionReads } from '../../../session/manager/captured-session-owner.js';
@@ -22,8 +22,10 @@ import type { ToolResultCustodyEdge } from '../../../../shared/contracts/tool-re
 import type { ContextSourceManifestBlockInput } from '../../../cogsec/disclosure/context-source-manifest.js';
 import type { MetacognitiveFlag } from '../../../self-model/metacognition.js';
 import type { InternalState } from '../../../self-model/state.js';
-import type { SkillsRuntime } from '../../../../faculties/skills/runtime.js';
-import type { TurnToolSummary } from '../../../../faculties/skills/reflection-nudge.js';
+import type {
+  SkillsRuntimePromptPort,
+  TurnToolSummary,
+} from '../../../../shared/contracts/skills-runtime-port.js';
 import type { ChannelMeta } from '../../../../system/trust/policy.js';
 import type { TrustLevel } from '../../../../system/trust/types.js';
 import type { SatellitePresencePort } from '../../satellite-adapter-port.js';
@@ -70,7 +72,7 @@ import type {
 } from '../runtime-context.js';
 import type { ToolTurnOutcome } from '../tool-runtime-contracts.js';
 import type { ApprovalQueuePort } from '../../../../system/capabilities/approval-queue-port.js';
-import type { NotificationPort } from '../../../../boundary/gateway/notification-port.js';
+import type { NotificationPort } from '../../../../shared/contracts/notification-port.js';
 import type { ArtifactEgressDestination } from '../../../artifacts/sensitivity-egress.js';
 import type { PromptCacheTurnRuntime } from './prompt-cache-runtime.js';
 import type { CompletionNoticeBuffer } from '../../completion-notices.js';
@@ -176,7 +178,7 @@ export interface TurnExecutionRuntime {
     message: SubstrateMessage,
     author: import('../../virtual-room-follow.js').VirtualFollowAuthorContext,
   ) => Promise<void>;
-  skillsRuntime: SkillsRuntime | null;
+  skillsRuntime: SkillsRuntimePromptPort | null;
   evaluateReflectionNudge: (toolSummary: TurnToolSummary) => string | null;
   emotionSelfModelRuntime: EmotionSelfModelRuntime;
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;

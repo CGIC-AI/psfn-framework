@@ -57,7 +57,7 @@ import {
   type PostTurnActionInferer,
   type PostTurnInferenceContext,
 } from './post-turn-actions.js';
-import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
+import type { TurnToolSummary } from '../../../shared/contracts/skills-runtime-port.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { SessionActorKind } from '../../session/turn-provenance.js';
 import type { IntrospectionTurnSensitivityDecisions } from '../../../faculties/introspection/turn-sensitivity.js';

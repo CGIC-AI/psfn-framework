@@ -142,7 +142,7 @@ import { parseIcpRecoveryResponse } from '../../session/icp-delivery-recovery.js
 import { ParentTurnContinuationBudgetExceededError } from '../turn-limits.js';
 import { parseTurnRecordBackgroundWorkHandoff } from '../background-work/types.js';
 import type { ForegroundWorkLease } from '../background-work/supervisor.js';
-import type { PrecomputedNoReplyDisposition } from '../../participation/types.js';
+import type { PrecomputedNoReplyDisposition } from '../../../shared/contracts/participation-types.js';
 import type {
   TurnAdmissionRuntime,
   TurnExecutionRuntime,

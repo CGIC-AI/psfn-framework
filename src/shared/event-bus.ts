@@ -30,7 +30,7 @@ import type {
   ParticipationAction,
   ParticipationCandidateTrigger,
   ParticipationSuppressionReason,
-} from '../core/participation/types.js';
+} from './contracts/participation-types.js';
 import type {
   ReservationGateBlockReason,
   ReservationGateErrorStage,

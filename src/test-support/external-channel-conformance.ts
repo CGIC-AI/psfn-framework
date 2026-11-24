@@ -8,7 +8,7 @@
 import { createServer, type Server } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AgentResponse, SubstrateMessage } from '../shared/contracts/runtime.js';
-import type { MessageHandlerOptions } from '../channels/backplane/types.js';
+import type { MessageHandlerOptions } from '../shared/contracts/channel-prompt-port.js';
 import { ExternalChannelAdapter } from '../channels/external/adapter.js';
 import type { ExternalChannelLimits } from '../channels/external/config.js';
 import { ExternalChannelMcpRoute, externalChannelEndpointPath } from '../channels/external/mcp-route.js';

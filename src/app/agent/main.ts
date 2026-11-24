@@ -71,7 +71,7 @@ import {
   wireOperatorHookRuntime,
   wireShardAndThinkRuntime,
 } from '../startup/composition/composition.js';
-import { createPreToolHookGate } from '../../boundary/gateway/pre-tool-hook.js';
+import { createPreToolHookGate } from '../../system/capabilities/pre-tool-hook.js';
 import { resolveToolAliasMatchers } from '../../core/agent/tool-surface/registry.js';
 import {
   buildCharacterPromptVariablesProvider,

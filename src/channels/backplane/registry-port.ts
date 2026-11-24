@@ -1,8 +1,7 @@
-import type { ChannelAdapterPort, ChannelPromptDock } from './types.js';
+import type { ChannelPromptRegistryPort } from '../../shared/contracts/channel-prompt-port.js';
+import type { ChannelAdapterPort } from './types.js';
 
-export interface ChannelPromptRegistryPort {
-  get(id: string): ChannelPromptDock | undefined;
-}
+export type { ChannelPromptRegistryPort };
 
 export interface ChannelAdapterRegistryPort extends ChannelPromptRegistryPort {
   get(id: string): ChannelAdapterPort | undefined;

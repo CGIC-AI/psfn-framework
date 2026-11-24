@@ -12,7 +12,7 @@ import { isToolDisabledByAccess } from './tool-overrides.js';
 import {
   buildRedactedPreToolAudit,
   type PreToolHookGateProvider,
-} from '../../boundary/gateway/pre-tool-hook.js';
+} from './pre-tool-hook.js';
 
 export type { CapabilityAccess, CapabilityAccessProvider } from './access.js';
 

@@ -6,7 +6,7 @@ import {
   loadIcpAppraisalPrecedingContext,
   type IcpAppraisalContextSource,
 } from '../../core/participation/icp-inbound-context.js';
-import type { MessageHandlerOptions } from '../../channels/backplane/types.js';
+import type { MessageHandlerOptions } from '../../shared/contracts/channel-prompt-port.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
@@ -232,7 +232,7 @@ export interface GatewayMessageGateway {
     permitOutcome: 'consumed' | 'replayed';
   }>;
   companionSendContinuation(input: {
-    authorization: import('../../boundary/gateway/icp-autonomy-contract.js').IcpDyadContinuationAuthorization;
+    authorization: import('../../shared/contracts/icp-gateway-contract.js').IcpDyadContinuationAuthorization;
     peerContactId: string;
     content: string;
     authorName?: string;

@@ -6,7 +6,7 @@ import type {
   CogSecOperatorAlertDeliveryStatus,
   CogSecResultCounters,
 } from './events.js';
-import type { CogSecPersonaConformanceEventRecord } from './persona-conformance.js';
+import type { CogSecPersonaConformanceEventRecord } from '../../shared/contracts/cogsec-persona-conformance.js';
 import {
   isPersonaOwnerPathClass,
   type PersonaOwnerPathClass,

@@ -44,6 +44,8 @@ export type {
 
 // ── Channel-agnostic message types ──
 
+export const TESTING_HARNESS_API_PRINCIPAL_ID = 'testing-harness';
+
 export { CHANNEL_TYPES } from './channel-types.js';
 export type { ChannelType } from './channel-types.js';
 export type { TurnID } from './turn-contracts.js';

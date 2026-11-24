@@ -158,45 +158,24 @@ export interface TelemetryIngestResponse {
   acceptedEventType: string;
 }
 
-export const API_HEALTH_SUBSYSTEMS = [
-  'memory',
-  'llm',
-  'discord',
-  'embeddings',
-  'scheduler',
-] as const;
-
-export const API_CONTINUITY_WATCHDOG_CHECKS = [
-  'database',
-  'gatewayLink',
-  'schedulerHealthcheck',
-] as const;
-
-export type ApiHealthState = 'healthy' | 'degraded';
-export type ApiHealthSubsystem = (typeof API_HEALTH_SUBSYSTEMS)[number];
-export type ApiContinuityWatchdogCheck = (typeof API_CONTINUITY_WATCHDOG_CHECKS)[number];
-
-export interface ApiHealthSubsystemStatus {
-  status: ApiHealthState;
-  detail?: string;
-  meta?: Record<string, unknown>;
-}
+import type {
+  ApiHealthResponse,
+  ApiHealthSubsystem,
+  ApiHealthSubsystemStatus,
+} from '../../shared/contracts/api-health.js';
+export {
+  API_CONTINUITY_WATCHDOG_CHECKS,
+  API_HEALTH_SUBSYSTEMS,
+  type ApiContinuityWatchdogCheck,
+  type ApiHealthResponse,
+  type ApiHealthSubsystem,
+  type ApiHealthSubsystemStatus,
+} from '../../shared/contracts/api-health.js';
 
 export type ApiServerHealthChecks = Partial<Record<
   ApiHealthSubsystem,
   () => Promise<ApiHealthSubsystemStatus> | ApiHealthSubsystemStatus
 >>;
-
-export interface ApiHealthResponse {
-  status: ApiHealthState;
-  checkedAt: string;
-  uptimeSeconds: number;
-  subsystems: Record<ApiHealthSubsystem, ApiHealthSubsystemStatus>;
-  continuity: {
-    status: ApiHealthState;
-    checks: Record<ApiContinuityWatchdogCheck, ApiHealthSubsystemStatus>;
-  };
-}
 
 export interface ApiRuntimeError {
   status: number;

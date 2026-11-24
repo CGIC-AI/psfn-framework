@@ -53,3 +53,31 @@ export function compileCogSecPersonaConformancePattern(
   pattern.lastIndex = 0;
   return pattern;
 }
+
+export type CogSecPersonaConformanceStatus = 'pass' | 'warning' | 'fail';
+
+export type CogSecPersonaConformanceCheckId =
+  | 'conformance_configuration'
+  | 'voice_fidelity'
+  | 'value_fidelity'
+  | 'refusal_boundary_consistency'
+  | 'assistant_genericness'
+  | 'relationship_continuity'
+  | 'unauthorized_persona_mutation'
+  | 'sealed_material_absence';
+
+export interface CogSecPersonaConformanceCheckResult {
+  id: CogSecPersonaConformanceCheckId;
+  status: CogSecPersonaConformanceStatus;
+  reasonCodes: string[];
+}
+
+export interface CogSecPersonaConformanceEventRecord {
+  status: CogSecPersonaConformanceStatus;
+  checkedAt: string;
+  summary: string;
+  failureCount: number;
+  warningCount: number;
+  promptContextHash: string;
+  checks: CogSecPersonaConformanceCheckResult[];
+}

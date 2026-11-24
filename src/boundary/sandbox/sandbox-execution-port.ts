@@ -8,7 +8,7 @@ import type {
   SandboxCodeExecutionResponse,
   SandboxExecutionPort,
   SandboxExecutionPortSeed,
-} from './capabilities/contracts.js';
+} from '../../shared/contracts/sandbox-analysis-contracts.js';
 import {
   ANALYSIS_WORKBENCH_CHILD_PROTOCOL,
   ANALYSIS_WORKBENCH_CHILD_SOURCE,

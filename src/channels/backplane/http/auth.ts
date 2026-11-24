@@ -1,11 +1,11 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
+import { TESTING_HARNESS_API_PRINCIPAL_ID } from '../../../shared/contracts/runtime-base.js';
 
 const API_KEY_PRINCIPAL_DIGEST_LENGTH = 24;
 const MIN_SATELLITE_API_KEY_LENGTH = 16;
 export const INSECURE_LOCAL_API_PRINCIPAL_ID = 'local-insecure';
-export const TESTING_HARNESS_API_PRINCIPAL_ID = 'testing-harness';
 
 export interface ApiAuthPrincipal {
   id: string;

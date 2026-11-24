@@ -1,6 +1,8 @@
 import { open, type FileHandle } from 'node:fs/promises';
-import { FILESYSTEM_READ_PAGE_CONTRACT } from '../../../shared/contracts/filesystem.js';
-import type { FilesystemReadResult } from './ops.js';
+import {
+  FILESYSTEM_READ_PAGE_CONTRACT,
+  type FilesystemReadResult,
+} from '../../../shared/contracts/filesystem.js';
 
 function requireSafeByteInteger(
   value: number,

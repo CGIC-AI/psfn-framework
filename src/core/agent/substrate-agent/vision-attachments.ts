@@ -2,7 +2,7 @@ import type { ImageContent, UserMessage } from '@earendil-works/pi-ai';
 import type { Attachment, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { LLMProviderPort } from '../contracts.js';
 import type { ToolWiringValidationMode } from '../tool-wiring-validator.js';
-import type { ImageEmbodimentConsistency, ImageVisionReviewer } from '../../../primitives/images/types.js';
+import type { ImageEmbodimentConsistency, ImageVisionReviewer } from '../../../shared/contracts/image-vision-review.js';
 import type { CurrentTurnVisionReviewContext } from '../../../primitives/images/request-context.js';
 import { VISION_IMAGE_MAX_BYTES } from '../../../primitives/images/vision-policy.js';
 import { inferImageMimeTypeFromAttachmentCandidate } from '../substrate-agent-helpers.js';

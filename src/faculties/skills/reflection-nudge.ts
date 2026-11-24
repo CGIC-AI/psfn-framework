@@ -17,7 +17,7 @@
 // every opportunity, and the actual write still travels the governed skill tool.
 
 import { createComponentLogger } from '../../shared/logger.js';
-import type { ToolCallOutcomeCounts } from '../../shared/contracts/tool-call-outcome.js';
+import type { TurnToolSummary } from '../../shared/contracts/skills-runtime-port.js';
 import {
   DEFAULT_SKILL_REUSE_CONFIG,
   type SkillReuseConfig,
@@ -30,6 +30,8 @@ import {
 } from './reuse.js';
 import type { SkillEntry } from './types.js';
 
+export type { TurnToolSummary };
+
 const log = createComponentLogger('skills.reflection-nudge');
 
 export interface ReflectionNudgeConfig extends SkillReuseConfig {
@@ -41,23 +43,6 @@ const DEFAULT_CONFIG: ReflectionNudgeConfig = {
   ...DEFAULT_SKILL_REUSE_CONFIG,
   nudgeOnThinkTool: true,
 };
-
-export interface TurnToolSummary {
-  toolCalls: number;
-  usedThinkTool: boolean;
-  /**
-   * Bounded task cue — the participant's framing for this turn. Absent means
-   * "no cue", which yields no candidates and therefore only ever a create
-   * opportunity.
-   */
-  taskCue?: string;
-  /**
-   * Structural, content-free census of what the turn's tool calls returned
-   * (psfn-framework-lpxg3.2). Absent means the outcome is unknown, and an
-   * unknown outcome is not evidence of success.
-   */
-  outcomes?: ToolCallOutcomeCounts;
-}
 
 export interface ReflectionNudgeTrackerOptions {
   config?: Partial<ReflectionNudgeConfig>;

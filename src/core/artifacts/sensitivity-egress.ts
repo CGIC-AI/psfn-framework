@@ -9,8 +9,8 @@ import {
 } from '../cogsec/disclosure/index.js';
 import { canonicalJsonString } from '../../shared/utils/json-serialization.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import type { NotificationPort } from '../../boundary/gateway/notification-port.js';
-import type { NotificationSenderMetadata } from '../../boundary/gateway/notification-sender.js';
+import type { NotificationPort } from '../../shared/contracts/notification-port.js';
+import type { NotificationSenderMetadata } from '../../shared/contracts/notification-port.js';
 import type { Attachment } from '../../shared/contracts/runtime.js';
 import {
   artifactSensitivityRequiresApproval,

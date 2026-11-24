@@ -6,7 +6,7 @@
 // contains only structural routing facts and fixed safe text; envelope ids,
 // tool arguments, and content never cross this seam.
 
-import type { NotificationPort } from '../../../boundary/gateway/notification-port.js';
+import type { NotificationPort } from '../../../shared/contracts/notification-port.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { CogSecEventStore } from '../events.js';

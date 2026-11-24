@@ -18,7 +18,7 @@ import { toPositiveInteger } from '../../shared/utils/numeric.js';
 import {
   extractGatewayProviderCostEvidence,
   extractGatewayProviderCostEvidenceFromHeaders,
-} from '../../boundary/gateway/llm-cost-capture.js';
+} from '../../shared/telemetry/provider-cost-extraction.js';
 import {
   mergeProviderCostEvidenceConflicts,
   reconcileProviderCostEvidence,

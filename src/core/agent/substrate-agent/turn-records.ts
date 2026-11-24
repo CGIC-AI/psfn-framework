@@ -13,7 +13,7 @@ import { deriveProviderWireMessagesForTurnSnapshot } from './turn-execution/prom
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import { buildSessionMetadataWithEmotionState } from '../../emotion/session-metadata.js';
 import { buildSessionMetadataWithRuntimeFallbackProvenance } from '../../session/runtime-fallback-provenance.js';
-import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
+import type { TurnToolSummary } from '../../../shared/contracts/skills-runtime-port.js';
 import { normalizeRoleEnvelopeRefs } from '../../internal-role-envelopes/projections.js';
 import { normalizeToolArguments } from '../../../shared/tool-argument-normalization.js';
 import { buildSessionMetadataWithIcpCorrelation } from '../../session/icp-correlation-metadata.js';

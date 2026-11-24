@@ -1,4 +1,4 @@
-import type { IcpOwnAvailabilityResult } from '../../boundary/gateway/icp-autonomy-contract.js';
+import type { IcpOwnAvailabilityResult } from '../../shared/contracts/icp-gateway-contract.js';
 import {
   MAX_ICP_AVAILABILITY_LEASE_TTL_MS,
   type IcpAvailabilityState,

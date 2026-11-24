@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import type {
   IcpInitiationGateDecision,
   IcpInitiationPermitIssueResult,
-} from '../../boundary/gateway/icp-autonomy-contract.js';
+} from '../../shared/contracts/icp-gateway-contract.js';
 import {
   composeCompanionDmChannelId,
   parseCompanionChannelId,

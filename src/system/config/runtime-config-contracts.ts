@@ -4,7 +4,7 @@ import type {
   ImageProvider,
   ImageWorkflowSettings,
 } from '../../primitives/images/types.js';
-import type { CredentialReference, CredentialVaultPort } from '../../boundary/custody/credential-vault.js';
+import type { CredentialReference, CredentialVaultPort } from '../../shared/contracts/credential-contracts.js';
 import type { StreamingSttProvider } from '../../primitives/voice/connectors/stt/index.js';
 import type { StreamingTtsProvider } from '../../primitives/voice/connectors/tts/index.js';
 import type { CapabilityTier } from '../capabilities/tier-types.js';

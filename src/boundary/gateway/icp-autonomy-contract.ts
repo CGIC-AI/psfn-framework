@@ -2,10 +2,8 @@ import {
   ICP_ACTIVITY_END_REASON_CODES,
   type IcpActivityEndReasonCode,
 } from '../../shared/contracts/icp-autonomy.js';
-import type { IcpPermitConsumptionOutcome } from '../../core/icp/autonomy-store-ports.js';
 import {
   parseIcpInitiationCandidateSharedMetadata,
-  type IcpInitiationCandidateSharedMetadata,
 } from '../../core/icp/initiation-candidate.js';
 import {
   ICP_AVAILABILITY_STATES,
@@ -13,161 +11,48 @@ import {
   MAX_ICP_AVAILABILITY_LEASE_TTL_MS,
   MAX_ICP_PERMIT_TTL_MS,
   type IcpAutonomyReasonCode,
-  type IcpAvailabilityLease,
   type IcpAvailabilityState,
-  type IcpDyadDeliveryOutcome,
-  type IcpDyadParticipantState,
   type IcpDyadSideAction,
-  type IcpDyadStatus,
-  type IcpConversationEpisode,
-  type IcpInitiationPermit,
-  type IcpPermitStatus,
 } from '../../shared/contracts/icp-autonomy.js';
+import type {
+  IcpDyadContinuationAuthorization,
+  IcpDyadContinuationPrepareResult,
+  IcpGateReasonClass,
+  IcpInitiationGateDecision,
+  IcpInitiationHandoffPrepareResult,
+  IcpInitiationPermitIssueInput,
+  IcpInitiationPermitIssueResult,
+  IcpInitiationPolicySnapshot,
+  IcpInitiationPreflightInput,
+  IcpOpenDyadProjection,
+  IcpOwnAvailabilityReadParams,
+  IcpOwnAvailabilityResult,
+  IcpPeerAvailabilityResult,
+  IcpPermitConsumeResult,
+  IcpRuntimeAvailabilityClearParams,
+  IcpRuntimeAvailabilityRefreshParams,
+} from '../../shared/contracts/icp-gateway-contract.js';
 import { assertNoUnknownKeys, isRecord } from '../../shared/utils/types.js';
 import { requireUuid } from '../../shared/utils/uuid.js';
 
-export type IcpGateReasonClass = 'deferrable' | 'terminal';
-
-export interface IcpOpenDyadProjection {
-  dyadId: string;
-  peerCompanionId: string;
-  channelId: string;
-  status: 'open';
-  lifecycleRevision: number;
-  availability: IcpPeerAvailabilityResult;
-  lastDeliveryOutcome?: IcpDyadDeliveryOutcome;
-  lastDeliveryAtMs?: number;
-}
-
-export interface IcpDyadLifecycleProjection {
-  dyadId: string;
-  peerCompanionId: string;
-  channelId: string;
-  status: IcpDyadStatus;
-  ownState: IcpDyadParticipantState;
-  peerState: IcpDyadParticipantState;
-  lifecycleRevision: number;
-}
-
-export interface IcpDyadContinuationAuthorization {
-  dyadId: string;
-  deliveryId: string;
-  peerCompanionId: string;
-  channelId: string;
-  dyadLifecycleRevision: number;
-  episode: IcpConversationEpisode;
-}
-
-export type IcpDyadContinuationPrepareResult =
-  | { status: 'authorized'; authorization: IcpDyadContinuationAuthorization }
-  | {
-      status: 'need_initiation';
-      reasonCode: Extract<IcpAutonomyReasonCode,
-        'dyad_not_found' | 'dyad_closed' | 'stale_provenance'>;
-    }
-  | {
-      status: 'unavailable';
-      reasonCode: IcpAutonomyReasonCode;
-    };
-
-interface IcpDyadLifecycleUpdatedResult {
-  outcome: 'updated';
-  dyadId: string;
-  status: IcpDyadStatus;
-  ownState: IcpDyadParticipantState;
-  peerState: IcpDyadParticipantState;
-  lifecycleRevision: number;
-  revokedPermitCount: number;
-  fencedDeliveryCount: number;
-}
-
-export type IcpDyadLifecycleResult = IcpDyadLifecycleUpdatedResult | {
-  outcome: 'unavailable';
-  reasonCode: Extract<IcpAutonomyReasonCode,
-    'dyad_not_found' | 'dyad_paused' | 'dyad_closed' | 'dyad_blocked' | 'dyad_stale_revision'>;
+export type {
+  IcpDyadContinuationAuthorization,
+  IcpDyadContinuationPrepareResult,
+  IcpGateReasonClass,
+  IcpInitiationGateDecision,
+  IcpInitiationHandoffPrepareResult,
+  IcpInitiationPermitIssueInput,
+  IcpInitiationPermitIssueResult,
+  IcpInitiationPolicySnapshot,
+  IcpInitiationPreflightInput,
+  IcpOpenDyadProjection,
+  IcpOwnAvailabilityReadParams,
+  IcpOwnAvailabilityResult,
+  IcpPeerAvailabilityResult,
+  IcpPermitConsumeResult,
+  IcpRuntimeAvailabilityClearParams,
+  IcpRuntimeAvailabilityRefreshParams,
 };
-
-/** Strict content-free deterministic facts owned by the initiating runtime. */
-export interface IcpInitiationPolicySnapshot {
-  canonicalPeerContact: boolean;
-  trustAllows: boolean;
-  senderBlocksPeer: boolean;
-  peerBlocksSender: boolean;
-  provenanceFresh: boolean;
-  recursiveMiOnlyRoot: boolean;
-  socialPressureAllows: boolean;
-  chargeAllows: boolean;
-  fatigueAllows: boolean;
-  costAllows: boolean;
-}
-
-export interface IcpInitiationPreflightInput {
-  candidate: IcpInitiationCandidateSharedMetadata;
-  channelId: string;
-}
-
-export interface IcpInitiationPermitIssueInput extends IcpInitiationPreflightInput {
-  permitExpiresAtMs: number;
-}
-
-export interface IcpInitiationGateDecision {
-  eligible: boolean;
-  reasonCode?: IcpAutonomyReasonCode;
-  reasonClass?: IcpGateReasonClass;
-}
-
-export interface IcpInitiationPermitIssueResult {
-  decision: IcpInitiationGateDecision;
-  permit?: IcpInitiationPermit;
-}
-
-export interface IcpPeerAvailabilityResult {
-  peerCompanionId: string;
-  connectionState: 'online' | 'offline';
-  eligible: boolean;
-  reasonCode?: IcpAutonomyReasonCode;
-  lease?: IcpAvailabilityLease;
-}
-
-export interface IcpOwnAvailabilityResult {
-  eligible: boolean;
-  reasonCode?: IcpAutonomyReasonCode;
-  lease?: IcpAvailabilityLease;
-  control: 'missing' | 'expired' | 'companion' | 'runtime' | 'operator_override';
-  mutableByCompanion: boolean;
-}
-
-export interface IcpOwnAvailabilityReadParams {
-  companionId?: string;
-}
-
-export interface IcpRuntimeAvailabilityRefreshParams {
-  state: Extract<IcpAvailabilityState, 'available' | 'resting'>;
-  expiresAtMs: number;
-  companionId?: string;
-}
-
-export interface IcpRuntimeAvailabilityClearParams {
-  companionId?: string;
-}
-
-export type IcpInitiationHandoffPrepareResult =
-  | {
-      authorized: true;
-      permit: IcpInitiationPermit;
-      rootInitiationId: string;
-    }
-  | {
-      authorized: false;
-      reasonCode: IcpAutonomyReasonCode;
-    };
-
-export interface IcpPermitConsumeResult {
-  outcome: IcpPermitConsumptionOutcome;
-  reasonCode?: IcpAutonomyReasonCode;
-  status?: IcpPermitStatus;
-  revision?: number;
-}
 
 const POLICY_KEYS = [
   'canonicalPeerContact', 'trustAllows', 'senderBlocksPeer', 'peerBlocksSender',

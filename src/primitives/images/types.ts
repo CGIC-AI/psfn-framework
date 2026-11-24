@@ -40,8 +40,20 @@ export type FalEditModel = typeof FAL_EDIT_MODELS[number];
 export type FalImageModel = FalCreateModel | FalEditModel;
 export type ImageAspectRatio = typeof IMAGE_ASPECT_RATIO_VALUES[number];
 export type ImageProvider = typeof IMAGE_PROVIDER_VALUES[number];
+import type {
+  EmbodimentConsistencyVerdict,
+  ImageMode,
+  ImageVisionReview,
+} from '../../shared/contracts/image-vision-review.js';
+export type {
+  EmbodimentConsistencyVerdict,
+  ImageEmbodimentConsistency,
+  ImageMode,
+  ImageVisionReview,
+  ImageVisionReviewRequest,
+  ImageVisionReviewer,
+} from '../../shared/contracts/image-vision-review.js';
 export type ImageProviderPreference = typeof IMAGE_PROVIDER_PREFERENCE_VALUES[number];
-export type ImageMode = 'create' | 'edit';
 
 export function isLocalImageProvider(
   value: ImageProviderPreference | undefined,
@@ -228,23 +240,6 @@ export interface ImageEditParams {
   referenceImageIds?: string[];
 }
 
-export type EmbodimentConsistencyVerdict = 'same_me' | 'drifted' | 'different_person';
-
-/**
- * A companion-readable read on whether a new render still looks like the same
- * companion as the active reference. Charter 8.6: framing, not a score wall —
- * there is no numeric similarity value, and the review never auto-rejects.
- */
-export interface ImageEmbodimentConsistency {
-  verdict: EmbodimentConsistencyVerdict;
-  /** Companion-facing framing derived from the verdict. */
-  framing: string;
-  /** The reviewer's short reason for the read. */
-  note: string;
-  referenceId: string;
-  referenceDescription?: string;
-}
-
 const EMBODIMENT_FRAMING: Record<EmbodimentConsistencyVerdict, string> = {
   same_me: 'This still reads as me.',
   drifted: 'Something about this drifted from how I usually look.',
@@ -253,28 +248,6 @@ const EMBODIMENT_FRAMING: Record<EmbodimentConsistencyVerdict, string> = {
 
 export function describeEmbodimentVerdict(verdict: EmbodimentConsistencyVerdict): string {
   return EMBODIMENT_FRAMING[verdict];
-}
-
-export interface ImageVisionReview {
-  question: string;
-  summary: string;
-  model: string;
-  imageCount: number;
-  embodiment?: ImageEmbodimentConsistency;
-}
-
-export interface ImageVisionReviewRequest {
-  imageUrls: string[];
-  imageLocalPaths?: string[];
-  question?: string;
-  prompt?: string;
-  mode?: ImageMode;
-  /** When true, compare the render(s) to the active reference for embodiment continuity. */
-  compareToReference?: boolean;
-}
-
-export interface ImageVisionReviewer {
-  analyze(input: ImageVisionReviewRequest): Promise<ImageVisionReview>;
 }
 
 const WORKFLOW_TEMPLATE_KEYS = ['create', 'edit'] as const;

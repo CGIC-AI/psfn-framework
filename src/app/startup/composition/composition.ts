@@ -10,7 +10,7 @@ import type { CoreSubstrateConfig, SubstrateConfig } from '../../../system/confi
 import type { PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { AppCache } from '../../../shared/cache/types.js';
-import type { NotificationPort } from '../../../boundary/gateway/notification-port.js';
+import type { NotificationPort } from '../../../shared/contracts/notification-port.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import type { CapabilityGrantSnapshot } from '../../../system/capabilities/access.js';
 import { wireRuntimeDiagnosticsEventCapture } from '../../../shared/diagnostics/runtime-diagnostics.js';

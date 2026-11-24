@@ -90,7 +90,11 @@ import type {
 } from '../../channels/api/types.js';
 import type { RuntimeServiceHealthSnapshot } from '../../operator/tool-health/types.js';
 import type { OperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
-import type { NotificationSenderMetadata } from './notification-sender.js';
+import type {
+  NotifyNtfyParams,
+  NotifyNtfyResult,
+} from '../../shared/contracts/notification-port.js';
+export type { NotifyNtfyParams, NotifyNtfyResult } from '../../shared/contracts/notification-port.js';
 import type {
   IcpInitiationGateDecision,
   IcpInitiationHandoffPrepareResult,
@@ -700,16 +704,6 @@ export interface ApprovalRequestParams {
   reason: string;
 }
 
-export interface NotifyNtfyParams {
-  message: string;
-  title?: string;
-  priority?: number;
-  topic?: string;
-  /** Stable caller key for providers that can collapse ambiguous retries. */
-  idempotencyKey?: string;
-  sender: NotificationSenderMetadata;
-}
-
 /**
  * A structured clarification the companion raises when she needs the person to
  * pick among a few concrete options rather than continue open-ended.
@@ -1106,12 +1100,6 @@ export interface ApprovalResult {
   capabilityToken?: string;
 }
 
-export interface NotifyNtfyResult {
-  status: 'sent' | 'debounced';
-  topic: string;
-  messageId?: string;
-}
-
 export interface OperatorAlertDelivery {
   sink: 'ntfy' | 'telegram' | 'discord';
   status: 'sent' | 'debounced' | 'failed';
@@ -1372,8 +1360,8 @@ export interface GatewayMethods {
   'companion.initiation.permit.revoke': [IcpPermitRevokeParams, IcpPermitRevokeResult];
   'companion.initiation.permit.invalidate_for_self': [IcpPermitInvalidateSelfParams, { revokedCount: number }];
   'companion.dyad.list_open': [IcpOpenDyadListParams, import('./icp-autonomy-contract.js').IcpOpenDyadProjection[]];
-  'companion.dyad.list': [IcpOpenDyadListParams, import('./icp-autonomy-contract.js').IcpDyadLifecycleProjection[]];
-  'companion.dyad.transition': [IcpDyadLifecycleParams, import('./icp-autonomy-contract.js').IcpDyadLifecycleResult];
+  'companion.dyad.list': [IcpOpenDyadListParams, import('../../shared/contracts/icp-gateway-contract.js').IcpDyadLifecycleProjection[]];
+  'companion.dyad.transition': [IcpDyadLifecycleParams, import('../../shared/contracts/icp-gateway-contract.js').IcpDyadLifecycleResult];
   'companion.dyad.prepare_continuation': [IcpDyadContinuationPrepareParams, import('./icp-autonomy-contract.js').IcpDyadContinuationPrepareResult];
   'companion.dyad.record_outcome': [IcpDyadContinuationOutcomeParams, import('../../shared/contracts/icp-autonomy.js').IcpDyadDelivery];
   'web.fetch': [WebFetchParams, WebFetchResult];

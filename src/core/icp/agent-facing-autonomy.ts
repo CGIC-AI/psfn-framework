@@ -1,12 +1,14 @@
 import type { GatewayClient } from '../../boundary/gateway/client.js';
 import type {
+  IcpDyadContinuationAuthorization,
+  IcpDyadContinuationPrepareResult,
   IcpInitiationHandoffPrepareResult,
   IcpDyadLifecycleProjection,
   IcpDyadLifecycleResult,
   IcpOpenDyadProjection,
   IcpOwnAvailabilityResult,
   IcpPeerAvailabilityResult,
-} from '../../boundary/gateway/icp-autonomy-contract.js';
+} from '../../shared/contracts/icp-gateway-contract.js';
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
 import type { Contact } from '../contacts/types.js';
 import type {
@@ -103,7 +105,7 @@ export interface IcpAgentGatewayPort {
     peerContactId: string;
     initiationSource: IcpInitiationSource;
     sourceDyadId?: string;
-  }): Promise<import('../../boundary/gateway/icp-autonomy-contract.js').IcpDyadContinuationPrepareResult>;
+  }): Promise<IcpDyadContinuationPrepareResult>;
 }
 
 export interface IcpTargetChannelCommandPort {
@@ -115,14 +117,14 @@ export interface IcpTargetChannelCommandPort {
     authoredMessage?: string;
   }): Promise<IcpCompanionOutreachExecutionResult>;
   executeContinuation?(input: {
-    authorization: import('../../boundary/gateway/icp-autonomy-contract.js').IcpDyadContinuationAuthorization;
+    authorization: IcpDyadContinuationAuthorization;
     peerContactId: string;
     privateIntent?: string;
     authoredMessage?: string;
     continuationTaskKind?: IcpContinuationTaskKind;
   }): Promise<IcpCompanionOutreachExecutionResult>;
   executeHumanRelay?(input: {
-    authorization: import('../../boundary/gateway/icp-autonomy-contract.js').IcpDyadContinuationAuthorization;
+    authorization: IcpDyadContinuationAuthorization;
     peerContactId: string;
     capsule: import('./human-relay-capsule.js').HumanRelayIntentCapsule;
   }): Promise<IcpCompanionOutreachExecutionResult>;

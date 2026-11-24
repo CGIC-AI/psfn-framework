@@ -1,5 +1,5 @@
-import type { CredentialVaultPort } from '../../boundary/custody/credential-vault.js';
-import { resolveOptionalEnvCredential } from '../../boundary/custody/credential-vault.js';
+import type { CredentialVaultPort } from '../../shared/contracts/credential-contracts.js';
+import { resolveOptionalEnvCredential } from '../../shared/contracts/credential-contracts.js';
 import {
   buildSessionHmacKeyring,
   type SessionHmacKeyring,

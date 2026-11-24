@@ -101,7 +101,7 @@ import {
 import { buildSelfPresentationPromptVariables } from './runtime-context-sections/self-presentation.js';
 import { buildSatelliteEndpointContextBlock } from './runtime-context-sections/satellite.js';
 import { buildReactionSurfaceContextBlock } from './runtime-context-sections/reaction-surface.js';
-import type { ResolvedReactionSurface } from '../../../channels/shared/reaction-surface.js';
+import type { ResolvedReactionSurface } from '../../../shared/contracts/reaction-surface.js';
 import {
   buildSituatedPresenceContextBlock,
   type CoPresentCompanion,

@@ -16,13 +16,17 @@
 // section producer (which renders the surface into the prompt) without creating
 // a layering cycle.
 
-/** A curated standard-emoji reaction with a one-line meaning. */
-export interface StandardReactionEntry {
-  /** The unicode emoji used verbatim as the reaction token. */
-  readonly emoji: string;
-  /** One-line meaning shown to the companion. */
-  readonly meaning: string;
-}
+import type {
+  ResolvedCustomReactionEntry,
+  ResolvedReactionSurface,
+  StandardReactionEntry,
+} from '../../shared/contracts/reaction-surface.js';
+export {
+  reactionSurfaceIsEmpty,
+  type ResolvedCustomReactionEntry,
+  type ResolvedReactionSurface,
+  type StandardReactionEntry,
+} from '../../shared/contracts/reaction-surface.js';
 
 /**
  * A guild-custom emoji as observed in a Discord guild (from
@@ -34,20 +38,6 @@ export interface GuildCustomEmoji {
   readonly id: string;
   readonly animated: boolean;
   readonly available: boolean;
-}
-
-/** A resolved guild-custom emoji that carries a configured one-line meaning. */
-export interface ResolvedCustomReactionEntry {
-  readonly name: string;
-  /** Discord reaction token: `name:id` (or `a:name:id` when animated). */
-  readonly token: string;
-  readonly meaning: string;
-}
-
-/** The curated reaction surface available for a turn. */
-export interface ResolvedReactionSurface {
-  readonly standard: readonly StandardReactionEntry[];
-  readonly custom: readonly ResolvedCustomReactionEntry[];
 }
 
 /** Configured one-line meanings for one guild's custom emojis, keyed by name. */
@@ -117,11 +107,6 @@ export function buildReactionSurface(input: {
   }
 
   return { standard, custom };
-}
-
-/** True when the surface carries no reactions at all (renders nothing). */
-export function reactionSurfaceIsEmpty(surface: ResolvedReactionSurface): boolean {
-  return surface.standard.length === 0 && surface.custom.length === 0;
 }
 
 const MAX_GUILDS = 512;

@@ -70,11 +70,11 @@ describe('agent core runtime builder', () => {
     const agentMainSource = readSource('main.ts');
     const coreRuntimeSource = readSource('core-runtime.ts');
     const compositionSource = readFileSync(
-      join(SRC_DIR, '../startup/composition/composition.ts'),
+      join(SRC_DIR, '../startup/composition/core-composition.ts'),
       'utf-8',
     );
     const memoryRuntimeStart = compositionSource.indexOf('export function wireMemoryRuntime(');
-    const memoryRuntimeEnd = compositionSource.indexOf('export interface ToolRuntimeOptions', memoryRuntimeStart);
+    const memoryRuntimeEnd = compositionSource.indexOf('export interface SubagentRuntimeOptions', memoryRuntimeStart);
     const memoryRuntime = compositionSource.slice(memoryRuntimeStart, memoryRuntimeEnd);
     const retrieverEnd = memoryRuntime.indexOf('const extractorFormationOptions');
 
@@ -163,7 +163,7 @@ describe('agent core runtime builder', () => {
     const coreBootstrapSource = readSource('core-bootstrap.ts');
     const coreRuntimeSource = readSource('core-runtime.ts');
     const compositionSource = readFileSync(
-      join(SRC_DIR, '../startup/composition/composition.ts'),
+      join(SRC_DIR, '../startup/composition/core-composition.ts'),
       'utf-8',
     );
     const icpCertificationAgentSource = readFileSync(

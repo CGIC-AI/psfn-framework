@@ -118,6 +118,8 @@ export interface AutomataBusWorkerPort {
     source?: string;
     confidence?: number;
     lessonAttribution?: AutomataBusLessonAttribution;
+    /** Stable write key for idempotent replays across retries/attempts. */
+    writeKey?: string;
   }): Promise<unknown>;
   correct(input: {
     scope: AutomataBusWorkerScope;
@@ -125,6 +127,8 @@ export interface AutomataBusWorkerPort {
     relation: AutomataBusRelationKind;
     reason: string;
     replacementClaim?: string;
+    /** Stable write key for idempotent replays across retries/attempts. */
+    writeKey?: string;
   }): Promise<unknown>;
   handoff(input: {
     scope: AutomataBusWorkerScope;
@@ -133,6 +137,8 @@ export interface AutomataBusWorkerPort {
     validationPerformed: readonly string[];
     blocker?: string;
     nextAction?: string;
+    /** Stable write key for idempotent replays across retries/attempts. */
+    writeKey?: string;
   }): Promise<unknown>;
   runs(input: {
     scope: AutomataBusWorkerScope;

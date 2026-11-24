@@ -48,8 +48,9 @@ import type { ChannelType } from '../../../shared/contracts/runtime.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import { createCompanionId } from '../../../shared/routing/companion-id.js';
 import type { SchedulerRuntimeConfig as SchedulerConfig } from '../../../system/config/scheduler-config.js';
-import type { AgentSchedulerRuntime } from '../scheduler-runtime.js';
-import type { createAgentPersistenceRuntime } from '../../../persistence/runtime-factory.js';
+import type { Scheduler } from '../../../core/scheduler/scheduler.js';
+import type { PostTurnActionRuntime } from '../../../core/agent/post-turn-action-runtime.js';
+import type { SocialDesireStorePort } from '../../../core/intention/social-desire-store-port.js';
 import { staggerQuietHoursRelease } from '../../../core/scheduler/quiet-hours-release-stagger.js';
 import type { FleetSlotStagger } from '../../../core/scheduler/types.js';
 
@@ -62,11 +63,11 @@ export interface SocialDesireLaneDeps {
    * so the fleet does not release held outreach at the same instant.
    */
   fleetStagger?: FleetSlotStagger;
-  scheduler: AgentSchedulerRuntime['scheduler'];
-  postTurnActions: Pick<AgentSchedulerRuntime['postTurnActions'], 'enqueue' | 'registerHandler'>;
+  scheduler: Scheduler;
+  postTurnActions: Pick<PostTurnActionRuntime, 'enqueue' | 'registerHandler'>;
   eventBus: EventBus;
   log: Logger;
-  socialDesireStore: Awaited<ReturnType<typeof createAgentPersistenceRuntime>>['socialDesireStore'];
+  socialDesireStore: SocialDesireStorePort | undefined;
   /** Narrowed to the desire-budget read the lane performs. */
   outreachOutbox: Pick<OutreachOutboxStore, 'countSentSince'>;
   heartbeatChannel: { channelId: string; channelType: ChannelType } | undefined;

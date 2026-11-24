@@ -57,8 +57,9 @@ import {
 } from '../../../system/trust/policy.js';
 import { decodeStoredChannelVisibility } from '../../../system/trust/types.js';
 import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
+import type { AdminContinuityProvenanceView } from './types/continuity.js';
+import type { AdminPromptLoomSubsystemOutputsData } from './types/prompt-loom.js';
 import type {
-  AdminContinuityProvenanceView,
   AdminCogSecCaseDraftView,
   AdminCogSecEventListData,
   AdminCogSecPreviewCounts,
@@ -68,7 +69,6 @@ import type {
   AdminSessionRouteListData,
   AdminSessionRouteResetData,
   AdminSessionRouteResetInput,
-  AdminPromptLoomSubsystemOutputsData,
   AdminSessionMessageOntologyView,
   AdminSessionMessagePaginationOptions,
   AdminSessionDetailData,
@@ -79,7 +79,7 @@ import type {
   AdminSessionService,
   AdminSessionTurnData,
   AdminSessionTurnDetailData,
-} from './types.js';
+} from './types/sessions.js';
 import {
   resolveCogSecEventsPath,
   resolveCogSecForensicArchiveDir,

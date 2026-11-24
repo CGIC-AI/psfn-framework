@@ -3,7 +3,7 @@ import { countTokens } from '../../../primitives/llm/tokens.js';
 import { assertNoUnknownKeys, isRecord } from '../../../shared/utils/types.js';
 import { parseAdminJsonBody } from '../request-body.js';
 import { exactPath, paramWithSuffix, prefixedParamPath } from '../route-matchers.js';
-import type { AdminPromptsService } from '../services/types.js';
+import type { AdminPromptsService } from '../services/types/prompts.js';
 import { toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminBodyReader } from './types.js';
 

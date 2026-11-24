@@ -17,7 +17,7 @@ import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { Contact } from '../../../core/contacts/types.js';
-import type { DisclosureLineage } from '../../../core/cogsec/disclosure/index.js';
+import type { DisclosureLineage } from '../../../core/cogsec/disclosure/contracts.js';
 import { deriveConversationScopeEnvelope } from '../../../core/session/conversation-scope.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import { summarizeRecentSessionEntries } from '../../../core/session/manager/compaction-service.js';
@@ -43,7 +43,10 @@ import {
   type RestSilenceStorePort,
 } from '../../../core/scheduler/rest-window-policy.js';
 import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
-import type { PersonalProjectLibrary, PersonalProjectWorkContext } from '../../../faculties/wiki/personal-projects.js';
+import type {
+  PersonalProjectsPort,
+  PersonalProjectWorkContext,
+} from '../../../shared/contracts/personal-projects-port.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { ChargePolicyConfig } from '../../../shared/contracts/charge-policy.js';
@@ -73,7 +76,7 @@ export interface FreeTimeLaneDeps {
   companionName: string;
   companionId: string | undefined;
   chargePolicy: ChargePolicyConfig | undefined;
-  personalProjects: PersonalProjectLibrary;
+  personalProjects: PersonalProjectsPort;
   contactStore: Pick<ContactStorePort, 'getById'>;
   /** Governed Automata Bus lifecycle. Absent where no durable Automata runtime is composed. */
   automataLifecycle?: AutomataClassLifecycleRuntime;

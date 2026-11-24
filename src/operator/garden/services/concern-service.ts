@@ -11,7 +11,7 @@ import type {
   AdminConcernListData,
   AdminConcernMutationResult,
   AdminConcernService,
-} from './types.js';
+} from './types/concerns.js';
 import type { ReflectionJournalStore } from '../../../persistence/journals/reflection-journal.js';
 
 function operatorEvidenceRef(ref: string | undefined): ActiveConcernEvidenceRef[] | undefined {

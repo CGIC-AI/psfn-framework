@@ -14,13 +14,12 @@ import {
   prefixedParamPath,
 } from './route-matchers.js';
 import { toSanitizedMessage } from './routes/shared.js';
-import type { AdminApiRoute } from './routes/types.js';
+import type { AdminApiRoute, AdminSubjectVisibleAuditPort } from './routes/types.js';
 import type {
   AdminMemoryService,
   AdminMemorySessionKey,
   AdminMemorySessionService,
-} from './services/types.js';
-import type { AdminSubjectVisibleAuditService } from './services/subject-visible-audit-service.js';
+} from './services/types/memory.js';
 import type { GardenRequestContext } from './garden-request-context.js';
 
 /**
@@ -127,7 +126,7 @@ function toDateFilter(value: string | null, boundary: 'start' | 'end'): number |
 
 export function buildAdminMemoryRoutes(options: {
   memoryService: AdminMemoryService;
-  subjectAuditService?: AdminSubjectVisibleAuditService;
+  subjectAuditService?: AdminSubjectVisibleAuditPort;
   withBody: (req: IncomingMessage, res: ServerResponse, cb: (body: string) => void) => void;
 }): AdminApiRoute[] {
   const { memoryService, subjectAuditService, withBody } = options;

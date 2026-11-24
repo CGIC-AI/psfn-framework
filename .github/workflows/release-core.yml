@@ -1,0 +1,100 @@
+name: Release @psfn/core
+
+on:
+  push:
+    tags:
+      - 'core-v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run build, verification, and npm pack without publishing'
+        required: false
+        default: true
+        type: boolean
+
+permissions: {}
+
+concurrency:
+  group: release-core-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: 24.22.1
+
+jobs:
+  publish-core:
+    name: Build, verify, and publish @psfn/core
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify core boundary and standalone package
+        run: |
+          npm run verify:core-boundary
+          npm run verify:core-package
+
+      - name: Run core package unit tests
+        run: |
+          npx vitest run \
+            src/faculties/subagents/host-execution.test.ts \
+            src/faculties/automata/bus/production-worker-adapter.test.ts \
+            src/system/config/inner-life-config.test.ts
+
+      - name: Verify tag matches package version
+        id: version
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          PKG_VERSION="$(node -p "JSON.parse(require('node:fs').readFileSync('packages/core/package.json', 'utf8')).version")"
+          echo "version=${PKG_VERSION}" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            EXPECTED_TAG="core-v${PKG_VERSION}"
+            if [[ "$GITHUB_REF_NAME" != "$EXPECTED_TAG" ]]; then
+              echo "::error::Tag ${GITHUB_REF_NAME} does not match packages/core/package.json version (${PKG_VERSION})"
+              exit 1
+            fi
+          fi
+
+      - name: Publish @psfn/core via npm Trusted Publishing (OIDC)
+        if: github.event_name == 'push' || inputs.dry_run == false
+        working-directory: packages/core
+        run: npm publish --provenance --access public
+
+      - name: Notify psfn-lite release roller
+        if: github.event_name == 'push' || inputs.dry_run == false
+        env:
+          DISPATCH_TOKEN: ${{ secrets.PSFN_LITE_DISPATCH_TOKEN }}
+          CORE_VERSION: ${{ steps.version.outputs.version }}
+          CORE_SHA: ${{ github.sha }}
+          CORE_TAG: ${{ github.ref_name }}
+        run: |
+          if [[ -z "$DISPATCH_TOKEN" ]]; then
+            echo "PSFN_LITE_DISPATCH_TOKEN secret not configured; skipping psfn-lite repository_dispatch."
+            exit 0
+          fi
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${DISPATCH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/CGIC-AI/psfn-lite/dispatches" \
+            -d "{\"event_type\":\"core-released\",\"client_payload\":{\"version\":\"${CORE_VERSION}\",\"sha\":\"${CORE_SHA}\",\"tag\":\"${CORE_TAG}\"}}"

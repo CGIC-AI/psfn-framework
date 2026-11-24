@@ -3,13 +3,10 @@ import type { CharacterCardVersionStore } from '../../../core/identity/card-vers
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { extractCardPatchFromRecord } from '../../../core/identity/card-versioning.js';
-import {
-  normalizeImportedCard,
-} from '../../../core/identity/importer.js';
+import { normalizeImportedCard } from '../../../core/identity/card-normalizer.js';
 import { buildCharacterMacroMap } from '../../../core/identity/character-macro-map.js';
 import type { PromptLayerStatePort } from '../../../core/identity/prompt-state-port.js';
 import { syncCharacterFoundationPromptFromCard } from '../../../core/identity/prompt-sync.js';
-import type { CCv3Data } from '@character-foundry/character-foundry/loader';
 import type {
   AdminIdentityData,
   AdminIdentityService,
@@ -20,7 +17,7 @@ import type {
   IntakeStageResult,
   OnboardingActionResult,
   RollbackResult,
-} from './types.js';
+} from './types/identity.js';
 
 type OnboardingEditableField =
   | 'name'
@@ -227,9 +224,9 @@ export class AdminIdentityDataService implements AdminIdentityService {
             tags: Array.isArray(dataRecord.tags) ? dataRecord.tags : [],
             creator: typeof dataRecord.creator === 'string' ? dataRecord.creator : '',
             creator_notes: typeof dataRecord.creator_notes === 'string' ? dataRecord.creator_notes : '',
-            character_book: dataRecord.character_book as CCv3Data['data']['character_book'],
+            character_book: dataRecord.character_book,
           },
-        } as CCv3Data);
+        });
       } else if (typeof record.name === 'string') {
         // Flat card data (no data wrapper)
         normalizedCard = normalizeImportedCard({
@@ -245,9 +242,9 @@ export class AdminIdentityDataService implements AdminIdentityService {
             tags: Array.isArray(record.tags) ? record.tags : [],
             creator: typeof record.creator === 'string' ? record.creator : '',
             creator_notes: typeof record.creator_notes === 'string' ? record.creator_notes : '',
-            character_book: record.character_book as CCv3Data['data']['character_book'],
+            character_book: record.character_book,
           },
-        } as CCv3Data);
+        });
       } else {
         return { ok: false, message: 'Uploaded card data must have a "data" object or a "name" field' };
       }

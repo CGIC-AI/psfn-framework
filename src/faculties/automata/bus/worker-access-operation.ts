@@ -343,3 +343,23 @@ export function normalizeAutomataBusWorkerOperation(
     }
   }
 }
+
+function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (isRecord(value)) {
+    return Object.fromEntries(Object.keys(value)
+      .filter(key => value[key] !== undefined)
+      .sort()
+      .map(key => [key, canonicalJson(value[key])]));
+  }
+  return value;
+}
+
+/**
+ * Stable write key for a worker Automata Bus write: canonical JSON of the
+ * write payload (sorted keys, undefined stripped), independent of attempt or
+ * wall-clock time so retried writes replay as a single Bus event.
+ */
+export function automataBusWorkerWriteKey(write: Readonly<Record<string, unknown>>): string {
+  return JSON.stringify(canonicalJson(write));
+}

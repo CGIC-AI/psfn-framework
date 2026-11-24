@@ -6,7 +6,24 @@ import type {
   AdminAuditDecision,
 } from '../types.js';
 import type { AuthorizedGardenRoute } from '../../../boundary/fleet-auth/garden-route-capabilities.js';
-import type { GardenRequestContext } from '../garden-request-context.js';
+import type {
+  FleetGardenRequestContext,
+  GardenRequestContext,
+} from '../garden-request-context.js';
+
+export type ProtectedConcernAction = 'resolve' | 'suppress' | 'transition' | 'resolve_stale';
+
+export interface AdminSubjectVisibleAuditPort {
+  recordMemoryReveal(input: {
+    context: FleetGardenRequestContext;
+    reason: string;
+  }): void;
+  recordConcernAction(input: {
+    context: FleetGardenRequestContext;
+    action: ProtectedConcernAction;
+    reason: string;
+  }): void;
+}
 
 export interface AdminApiRoute {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';

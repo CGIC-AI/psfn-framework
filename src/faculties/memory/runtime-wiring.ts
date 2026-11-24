@@ -35,7 +35,7 @@ export function registerMemoryTools(
     roomMembershipAuthority?: CompanionRoomMembershipAuthority | null;
     memoryStore: MemoryStorePort;
     memoryDeletionProposalStore: MemoryDeletionProposalStorePort;
-    memoryDeletionApprovalPort: MemoryDeletionApprovalPort;
+    memoryDeletionApprovalPort?: MemoryDeletionApprovalPort;
     memoryDeletionPolicy: MemoryDeletionPolicy | (() => MemoryDeletionPolicy | undefined);
     episodicStore?: (EpisodicTimelineStore & EpisodeDrilldownStore) | null;
     episodeSearch?: HybridEpisodeSearchPort | null;
@@ -74,7 +74,9 @@ export function registerMemoryTools(
       ? { memoryRetrievalPolicy: options.memoryRetrievalPolicy }
       : {}),
     memoryDeletionProposalStore: options.memoryDeletionProposalStore,
-    memoryDeletionApprovalPort: options.memoryDeletionApprovalPort,
+    ...(options.memoryDeletionApprovalPort
+      ? { memoryDeletionApprovalPort: options.memoryDeletionApprovalPort }
+      : {}),
     memoryDeletionPolicy: options.memoryDeletionPolicy,
   }), 'core');
   target.registerTool(createScratchpadTool(options.memoryStore), 'core');

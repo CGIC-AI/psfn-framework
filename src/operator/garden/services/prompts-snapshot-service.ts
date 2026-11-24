@@ -14,7 +14,7 @@ import type {
   ConstitutionUpdateResult,
   FoundationUpdateResult,
   NorthStarUpdateResult,
-} from './types.js';
+} from './types/prompts.js';
 import {
   CONSTITUTION_COMPANION_LAYER_ID,
   CONSTITUTION_IMMUTABLE_LAYER_ID_PREFIX,

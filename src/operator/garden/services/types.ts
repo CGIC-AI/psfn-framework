@@ -10,11 +10,7 @@ export type {
 
 export type { AdminDiagnosticsService } from './types/diagnostics.js';
 
-export type {
-  AdminConcernListData,
-  AdminConcernMutationResult,
-  AdminConcernService,
-} from './types/concerns.js';
+export type { AdminConcernService } from './types/concerns.js';
 
 export type {
   AdminGeneratedImageRootView,
@@ -117,27 +113,7 @@ export type {
 } from './types/room-arbiter.js';
 
 export type {
-  AdminMemoryContactSummary,
-  AdminMemoryBodyRedaction,
-  AdminMemoryView,
-  AdminMemoryElevationStatus,
-  AdminMemoryPrivacySummary,
-  AdminMemoryListData,
-  AdminMemoryDetailData,
-  AdminMemorySearchResult,
-  AdminSharedBackgroundItem,
   AdminSharedBackgroundResult,
-  MemoryMutationResult,
-  AdminMemoryLinkResult,
-  AdminBulkMutationResult,
-  AdminMemoryScopeAssignmentView,
-  AdminMemoryScopeRepairView,
-  AdminMemoryScopeSummary,
-  AdminMemoryScopedMemoryView,
-  AdminMemoryScopeListData,
-  AdminMemoryScopeDetailData,
-  AdminMemoryScopeMutationResult,
-  AdminMemorySessionKey,
   AdminMemoryService,
   AdminMemorySessionService,
 } from './types/memory.js';
@@ -167,73 +143,14 @@ export type {
   AdminEpisodicMemoryService,
 } from './types/episodic.js';
 
-export type {
-  AdminObservedMemory,
-  AdminObservedScoredMemory,
-  AdminTurnStageTelemetry,
-  AdminTurnRetrievalTelemetry,
-  AdminTurnSessionContextSnapshotData,
-  AdminTurnMemorySnapshotData,
-  AdminTurnSnapshotData,
-  AdminPromptLoomHistoricalSnapshotHit,
-  AdminPromptLoomHistoricalSnapshotData,
-  AdminPromptLoomGeneratedPromptData,
-  AdminPromptLoomProviderPayloadData,
-  AdminPromptLoomProviderResultData,
-  AdminPromptLoomMemoryCaptureData,
-  AdminPromptLoomToolActivityData,
-  AdminPromptLoomSubsystemOutputStatus,
-  AdminPromptLoomSubsystemOutputProjectionStatus,
-  AdminPromptLoomSubsystemOutputEntry,
-  AdminPromptLoomConcernOutputData,
-  AdminPromptLoomContactOutputData,
-  AdminPromptLoomSubsystemOutputsData,
-  AdminPromptLoomProviderWireData,
-  AdminPromptLoomData,
-} from './types/prompt-loom.js';
+export type { AdminTurnSnapshotData } from './types/prompt-loom.js';
 
 export type {
-  AdminSessionRoleEnvelopePreview,
-  AdminContinuityProvenanceView,
-} from './types/continuity.js';
-
-export type {
-  AdminSessionListRow,
-  AdminSessionListData,
-  AdminSessionDetailData,
-  AdminSessionRouteView,
-  AdminSessionRouteListData,
-  AdminSessionRouteResetInput,
-  AdminSessionRouteResetData,
-  AdminCogSecRemediationInput,
-  AdminCogSecCaseDraftView,
-  AdminCogSecPreviewCounts,
-  AdminCogSecEventListData,
-  AdminCogSecRemediationPreviewData,
-  AdminCogSecRouteResetResult,
-  AdminCogSecRemediationApplyData,
-  AdminSessionMessageOntologyView,
-  AdminSessionMessagesData,
-  AdminSessionMessagePaginationOptions,
-  AdminSessionSearchHitView,
-  AdminSessionSearchData,
-  AdminSessionMessagePaginationData,
   AdminSessionService,
   AdminSessionTurnData,
-  AdminSessionTurnDetailData,
 } from './types/sessions.js';
 
-export type {
-  AdminIdentityData,
-  ImportResult,
-  IntakeStageResult,
-  IntakeCommitResult,
-  RollbackResult,
-  DiffPreviewResult,
-  FieldUpdateResult,
-  OnboardingActionResult,
-  AdminIdentityService,
-} from './types/identity.js';
+export type { AdminIdentityService } from './types/identity.js';
 
 export type {
   SettingsConfigEditors,
@@ -290,43 +207,11 @@ export type {
 } from './drift-review-service.js';
 
 export type {
-  AdminContactListData,
-  AdminContactDetailData,
-  ContactUpdateResult,
-  AdminContactSocialGraphEntityView,
-  AdminContactSocialGraphNeighborView,
-  AdminContactSocialGraphConnectionView,
-  AdminContactSocialGraphView,
-  AdminContactRelationshipScoreView,
   AdminContactRelationshipScoreReader,
   AdminContactsService,
 } from './types/contacts.js';
 
-export type {
-  AdminPromptListData,
-  AdminPromptRuntimeBlock,
-  AdminRuntimePromptLayerCoverageEntry,
-  AdminRuntimePromptLayerCoverage,
-  AdminPromptRuntimeMacroHint,
-  AdminConstitutionImmutableBlock,
-  AdminConstitutionCompanionLayer,
-  AdminConstitutionMutableLayer,
-  AdminFoundationSection,
-  AdminFoundationPreview,
-  AdminFoundationSnapshotData,
-  AdminConstitutionPreview,
-  AdminConstitutionSnapshotData,
-  AdminNorthStarItem,
-  AdminNorthStarPreview,
-  AdminNorthStarSnapshotData,
-  AdminPromptDetailData,
-  PromptUpdateResult,
-  ConstitutionUpdateResult,
-  FoundationUpdateResult,
-  NorthStarUpdateResult,
-  RuntimePromptUpdateResult,
-  AdminPromptsService,
-} from './types/prompts.js';
+export type { AdminPromptsService } from './types/prompts.js';
 
 export type {
   AdminLetterService,

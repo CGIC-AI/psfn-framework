@@ -17,7 +17,7 @@ import type {
   AdminRuntimePromptLayerCoverage,
   AdminRuntimePromptLayerCoverageEntry,
   RuntimePromptUpdateResult,
-} from './types.js';
+} from './types/prompts.js';
 import type { AdminPromptsServiceContext } from './prompts-service-context.js';
 
 export class PromptsRuntimeService {

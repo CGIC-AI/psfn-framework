@@ -1,7 +1,7 @@
 import { sendJson } from '../../../channels/backplane/http/primitives.js';
 import type { ReflectionTemplate } from '../../../core/scheduler/reflection-policy.js';
 import type { ScheduledTask, TaskType } from '../../../core/scheduler/types.js';
-import type { AdminSchedulerApi } from '../admin-contract.js';
+import type { AdminSchedulerApi } from '../admin-scheduler-contract.js';
 import { parseAdminJsonBody } from '../request-body.js';
 import { exactPath, prefixedParamPath } from '../route-matchers.js';
 import type { AdminApiRoute, AdminBodyReader } from './types.js';

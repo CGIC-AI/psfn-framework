@@ -28,6 +28,7 @@ import { buildAdminConcernRoutes } from './routes/concern-routes.js';
 import { buildAdminWishlistRoutes } from './routes/wishlist-routes.js';
 import { buildAdminLetterRoutes } from './routes/letter-routes.js';
 import { buildAdminDoingMirrorRoutes } from './routes/doing-mirror-routes.js';
+import { handleMultipartUpload, validateAndParseCharacterCardFile } from './multipart.js';
 import { buildAdminIdentityRoutes } from './routes/identity-routes.js';
 import { buildAdminImageRoutes } from './routes/image-routes.js';
 import { buildAdminOverviewRoutes } from './routes/overview-routes.js';
@@ -1131,7 +1132,18 @@ export function buildAdminApiRoutes(options: {
         withBody,
       })
       : []),
-    ...buildAdminIdentityRoutes({ identityService, appendAuditTimelineEntry, withBody }),
+    ...buildAdminIdentityRoutes({
+      identityService,
+      appendAuditTimelineEntry,
+      withBody,
+      cardUpload: {
+        handleMultipartUpload,
+        validateAndParseCharacterCardFile: (file) => validateAndParseCharacterCardFile({
+          fieldName: 'file',
+          ...file,
+        }),
+      },
+    }),
     ...buildAdminPromptRoutes({ promptsService, withBody }),
     ...buildAdminSchedulerRoutes({ scheduler, withBody }),
     ...buildAdminSubsystemHealthRoutes({ subsystemHealth: subsystemHealthService }),

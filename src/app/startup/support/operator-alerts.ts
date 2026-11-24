@@ -1,7 +1,9 @@
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { StreamTerminalFailureEvent } from '../../../core/agent/stream-adapter.js';
-import type { NotificationPort } from '../../../core/tools/ntfy.js';
-import type { NotificationSenderMetadata } from '../../../shared/contracts/notification-port.js';
+import type {
+  NotificationPort,
+  NotificationSenderMetadata,
+} from '../../../shared/contracts/notification-port.js';
 import type { EventMap } from '../../../shared/event-bus.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { createCompanionId, type CompanionId } from '../../../shared/routing/companion-id.js';

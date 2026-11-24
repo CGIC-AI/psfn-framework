@@ -9,6 +9,9 @@ import {
   type ExtractedAsset,
 } from '@character-foundry/character-foundry/loader';
 import type { CharacterCardV2 } from './types.js';
+import { normalizeImportedCard } from './card-normalizer.js';
+
+export { normalizeImportedCard } from './card-normalizer.js';
 
 const DEFAULT_ASSET_DIRNAME = 'character-assets';
 const DEFAULT_LOREBOOK_IMPORTANCE = 0.55;
@@ -179,40 +182,6 @@ export function persistExtractedCharacterAssets(
       runtimeRelativePath: relative(resolvedAssetRoot, runtimePath),
     };
   });
-}
-
-function requireRuntimeFields(data: CharacterCardV2['data']): void {
-  if (!data.name.trim()) {
-    throw new Error('Imported card is missing required name');
-  }
-  if (!data.personality.trim()) {
-    throw new Error('Imported card is missing required personality');
-  }
-}
-
-export function normalizeImportedCard(card: CCv3Data): CharacterCardV2 {
-  const runtimeCard: CharacterCardV2 = {
-    spec: 'chara_card_v2',
-    spec_version: '2.0',
-    data: {
-      name: toText(card.data.name),
-      description: toText(card.data.description),
-      personality: toText(card.data.personality) || toText(card.data.description),
-      scenario: toText(card.data.scenario),
-      first_mes: toText(card.data.first_mes),
-      mes_example: toText(card.data.mes_example),
-      system_prompt: toText(card.data.system_prompt),
-      post_history_instructions: toText(card.data.post_history_instructions),
-      tags: toTextArray(card.data.tags),
-      creator: toText(card.data.creator),
-      ...(toText(card.data.creator_notes)
-        ? { creator_notes: toText(card.data.creator_notes) }
-        : {}),
-    },
-  };
-
-  requireRuntimeFields(runtimeCard.data);
-  return runtimeCard;
 }
 
 export function parseImportedCharacterCard(raw: Uint8Array): Omit<CharacterImportResult, 'sourcePath'> {

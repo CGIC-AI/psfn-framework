@@ -775,7 +775,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   // Durable Share Capsule custody (jp36.7.1.2): rides the same approval queue as
   // artifact egress (no second approval store), backed by a server-side custody
   // file under companion-data/state. Consumers land in jp36.7.2 / jp36.7.3.
-  agentLoop.shareCapsuleCustody = createCapsuleCustodyService({
+  const shareCapsuleCustody = createCapsuleCustodyService({
     store: createShareCapsuleCustodyStore(resolveShareCapsuleCustodyPath(pathSnapshot.companionDataDir)),
     approvalQueue: cardProposalQueue,
   });
@@ -785,7 +785,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   // only authored content — sensitivity/provenance/audience are runtime-derived.
   agentLoop.registerTool(
     createPublicationTool({
-      getCustody: () => agentLoop.shareCapsuleCustody,
+      getCustody: () => shareCapsuleCustody,
       getApprovalQueue: () => agentLoop.artifactApprovalQueue,
       getDisclosureLineage: () => agentLoop.getCurrentTurnDisclosureLineage(),
     }),

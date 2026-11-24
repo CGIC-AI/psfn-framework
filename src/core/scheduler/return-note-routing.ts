@@ -33,7 +33,7 @@
 // by the caller: it re-routes to the private/self session as a content-free note.
 // This module only produces the REQUESTED route; it never widens a destination.
 
-import type { DisclosureDestination } from '../cogsec/disclosure/index.js';
+import type { DisclosureDestination } from '../cogsec/disclosure/contracts.js';
 import type { FreeTimeReturnPolicy } from './free-time-workspace-resolver.js';
 
 /**

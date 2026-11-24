@@ -10,25 +10,29 @@
 import type { EgressToolGuard, EgressToolGuardCommit } from '../../../system/capabilities/gate.js';
 import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
 import { currentChannelClassificationEpoch } from '../../../system/trust/runtime-classification-epochs.js';
+import type {
+  DisclosureDestination,
+  DisclosureLineage,
+} from '../../cogsec/disclosure/contracts.js';
 import {
   composeEgressDisclosureDecision,
   deriveDisclosureDestination,
+  isDisclosureSocialEgressInvocation,
+} from '../../cogsec/disclosure/egress-composition.js';
+import {
   destinationRequiresCustodyProof,
   egressContentSha256,
   evaluateEgressCustodyHold,
   isCustodyDurabilityHoldReason,
-  isDisclosureSocialEgressInvocation,
   turnEgressCustodyProof,
-  type DisclosureDestination,
-  type DisclosureLineage,
   type EgressCustodyHoldReason,
-  type EgressDeliveryRecorder,
   type TurnEgressCustodyProof,
-} from '../../cogsec/disclosure/index.js';
+} from '../../cogsec/disclosure/egress-delivery-record.js';
+import type { EgressDeliveryRecorder } from '../../cogsec/disclosure/egress-delivery-recorder.js';
 import {
   isEgressCapabilityToken,
   type IntakeSinkGate,
-} from '../../cogsec/intake/sink-gates.js';
+} from '../../../shared/contracts/intake-sink-gate-port.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../cogsec/intake-firewall-notice-templates.js';
 import type { IntakeEnvelopeSnapshot } from '../../../shared/contracts/intake-envelope.js';
 import { canonicalJsonString } from '../../../shared/utils/json-serialization.js';

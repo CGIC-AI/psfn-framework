@@ -34,7 +34,7 @@ import {
   type SensitivityLevel,
 } from '../../system/trust/types.js';
 import type { ContextEnvelope } from '../../system/trust/context-envelope.js';
-import type { DisclosureDestination } from '../cogsec/disclosure/index.js';
+import type { DisclosureDestination } from '../cogsec/disclosure/contracts.js';
 import {
   normalizeProjectEntityId,
   type CompanionOwnedVisibility,

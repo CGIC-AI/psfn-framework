@@ -14,10 +14,8 @@ import type { SessionManager } from '../../../session/manager.js';
 import type { CapturedSessionReads } from '../../../session/manager/captured-session-owner.js';
 import type { TurnToolResultCustodyRecord } from '../turn-tool-result-custody.js';
 import type { DisclosureLineage } from '../../../cogsec/disclosure/contracts.js';
-import type {
-  ActiveTurnEgressCustody,
-  EgressDeliveryRecorder,
-} from '../../../cogsec/disclosure/index.js';
+import type { ActiveTurnEgressCustody } from '../../../cogsec/disclosure/egress-delivery-record.js';
+import type { EgressDeliveryRecorder } from '../../../cogsec/disclosure/egress-delivery-recorder.js';
 import type { ToolResultCustodyEdge } from '../../../../shared/contracts/tool-result-custody.js';
 import type { ContextSourceManifestBlockInput } from '../../../cogsec/disclosure/context-source-manifest.js';
 import type { MetacognitiveFlag } from '../../../self-model/metacognition.js';

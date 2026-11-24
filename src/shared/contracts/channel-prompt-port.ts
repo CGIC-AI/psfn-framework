@@ -57,6 +57,8 @@ export interface ChannelPromptDock {
   prompt?: Pick<ChannelPromptAdapter, 'resolveChannelType' | 'resolveTaskKind' | 'listAvailableReactions'>;
 }
 
+export const CHANNELS_FILE_NAME = 'channels.json';
+
 export interface ChannelPromptRegistryPort {
   get(id: string): ChannelPromptDock | undefined;
 }

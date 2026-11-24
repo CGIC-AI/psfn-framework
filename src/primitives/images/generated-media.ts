@@ -6,14 +6,14 @@ import type { Attachment } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { isStrictSubpath, resolvePersonalImagesDir } from '../../persistence/layout.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
-import { IMAGE_PROVIDER_VALUES } from './types.js';
+import { IMAGE_PROVIDER_VALUES } from '../../shared/contracts/image-config-contracts.js';
 import type {
   ImageGenerationResult,
   ImageProvider,
   ImageResultAsset,
   MediaToolResultDetails,
   ImageToolResultDetails,
-} from './types.js';
+} from '../../shared/contracts/image-config-contracts.js';
 import type {
   PendingPaidDeliverable,
   PendingPaidDeliverableArtifact,

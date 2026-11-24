@@ -1,5 +1,5 @@
 import { CAPABILITY_TIER_VALUES } from '../capabilities/tiers.js';
-import { CHANNELS_FILE_NAME } from '../../channels/backplane/config.js';
+import { CHANNELS_FILE_NAME } from '../../shared/contracts/channel-prompt-port.js';
 import {
   RUNTIME_SETTINGS_KEYS,
   SETTINGS_FILE_NAME,
@@ -22,7 +22,7 @@ import {
   FAL_CREATE_MODELS,
   FAL_EDIT_MODELS,
   IMAGE_PROVIDER_VALUES,
-} from '../../primitives/images/types.js';
+} from '../../shared/contracts/image-config-contracts.js';
 
 export const IMPORT_PROCESSING_ROUTE_MODE_VALUES = [
   'background',

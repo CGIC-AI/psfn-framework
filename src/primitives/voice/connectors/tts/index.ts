@@ -1,13 +1,19 @@
 import { createElevenLabsStreamingTtsConnector, type ElevenLabsStreamingTtsConfig } from './elevenlabs-stream.js';
 import { createEchoStreamingTtsConnector } from './echo-stream.js';
 import type { EligibilityRequirements } from '../../../../system/capabilities/eligibility.js';
+import {
+  registerStreamingTtsProviderId,
+  type StreamingTtsProvider,
+} from '../../../../shared/contracts/voice-provider-registry.js';
 import type { StreamingTtsConnector } from './types.js';
 
 export * from './types.js';
 export * from './elevenlabs-stream.js';
 export * from './echo-stream.js';
-
-export type StreamingTtsProvider = 'elevenlabs' | 'echo' | (string & {});
+export {
+  isStreamingTtsProvider,
+  type StreamingTtsProvider,
+} from '../../../../shared/contracts/voice-provider-registry.js';
 
 export interface EchoTtsProviderSettings {
   url: string;
@@ -181,17 +187,13 @@ export function listStreamingTtsProviders(): StreamingTtsProvider[] {
   return [...providerRegistrations.keys()] as StreamingTtsProvider[];
 }
 
-export function isStreamingTtsProvider(provider: string): provider is StreamingTtsProvider {
-  if (provider.trim().length === 0) return false;
-  return providerRegistrations.has(provider.trim().toLowerCase());
-}
-
 export function registerStreamingTtsProvider<TProvider extends StreamingTtsProvider>(
   provider: TProvider,
   registration: StreamingTtsProviderRegistration<StreamingTtsConfigByProvider[TProvider]>,
 ): () => void {
   const providerId = normalizeProviderId(provider);
   const previousRegistration = providerRegistrations.get(providerId);
+  const unregisterId = registerStreamingTtsProviderId(providerId);
   providerRegistrations.set(providerId, registration as AnyStreamingTtsProviderRegistration);
 
   return () => {
@@ -200,6 +202,7 @@ export function registerStreamingTtsProvider<TProvider extends StreamingTtsProvi
       return;
     }
     providerRegistrations.delete(providerId);
+    unregisterId();
   };
 }
 

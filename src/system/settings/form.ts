@@ -25,7 +25,7 @@ import {
   normalizeFalCreateModelSetting,
   normalizeFalEditModelSetting,
   normalizeImageProviderSetting,
-} from '../../primitives/images/types.js';
+} from '../../shared/contracts/image-config-contracts.js';
 import { PARENT_TURN_MAX_WALL_TIME_MS } from '../../core/agent/turn-limits.js';
 import { FILESYSTEM_READ_PAGE_CONTRACT } from '../../shared/contracts/filesystem.js';
 import {

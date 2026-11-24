@@ -53,9 +53,12 @@ export {
 } from './testing-harness-garden-config.js';
 export type { TestingHarnessGardenAdminConfig } from './testing-harness-garden-config.js';
 
+import { CHANNELS_FILE_NAME } from '../../shared/contracts/channel-prompt-port.js';
+
+export { CHANNELS_FILE_NAME } from '../../shared/contracts/channel-prompt-port.js';
+
 const log = createComponentLogger('ChannelConfig');
 
-export const CHANNELS_FILE_NAME = 'channels.json';
 const ENV_CREDENTIAL_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 const DEFAULT_TELEGRAM_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_TELEGRAM_WEBHOOK_HOST = '0.0.0.0';

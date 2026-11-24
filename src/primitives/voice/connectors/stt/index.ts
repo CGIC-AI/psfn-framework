@@ -1,11 +1,17 @@
 import { createDeepgramStreamingSttConnector, type DeepgramStreamingSttConfig } from './deepgram-stream.js';
 import type { EligibilityRequirements } from '../../../../system/capabilities/eligibility.js';
+import {
+  registerStreamingSttProviderId,
+  type StreamingSttProvider,
+} from '../../../../shared/contracts/voice-provider-registry.js';
 import type { StreamingSttConnector } from './types.js';
 
 export * from './types.js';
 export * from './deepgram-stream.js';
-
-export type StreamingSttProvider = 'deepgram' | (string & {});
+export {
+  isStreamingSttProvider,
+  type StreamingSttProvider,
+} from '../../../../shared/contracts/voice-provider-registry.js';
 
 export interface StreamingSttConfigByProvider {
   deepgram: DeepgramStreamingSttConfig;
@@ -99,17 +105,13 @@ export function listStreamingSttProviders(): StreamingSttProvider[] {
   return [...providerRegistrations.keys()] as StreamingSttProvider[];
 }
 
-export function isStreamingSttProvider(provider: string): provider is StreamingSttProvider {
-  if (provider.trim().length === 0) return false;
-  return providerRegistrations.has(provider.trim().toLowerCase());
-}
-
 export function registerStreamingSttProvider<TProvider extends StreamingSttProvider>(
   provider: TProvider,
   registration: StreamingSttProviderRegistration<StreamingSttConfigByProvider[TProvider]>,
 ): () => void {
   const providerId = normalizeProviderId(provider);
   const previousRegistration = providerRegistrations.get(providerId);
+  const unregisterId = registerStreamingSttProviderId(providerId);
   providerRegistrations.set(providerId, registration as AnyStreamingSttProviderRegistration);
 
   return () => {
@@ -118,6 +120,7 @@ export function registerStreamingSttProvider<TProvider extends StreamingSttProvi
       return;
     }
     providerRegistrations.delete(providerId);
+    unregisterId();
   };
 }
 

@@ -15,6 +15,7 @@ import {
   type ModelUsageStoreScope,
   type PostgresModelUsageStore,
 } from '../../persistence/postgres/model-usage-store.js';
+import type { ModelUsageRecorder } from '../../shared/telemetry/model-usage.js';
 
 export interface ProviderRuntimeServices {
   runtime: ProviderRuntime;
@@ -28,6 +29,10 @@ export interface ProviderRuntimeFactoryOptions {
   providerEnv?: NodeJS.ProcessEnv;
   llmOptions?: LLMClientRuntimeOptions;
   modelUsageScope?: ModelUsageStoreScope;
+  /** Optional host-injected usage recorder (bypasses default Postgres usage store). */
+  modelUsageRecorder?: ModelUsageRecorder;
+  /** Optional host-injected embedding provider (bypasses config-based construction). */
+  embeddingProvider?: EmbeddingRuntimeProvider;
 }
 
 export function createProviderRuntimeServices(
@@ -35,6 +40,27 @@ export function createProviderRuntimeServices(
 ): ProviderRuntimeServices {
   const providerEnv = options.providerEnv ?? process.env;
   const runtime = options.llmOptions?.runtime ?? new PiProviderRuntime(undefined, options.config);
+  const embeddingProvider = options.embeddingProvider
+    ?? createEmbeddingProviderFromConfig(options.config, providerEnv);
+  const embeddingRates = resolveModelUsageCostRatesForIdentity(options.config, {
+    provider: embeddingProvider.kind,
+    model: embeddingProvider.model,
+  });
+  if (options.modelUsageRecorder) {
+    const injectedRecorder = options.modelUsageRecorder;
+    return {
+      runtime,
+      llmClient: new LLMClient(options.config, {
+        ...(options.llmOptions ?? {}),
+        runtime,
+        usageRecorder: options.llmOptions?.usageRecorder ?? injectedRecorder,
+      }),
+      embeddingProvider: withEmbeddingUsageAccounting(embeddingProvider, injectedRecorder, {
+        estimatedRates: embeddingRates,
+        ...(options.config.companionId ? { companionId: options.config.companionId } : {}),
+      }),
+    };
+  }
   const modelUsageStore = createPostgresModelUsageStoreFromConfig(
     options.config,
     options.modelUsageScope,
@@ -44,11 +70,6 @@ export function createProviderRuntimeServices(
       ? options.modelUsageScope.companionId
       : undefined)
     : options.config.companionId;
-  const embeddingProvider = createEmbeddingProviderFromConfig(options.config, providerEnv);
-  const embeddingRates = resolveModelUsageCostRatesForIdentity(options.config, {
-    provider: embeddingProvider.kind,
-    model: embeddingProvider.model,
-  });
   const llmOptions = modelUsageStore
     ? {
         ...(options.llmOptions ?? {}),

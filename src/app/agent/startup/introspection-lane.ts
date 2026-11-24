@@ -31,7 +31,7 @@ import {
   resolveLegacyValuesJournalPath,
   resolveValuesJournalPath,
 } from '../../../persistence/layout.js';
-import type { createAgentPersistenceRuntime } from '../../../persistence/runtime-factory.js';
+import type { IntrospectionLandmarkPostgresStore } from '../../../faculties/introspection/postgres-store.js';
 import type { SchedulerRuntimeConfig as SchedulerConfig } from '../../../system/config/scheduler-config.js';
 import type { JournalAutoPublisher } from '../../../boundary/integrations/journal/auto-publish.js';
 
@@ -43,7 +43,7 @@ export interface IntrospectionLaneDeps {
   llmProvider: LLMProviderPort;
   systemPrompt: string;
   introspectionConsentStore: IntrospectionConsentStore;
-  persistenceRuntime: Awaited<ReturnType<typeof createAgentPersistenceRuntime>>;
+  persistenceRuntime: { introspectionLandmarkStore: IntrospectionLandmarkPostgresStore };
   companionDataDir: string;
   journalPublisher?: Pick<JournalAutoPublisher, 'publishReflection'>;
 }

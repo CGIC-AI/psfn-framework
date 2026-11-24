@@ -9,6 +9,7 @@
   "scripts": {
     "build": "npm run verify:companion-id-types && NODE_OPTIONS=--max-old-space-size=8192 tsup",
     "build:runtime": "npm run verify:companion-id-types && PSFN_RUNTIME_BUILD=1 tsup",
+    "build:core-package": "tsx scripts/build-core-package.ts",
     "gateway": "tsx src/app/gateway/main.ts",
     "gateway:start": "node dist/gateway-main.js",
     "agent": "tsx src/app/agent/main.ts",
@@ -171,6 +172,7 @@
     "verify:model-facing-tool-guidance": "tsx scripts/verify-model-facing-tool-guidance.ts",
     "verify:dependency-cycles": "tsx scripts/check-dependency-cycles.ts",
     "verify:core-boundary": "tsx scripts/verify-core-boundary.ts",
+    "verify:core-package": "tsx scripts/verify-core-package.ts",
     "verify:shared-type-guards": "node scripts/verify-shared-type-guards.mjs",
     "verify:model-usage-capture": "node scripts/verify-model-usage-capture.mjs",
     "verify:idle-purity": "PSFN_IDLE_PURITY_WARMUP_MS=${PSFN_IDLE_PURITY_WARMUP_MS:-65000} PSFN_IDLE_PURITY_WINDOW_MS=${PSFN_IDLE_PURITY_WINDOW_MS:-60000} vitest run --reporter=verbose src/app/e2e/idle-purity-certification/runtime.integration.test.ts",

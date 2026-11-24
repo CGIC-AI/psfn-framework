@@ -1,7 +1,7 @@
 import type { LayerType } from '../../../core/identity/prompt-types.js';
 import type { PromptLayerUpdatePatch } from '../../../core/identity/prompt-store.js';
 import type { PromptRuntimeSystemPromptBlockId } from '../../../core/identity/prompt-runtime.js';
-import type { PromptUpdateResult } from './types.js';
+import type { PromptUpdateResult } from './types/prompts.js';
 import type { AdminPromptsServiceContext } from './prompts-service-context.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
 import {

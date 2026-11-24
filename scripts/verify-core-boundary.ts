@@ -38,6 +38,7 @@ export const HOST_ONLY_PREFIXES = Object.freeze([
   'app/agent/',
   'app/cert-manager/',
   'app/cli/',
+  'app/companion/',
   'app/e2e/',
   'app/gateway/',
   'app/maintenance/',

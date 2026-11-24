@@ -13,7 +13,7 @@ import type {
   NorthStarUpdateResult,
   PromptUpdateResult,
   RuntimePromptUpdateResult,
-} from './types.js';
+} from './types/prompts.js';
 import {
   AdminPromptsServiceContext,
   type AdminPromptsDataServiceDeps,

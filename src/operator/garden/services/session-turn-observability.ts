@@ -9,8 +9,8 @@ import {
   sanitizeTurnSnapshot,
   sanitizeTurnStageTelemetry,
 } from '../../../core/turns/observability.js';
+import type { AdminContinuityProvenanceView } from './types/continuity.js';
 import type {
-  AdminContinuityProvenanceView,
   AdminPromptLoomData,
   AdminPromptLoomContactOutputData,
   AdminPromptLoomConcernOutputData,
@@ -18,11 +18,11 @@ import type {
   AdminPromptLoomSubsystemOutputEntry,
   AdminPromptLoomSubsystemOutputProjectionStatus,
   AdminPromptLoomSubsystemOutputsData,
-  AdminSessionTurnData,
   AdminTurnRetrievalTelemetry,
   AdminTurnSnapshotData,
   AdminTurnStageTelemetry,
-} from './types.js';
+} from './types/prompt-loom.js';
+import type { AdminSessionTurnData } from './types/sessions.js';
 import type {
   PromptSectionTelemetry,
   TurnRecord,

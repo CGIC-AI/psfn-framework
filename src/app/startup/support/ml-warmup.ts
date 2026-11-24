@@ -13,8 +13,10 @@ interface MlWarmupLogger {
   error(message: string, meta?: Record<string, unknown>): void;
 }
 
+export type StartupTextEmotionClassifier = Pick<TextEmotionClassifier, 'classify' | 'preload'>;
+
 interface RuntimeMlWarmupOptions {
-  textClassifier: TextEmotionClassifier;
+  textClassifier: StartupTextEmotionClassifier;
   embeddingService: EmbeddingProviderPort & { readonly kind?: string };
   textEmotionModel: string;
   logger: MlWarmupLogger;

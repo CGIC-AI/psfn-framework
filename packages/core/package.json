@@ -1,0 +1,58 @@
+{
+  "name": "@psfn/core",
+  "version": "0.1.0",
+  "description": "Companion core runtime, typed host ports, lifecycle contracts, and operator services extracted from PSFN Framework",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CGIC-AI/psfn-framework.git",
+    "directory": "packages/core"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "files": [
+    "dist",
+    "config",
+    "LICENSE",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./ports": {
+      "types": "./dist/ports.d.ts",
+      "import": "./dist/ports.js"
+    },
+    "./lifecycle": {
+      "types": "./dist/lifecycle.d.ts",
+      "import": "./dist/lifecycle.js"
+    },
+    "./operator": {
+      "types": "./dist/operator.d.ts",
+      "import": "./dist/operator.js"
+    },
+    "./seeds": {
+      "types": "./dist/seeds.d.ts",
+      "import": "./dist/seeds.js"
+    },
+    "./config/*": "./config/*"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "0.84.1",
+    "@earendil-works/pi-ai": "0.84.1",
+    "@huggingface/transformers": "4.2.0",
+    "@sinclair/typebox": "0.34.48",
+    "js-tiktoken": "1.0.21",
+    "pg": "8.20.0",
+    "uuid": "11.1.1",
+    "winston": "3.19.0"
+  },
+  "engines": {
+    "node": ">=24.22.1 <25"
+  }
+}

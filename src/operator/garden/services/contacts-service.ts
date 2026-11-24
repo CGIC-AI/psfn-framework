@@ -38,7 +38,7 @@ import type {
   AdminContactSocialGraphView,
   AdminContactsService,
   ContactUpdateResult,
-} from './types.js';
+} from './types/contacts.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import {
   resolveFleetGardenContactMutationActor,

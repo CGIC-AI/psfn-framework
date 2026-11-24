@@ -1,7 +1,7 @@
 import type {
   AdminPromptDetailData,
   PromptUpdateResult,
-} from './types.js';
+} from './types/prompts.js';
 import type { AdminPromptsServiceContext } from './prompts-service-context.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
 import { resolveOperatorLayerWriter } from './prompt-operator-layer-authority.js';

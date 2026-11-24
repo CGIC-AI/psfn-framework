@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
@@ -56,6 +56,7 @@ import type {
   AutomataBusWorkerScope,
 } from './worker-access.js';
 import { AUTOMATA_BUS_WORKER_BRIEFING_SCHEMA_VERSION } from './worker-access.js';
+import { automataBusWorkerWriteKey } from './worker-access-operation.js';
 
 interface CanonicalAppendInput {
   eventId: string;
@@ -65,6 +66,8 @@ interface CanonicalAppendInput {
   body: AutomataBusFindingBody | AutomataBusRelationBody;
   audiences: readonly AutomataBusAudience[];
   sensitivity: SensitivityLevel;
+  /** When true, replay an existing stored event with this deterministic eventId. */
+  replayIncumbent?: boolean;
 }
 
 interface CanonicalAppendResult {
@@ -124,7 +127,8 @@ export class CanonicalAutomataBusWriter {
 
   constructor(private readonly options: {
     companionId: string;
-    store: Pick<PostgresAutomataBusRuntimeStore, 'appendAllocated'>;
+    store: Pick<PostgresAutomataBusRuntimeStore, 'appendAllocated'>
+      & Partial<Pick<PostgresAutomataBusRuntimeStore, 'readEventById'>>;
     runtime: AutomataBusProductionRuntime;
   }) {
     requiredText(options.companionId, 'writer companionId');
@@ -136,7 +140,28 @@ export class CanonicalAutomataBusWriter {
     return operation;
   }
 
+  replayExisting(eventId: string): Promise<CanonicalAppendResult | null> {
+    const operation = this.appendTail.then(() => this.replaySerialized(eventId));
+    this.appendTail = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  private async replaySerialized(eventId: string): Promise<CanonicalAppendResult | null> {
+    if (!this.options.store.readEventById) return null;
+    const incumbent = await this.options.store.readEventById({
+      companionId: this.options.companionId,
+      audience: 'eligible-automata',
+      maxSensitivity: SENSITIVITY_LEVELS.at(-1)!,
+      eventId: requiredText(eventId, 'eventId'),
+    });
+    return incumbent ? await this.indexPersisted(incumbent, false) : null;
+  }
+
   private async appendSerialized(input: CanonicalAppendInput): Promise<CanonicalAppendResult> {
+    if (input.replayIncumbent === true) {
+      const replayed = await this.replaySerialized(input.eventId);
+      if (replayed) return replayed;
+    }
     const persisted = await this.options.store.appendAllocated({
       companionId: this.options.companionId,
       eventId: requiredText(input.eventId, 'eventId'),
@@ -187,6 +212,21 @@ export class CanonicalAutomataBusWriter {
     const indexed = await this.options.runtime.indexing.indexCurrentFinding(finding);
     return { event, inserted, indexStatus: indexed.status };
   }
+}
+
+function workerWriteEventId(
+  namespace: 'automata-bus-finding' | 'automata-bus-relation' | 'automata-bus-handoff',
+  companionId: string,
+  run: AutomataRunRecord,
+  writeKey: string,
+): string {
+  return stableId(namespace, [companionId, run.automatonClass, run.taskId, writeKey]);
+}
+
+function derivedWriteKey(kind: string, input: { scope: unknown; writeKey?: string }): string {
+  if (input.writeKey !== undefined) return requiredText(input.writeKey, 'writeKey');
+  const { scope: _scope, writeKey: _writeKey, ...write } = input;
+  return automataBusWorkerWriteKey({ kind, ...write });
 }
 
 function evidenceForRefs(
@@ -263,17 +303,21 @@ export function createProductionAutomataBusWorkerAccess(options: {
     append: async input => {
       const run = exactRunForScope(options.registry, companionId, input.scope);
       return await options.writer.append({
-        eventId: `automata-bus-finding:${randomUUID()}`,
+        eventId: workerWriteEventId('automata-bus-finding', companionId, run, derivedWriteKey('append', input)),
         occurredAt: new Date().toISOString(),
         run,
         type: 'finding',
         body: workerFindingBody(input),
         audiences: ['eligible-automata', 'operator'],
         sensitivity: input.scope.maxSensitivity,
+        replayIncumbent: true,
       });
     },
     correct: async input => {
       const run = exactRunForScope(options.registry, companionId, input.scope);
+      const eventId = workerWriteEventId('automata-bus-relation', companionId, run, derivedWriteKey('correct', input));
+      const replayed = await options.writer.replayExisting(eventId);
+      if (replayed) return replayed;
       const [target] = await options.store.readCurrentFindingsByEventIds({
         companionId,
         audience: input.scope.audience,
@@ -305,7 +349,7 @@ export function createProductionAutomataBusWorkerAccess(options: {
               : {}),
           };
       return await options.writer.append({
-        eventId: `automata-bus-relation:${randomUUID()}`,
+        eventId,
         occurredAt: new Date().toISOString(),
         run,
         type: 'relation',
@@ -317,6 +361,7 @@ export function createProductionAutomataBusWorkerAccess(options: {
         },
         audiences: target.audiences,
         sensitivity: target.sensitivity,
+        replayIncumbent: true,
       });
     },
     handoff: async input => {
@@ -327,7 +372,7 @@ export function createProductionAutomataBusWorkerAccess(options: {
       const references = [...input.outputRefs, ...validationRefs];
       if (references.length === 0) references.push(`automata-run:${run.runId}`);
       return await options.writer.append({
-        eventId: `automata-bus-handoff:${randomUUID()}`,
+        eventId: workerWriteEventId('automata-bus-handoff', companionId, run, derivedWriteKey('handoff', input)),
         occurredAt: new Date().toISOString(),
         run,
         type: 'finding',
@@ -344,6 +389,7 @@ export function createProductionAutomataBusWorkerAccess(options: {
         },
         audiences: ['eligible-automata', 'operator'],
         sensitivity: input.scope.maxSensitivity,
+        replayIncumbent: true,
       });
     },
     runs: async input => {

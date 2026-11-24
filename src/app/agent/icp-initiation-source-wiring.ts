@@ -28,7 +28,7 @@ export interface IcpInitiationSourceWiringInput {
   candidateStore: SourceRuntimeOptions['store'] | undefined;
   feltImpulseFunnelStore: IcpFeltImpulseFunnelStorePort;
   peers: SourceRuntimeOptions['peers'] | undefined;
-  gateway: SourceRuntimeOptions['gateway'];
+  gateway?: SourceRuntimeOptions['gateway'];
   isExternalCompanionAuthorized: SourceRuntimeOptions['isExternalCompanionAuthorized'];
   llmProvider: ConsentEvaluatorOptions['llmProvider'];
   eventBus: EventBus;
@@ -77,7 +77,7 @@ export function wireIcpInitiationSources(
   const isAuthorized = () => runtimeEnablement.isEnabled()
     && input.isExternalCompanionAuthorized();
   const sourceRuntime = input.config.enabled
-    && input.candidateStore && input.peers && input.localCompanionId
+    && input.candidateStore && input.peers && input.localCompanionId && input.gateway
     ? createIcpInitiationSourceRuntime({
         localCompanionId: input.localCompanionId,
         store: input.candidateStore,

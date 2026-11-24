@@ -55,7 +55,7 @@ import type {
   AdminMemoryScopeMutationResult,
   AdminMemoryScopeRepairView,
   MemoryMutationResult,
-} from './types.js';
+} from './types/memory.js';
 import {
   createSubjectAuthorizedMemoryStore,
   getSubjectAuthorizedAdminMemoryStats,

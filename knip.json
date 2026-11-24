@@ -16,10 +16,13 @@
         "src/core/emotion/calibration.ts",
         "src/persistence/sessions/turn-record-recovery-worker.ts",
         "src/persistence/sessions/turn-tombstone-authority-worker.ts",
+        "packages/core/src/*.ts",
+        "packages/core/tsup.config.ts",
         "scripts/**/*.{ts,mjs}"
       ],
       "project": [
         "src/**/*.ts",
+        "packages/core/src/**/*.ts",
         "scripts/**/*.{ts,mjs}"
       ],
       "ignore": [

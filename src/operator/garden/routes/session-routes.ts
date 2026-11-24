@@ -7,7 +7,7 @@ import type {
   AdminCogSecRemediationInput,
   AdminSessionRouteResetInput,
   AdminSessionService,
-} from '../services/types.js';
+} from '../services/types/sessions.js';
 import {
   AdminSessionNotFoundError,
   AdminSessionTurnNotFoundError,

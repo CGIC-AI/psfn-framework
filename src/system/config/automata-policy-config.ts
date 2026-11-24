@@ -5,6 +5,7 @@ import {
   parseAutomataOwnerPolicy,
   type AutomataOwnerPolicy,
 } from '../../faculties/automata/registry-contract.js';
+import type { CanonicalModelRegistry } from '../../shared/contracts/runtime.js';
 import { loadModelsConfig } from './models-config.js';
 import { AUTOMATA_FILE_NAME, assertAutomataReviewerModelResolvable } from './automata-reviewer-model-contract.js';
 
@@ -13,7 +14,7 @@ export const AUTOMATA_SEED_FILE_NAME = 'automata-policy.seed.json';
 
 export function loadAutomataPolicyConfig(
   dataDir: string,
-  options: { seedDir?: string } = {},
+  options: { seedDir?: string; modelRegistry?: CanonicalModelRegistry } = {},
 ): AutomataOwnerPolicy {
   const dataPath = join(dataDir, AUTOMATA_FILE_NAME);
   const seedDir = options.seedDir ?? process.env.CONFIG_DIR ?? './config';
@@ -23,7 +24,10 @@ export function loadAutomataPolicyConfig(
     validate: (raw, sourcePath) => parseAutomataOwnerPolicy(raw, sourcePath),
   });
   if (policy.bus.reviewer.enabled) {
-    assertAutomataReviewerModelResolvable(policy, loadModelsConfig(dataDir, options).modelRegistry);
+    assertAutomataReviewerModelResolvable(
+      policy,
+      options.modelRegistry ?? loadModelsConfig(dataDir, options).modelRegistry,
+    );
   }
   return policy;
 }

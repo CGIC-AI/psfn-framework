@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.tsup.json",
+  "compilerOptions": {
+    "outDir": "./dist"
+  },
+  "include": [
+    "src/**/*.ts",
+    "../../src/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "../../src/**/*.test.ts",
+    "../../src/**/*.test-fixtures.ts"
+  ]
+}

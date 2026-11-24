@@ -13,18 +13,19 @@ import { parseAdminJsonBody } from '../request-body.js';
 import { parseRequestUrl } from '../request-url.js';
 import { exactPath, paramWithSuffix } from '../route-matchers.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
-import type {
-  AdminSubjectVisibleAuditService,
-  ProtectedConcernAction,
-} from '../services/subject-visible-audit-service.js';
-import type { AdminConcernService } from '../services/types.js';
+import type { AdminConcernService } from '../services/types/concerns.js';
 import {
   ADMIN_DYNAMIC_JSON_HEADERS,
   parsePositiveIntegerQueryNumber,
   sendInternalError,
   toSanitizedMessage,
 } from './shared.js';
-import type { AdminApiRoute, AdminBodyReader } from './types.js';
+import type {
+  AdminApiRoute,
+  AdminBodyReader,
+  AdminSubjectVisibleAuditPort,
+  ProtectedConcernAction,
+} from './types.js';
 
 function parseBooleanQuery(value: string | null): boolean | undefined {
   if (value === null) return undefined;
@@ -153,7 +154,7 @@ function parseStaleInput(value: unknown): ActiveConcernStaleResolutionOptions & 
 function recordSubjectVisibleConcernAction(input: {
   res: Parameters<AdminApiRoute['handle']>[1];
   context: GardenRequestContext | undefined;
-  subjectAuditService: AdminSubjectVisibleAuditService | undefined;
+  subjectAuditService: AdminSubjectVisibleAuditPort | undefined;
   action: ProtectedConcernAction;
   reason: string | undefined;
 }): boolean {
@@ -205,7 +206,7 @@ function withParsedBody<T>(
 
 export function buildAdminConcernRoutes(options: {
   concernService?: AdminConcernService | null;
-  subjectAuditService?: AdminSubjectVisibleAuditService;
+  subjectAuditService?: AdminSubjectVisibleAuditPort;
   withBody: AdminBodyReader;
 }): AdminApiRoute[] {
   const { concernService, subjectAuditService, withBody } = options;

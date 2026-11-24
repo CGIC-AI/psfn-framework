@@ -151,3 +151,8 @@ bus/runs/
 # Keep the operator-authored brief tracked; ignore everything else.
 /openwiki/*
 !/openwiki/INSTRUCTIONS.md
+
+# Generated standalone @psfn/core package build outputs and synced seeds/license
+/packages/core/dist/
+/packages/core/config/
+/packages/core/LICENSE

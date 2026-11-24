@@ -9,7 +9,7 @@ import type {
   AdminMemoryElevationStatus,
   AdminMemorySessionKey,
   AdminMemoryView,
-} from './types.js';
+} from './types/memory.js';
 
 /**
  * TTL for Garden memory body access grants (session elevation and per-item

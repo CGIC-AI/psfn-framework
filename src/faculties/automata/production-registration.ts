@@ -47,6 +47,12 @@ export const PRODUCTION_AUTOMATA_SPAWN_PATHS = [
     workerSymbol: 'SocialGraphBuilderWorker',
   },
   {
+    id: 'companion-social-graph-builder-worker',
+    classId: 'memory.social_graph_builder',
+    sourcePath: 'src/app/companion/scheduler-runtime.ts',
+    workerSymbol: 'SocialGraphBuilderWorker',
+  },
+  {
     id: 'concern-candidate-worker',
     classId: 'intention.concern_candidate_review',
     sourcePath: 'src/core/intention/concern-candidates.ts',

@@ -54,7 +54,7 @@ import type {
   AdminConstitutionImmutableBlock,
   AdminConstitutionMutableLayer,
   AdminConstitutionSnapshotData,
-} from './types.js';
+} from './types/prompts.js';
 
 export const CONSTITUTION_IMMUTABLE_LAYER_ID_PREFIX = 'constitution:immutable:';
 export const CONSTITUTION_COMPANION_LAYER_ID = 'constitution:companion-derived-values';

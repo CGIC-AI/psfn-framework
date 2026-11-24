@@ -8,6 +8,12 @@ import {
   requiredProjectText,
   type CompanionOwnedVisibility,
 } from '../../shared/contracts/wiki-context.js';
+import type {
+  PersonalProjectStatus,
+  PersonalProjectWorkContext,
+  ProjectContactDmTarget,
+  ProjectPublicationMode,
+} from '../../shared/contracts/personal-projects-port.js';
 import type { WikiDocument } from './types.js';
 
 export {
@@ -15,12 +21,14 @@ export {
   requiredProjectText,
   type CompanionOwnedVisibility,
 } from '../../shared/contracts/wiki-context.js';
+export type {
+  PersonalProjectStatus,
+  PersonalProjectWorkContext,
+  ProjectContactDmTarget,
+  ProjectPublicationMode,
+} from '../../shared/contracts/personal-projects-port.js';
 
-export type PersonalProjectStatus = 'active' | 'paused' | 'completed' | 'archived';
 export type ProjectArtifactShareState = 'private' | 'requested' | 'shared';
-
-/** Publication/review mode for a publication work context (bible §10.9/§10.10). */
-export type ProjectPublicationMode = 'public_clean' | 'expressive_review';
 
 /**
  * The current personal-project manifest schema version. v1 manifests (which had
@@ -29,31 +37,6 @@ export type ProjectPublicationMode = 'public_clean' | 'expressive_review';
  */
 export const CURRENT_PROJECT_SCHEMA_VERSION = 2 as const;
 export type ProjectSchemaVersion = 1 | typeof CURRENT_PROJECT_SCHEMA_VERSION;
-
-/**
- * The DM return anchor for private, contact-anchored free-time work (bible
- * §10.6/§10.8). The manifest stores only the stable `contactId`; the concrete DM
- * `channelId` is resolved by the return-note routing at projection time.
- */
-export interface ProjectContactDmTarget {
-  contactId: string;
-  channelId?: string;
-}
-
-/**
- * A project's durable, companion-owned work context (bible §10.3/§10.5). This is
- * the "per-directory privacy" classification of the directory-per-project
- * workspace model (adjudication S12.4). It is a companion CHOICE (private vs
- * room vs publication is her prerogative, §10.1) — but every disclosure-relevant
- * fact DERIVED from it (continuity session id, return policy, retrieval /
- * disclosure ceilings) is computed by the runtime, never asserted by the model
- * (bible §6.2). Structurally mirrors the resolver's `FreeTimeWorkspaceContext`;
- * the composition seam maps one to the other.
- */
-export type PersonalProjectWorkContext =
-  | { kind: 'private'; returnTarget?: ProjectContactDmTarget }
-  | { kind: 'room'; channelId: string }
-  | { kind: 'publication'; mode: ProjectPublicationMode; surfaceRef?: string };
 
 /**
  * The default return policy for a project workspace (bible §10.8). RUNTIME-

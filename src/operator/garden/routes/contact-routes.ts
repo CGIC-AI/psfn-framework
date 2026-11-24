@@ -2,7 +2,7 @@ import { sendJson } from '../../../channels/backplane/http/primitives.js';
 import { parseAdminJsonBody } from '../request-body.js';
 import { parseRequestUrl } from '../request-url.js';
 import { exactPath, paramWithSuffix, prefixedParamPath } from '../route-matchers.js';
-import type { AdminContactsService } from '../services/types.js';
+import type { AdminContactsService } from '../services/types/contacts.js';
 import { ADMIN_DYNAMIC_JSON_HEADERS, sendInternalError } from './shared.js';
 import type { AdminApiRoute, AdminBodyReader } from './types.js';
 

@@ -1,21 +1,14 @@
 // ── Shared Runtime Composition ──
 // Common builders used across runtime, agent container, CLI, and test harnesses.
-//
-// Intentional wiring differences:
-// - src/app/agent/main.ts runs in split mode (gateway + isolated agent) and wires gateway-backed providers.
-// Keep core construction through these helpers so behavior stays aligned across split entrypoints.
+// Pure core builders live in `./core-composition.ts` so both full-framework
+// entrypoints and standalone companion composition share one implementation
+// without pulling Redis, ShardManager, Analysis Workbench, or HookRegistry.
 
-import type { RetrievalDecisionPort } from '../../../faculties/memory/retrieval/decision-routing.js';
-import type { CoreSubstrateConfig, SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import type { PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
+import type { SubstrateConfig, CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import type { EventBus } from '../../../shared/event-bus.js';
-import type { AppCache } from '../../../shared/cache/types.js';
-import type { NotificationPort } from '../../../shared/contracts/notification-port.js';
-import { isRecord } from '../../../shared/utils/types.js';
 import type { CapabilityGrantSnapshot } from '../../../system/capabilities/access.js';
-import { wireRuntimeDiagnosticsEventCapture } from '../../../shared/diagnostics/runtime-diagnostics.js';
 import { createEventBusCostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
-import { SessionStore, type SessionIntegrityProvider } from '../../../persistence/sessions/store.js';
+import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { SessionTailCachePort } from '../../../persistence/sessions/session-tail-cache-port.js';
 import { RedisSessionTailCache } from '../../../persistence/sessions/redis-session-tail-cache.js';
 import {
@@ -23,52 +16,24 @@ import {
   createRedisClientFactoryFromPackage,
   resolveRedisConnectionConfigFromEnv,
 } from '../../../shared/cache/redis-cache.js';
-import { SessionManager } from '../../../core/session/manager.js';
+import type { SessionManager } from '../../../core/session/manager.js';
 import type { CompressionGuidelineEvolutionPort } from '../../../core/session/compression-guideline-evolution.js';
 import type { PolicyGovernedShardParentIcpDeliveryPort } from '../../../shared/contracts/shard-parent-icp.js';
-import { UserContinuityStore } from '../../../core/session/continuity.js';
-import {
-  createDisabledCrossChannelContinuityPort,
-  createUserContinuityPort,
-} from '../../../core/session/cross-channel-continuity-port.js';
-import { InternalRoleEnvelopeLedgerStore } from '../../../core/internal-role-envelopes/store.js';
-import { wireInternalRoleEnvelopeRuntime } from '../../../core/internal-role-envelopes/runtime-wiring.js';
-import { MemoryJournal } from '../../../faculties/memory/journal.js';
-import { createPostgresMemoryStore } from '../../../faculties/memory/postgres-store.js';
-import {
-  SubstrateAgent,
-  type EmotionRuntimeWiring,
-  type SubstrateAgentOptions,
-} from '../../../core/agent/substrate-agent.js';
+import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
 import {
   DeterministicFatigueBudgetPort,
   type FatigueBudgetPort,
 } from '../../../core/agent/fatigue/fatigue-budget.js';
-import type { IcpFatigueRegulationReservationPort } from '../../../core/agent/fatigue/regulation-reservation.js';
 import {
   DeterministicHumanAttentionPressure,
   type HumanAttentionPressurePort,
 } from '../../../core/agent/fatigue/human-attention-pressure.js';
 import { HumanAttentionPressureLedger } from '../../../core/agent/fatigue/human-attention-ledger.js';
-import type { ObserverEvalSidecarRuntime } from '../../../core/eval/observer-sidecar/types.js';
-import { MemoryRetriever } from '../../../faculties/memory/retrieval.js';
-import type { EpisodicRetrievalStore } from '../../../faculties/memory/retrieval/episodic.js';
 import type { HybridEpisodeSearchPort } from '../../../faculties/memory/retrieval/episode-search.js';
-import {
-  MemoryExtractor,
-  type MemoryExtractorFormationOptions,
-} from '../../../faculties/memory/extraction.js';
-import type { ConcernCandidateExtractionSink } from '../../../faculties/memory/extraction/types.js';
 import { MemoryWriter } from '../../../faculties/memory/writer.js';
 import { createCompanionRoomMembershipAuthority } from '../../../faculties/memory/companion-provenance.js';
-import type {
-  CoreMemoryStorePort,
-  MemoryStorePort,
-} from '../../../faculties/memory/memory-store-port.js';
-import { createCoreMemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
-import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
-import type { ContactTrackingGate } from '../../../core/contacts/tracking-gate.js';
-import { ShardManager } from '../../../faculties/shards/manager.js';
+import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
+import { ShardManager, type ShardAuditTrail } from '../../../faculties/shards/manager.js';
 import { ShardWorkloadRegistry } from '../../../faculties/shards/workload-registry.js';
 import type { ShardWorkloadLifecyclePort } from '../../../system/capabilities/shard-approval-grant-contracts.js';
 import type { AutomataRunRegistry } from '../../../faculties/automata/run-registry.js';
@@ -89,11 +54,6 @@ import {
   type WorkspaceHookLoadResult,
 } from '../../../boundary/gateway/hook-loader.js';
 import { createAnalysisWorkbenchTool } from '../../../core/tools/analysis-workbench/tools.js';
-import { CoreMemoryStore } from '../../../faculties/core-memory/store.js';
-import { createOrientTool } from '../../../faculties/core-memory/tools.js';
-import { createConcernsTool } from '../../../core/intention/concerns-tool.js';
-import { resolveCurrentInternalStateConcernVAD } from '../../../core/intention/concern-grooming.js';
-import { ValuesJournalStore } from '../../../faculties/values/store.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../core/tools/analysis-workbench/types.js';
 import type {
   SandboxExecutionPort,
@@ -101,142 +61,49 @@ import type {
   SandboxFileRead,
 } from '../../../boundary/sandbox/capabilities/contracts.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
-import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
-import { loadCharacterCard, composeSystemPrompt } from '../../../core/identity/loader.js';
 import { resolveCompanionIdFromConfig } from '../../../core/identity/companion-runtime.js';
-import type { RuntimeCompanionId } from '../../../shared/routing/companion-id.js';
-import type { CharacterCardV2 } from '../../../core/identity/types.js';
-import type { LLMProviderPort, MemoryProvider } from '../../../core/agent/contracts.js';
-import type { ProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
+import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
-import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
-import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
-import type { ShardAuditTrail } from '../../../faculties/shards/manager.js';
 import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
 import type { ToolWiringValidationMode } from '../../../core/agent/tool-wiring-validator.js';
-import type { ConcernStorePort } from '../../../core/intention/concern-store-port.js';
 import {
   migrateLegacyPersistenceLayout,
-  resolveBackupsDir,
-  resolveCogSecEventsPath,
   resolveConfiguredCompanionDataDir,
-  resolveCoreMemoryPath,
-  resolveContinuityDir,
   resolveFatigueLedgerPath,
   resolveHumanAttentionLedgerPath,
-  resolveLegacyValuesJournalPath,
-  resolveMemoryJournalPath,
-  resolveNotesDir,
   resolveShardFoldReviewStorePath,
   resolveShardSessionMemorySyncAuditPath,
-  resolveScratchpadMirrorPath,
-  resolveSessionsDir,
-  resolveValuesJournalPath,
 } from '../../../persistence/layout.js';
-import { createBackgroundWorkHandoffRecoveryDisposition } from '../../../persistence/repair/background-work-handoff-recovery-disposition.js';
-import { createDefaultPostgresSessionAdapters } from '../../../persistence/sessions/postgres-adapters.js';
-import { FilesystemAutomataRetentionWriteBarrier } from '../../../persistence/sessions/automata-retention-write-barrier.js';
-import { awaitPostgresStoreReadiness } from '../../../persistence/postgres/runtime-readiness.js';
-import { resolveConfigTenantPoolScope } from '../../../persistence/postgres/tenant-pool-scope.js';
-import { CogSecEventStore } from '../../../core/cogsec/events.js';
-import { createSessionIntegrityIncidentObserver } from '../../../core/cogsec/session-integrity-incident.js';
-import { createProjectionDriftIncidentObserver } from '../../../core/cogsec/projection-drift-incident.js';
 import { createPostgresShardSchemaLifecycle } from '../../../persistence/postgres/shard-schema-lifecycle.js';
 import { FatigueLedger } from '../../../shared/telemetry/fatigue-ledger.js';
-import { createSafeguardAuditTrail } from '../../../system/capabilities/safeguards.js';
-import { createComponentLogger } from '../../../shared/logger.js';
-import { toErrorMessage } from '../../../shared/utils/errors.js';
+import {
+  composeSessionRuntimeCoreAsync,
+  type SessionComposition,
+  type SessionCompositionOptions,
+} from './core-composition.js';
 
-const log = createComponentLogger('StartupComposition');
+export {
+  composeIdentity,
+  composeMemoryStoreAsync,
+  composeSessionRuntimeCoreAsync,
+  composeSubstrateAgent,
+  wireCoreMemoryRuntime,
+  wireDiagnosticsRuntime,
+  wireMemoryRuntime,
+  wireSelfModelRuntime,
+  wireSubagentRuntime,
+  type CoreMemoryRuntimeOptions,
+  type IdentityComposition,
+  type MemoryRuntimeOptions,
+  type SelfModelRuntimeTarget,
+  type SessionComposition,
+  type SessionCompositionOptions,
+  type SubagentRuntimeOptions,
+  type SubagentRuntimeWiring,
+  type SubstrateAgentCompositionOptions,
+} from './core-composition.js';
 
-export interface SessionComposition {
-  sessionStore: SessionStore;
-  sessionManager: SessionManager;
-  continuityStore: UserContinuityStore | null;
-  internalRoleEnvelopeLedger: InternalRoleEnvelopeLedgerStore;
-  /** Non-null only when settings.json sessionTailCache.enabled=true (psfn-framework-hgw3.5). */
-  sessionTailCache: SessionTailCachePort | null;
-  sessionsDir: string;
-  exactSessionProjection: Awaited<ReturnType<typeof createDefaultPostgresSessionAdapters>>['exactSessionProjection'];
-  conversationalActivityWorkset: Awaited<ReturnType<typeof createDefaultPostgresSessionAdapters>>['conversationalActivityWorkset'];
-  exactSessionWriteBarrier: FilesystemAutomataRetentionWriteBarrier;
-}
-
-interface SessionCompositionBaseOptions {
-  config: SubstrateConfig;
-  /**
-   * Explicit database credential for callers whose core config is
-   * intentionally secret-sanitized. When absent, legacy/full-config callers
-   * may still supply config.postgresDatabaseUrl.
-   */
-  postgresDatabaseUrl?: string;
-  eventBus?: EventBus;
-  sessionsDir?: string;
-  enableContinuity?: boolean;
-  /** Exact channels.json registry ids eligible for cross-channel continuity. */
-  continuityChannelIds?: readonly string[];
-  /** Exact enabled-plugin channel-id prefixes eligible for cross-channel continuity. */
-  continuityChannelPrefixes?: readonly string[];
-  promptRegistry?: PromptRegistryStatePort | null;
-  /** Runtime-owned backup root for automatic corrupt-handoff quarantine evidence. */
-  sessionIntegrityRepairBackupRootDir?: string;
-  /**
-   * Injected session tail cache (tests/harnesses). `undefined` builds the
-   * Redis-backed tail from settings.json + env when enabled; explicit `null`
-   * disables it regardless of config.
-   */
-  sessionTailCache?: SessionTailCachePort | null;
-  /** Exact runtime identity used by retention write barriers in full agent composition. */
-  automataRetentionCompanionId?: string;
-}
-
-interface SessionIntegrityOperatorAlertComposition {
-  notifier: NotificationPort;
-  companionName: string;
-}
-
-/**
- * Production composition must make HMAC verification and its operator alert
- * indivisible. Tests and narrowly scoped maintenance harnesses may continue to
- * omit both by leaving `runtimeMode` unset.
- */
-export type SessionCompositionOptions = SessionCompositionBaseOptions & (
-  | {
-      runtimeMode: 'production';
-      sessionIntegrityProvider: SessionIntegrityProvider;
-      sessionIntegrityOperatorAlert: SessionIntegrityOperatorAlertComposition;
-    }
-  | {
-      runtimeMode?: 'non-production';
-      sessionIntegrityProvider?: SessionIntegrityProvider | null;
-      sessionIntegrityOperatorAlert?: SessionIntegrityOperatorAlertComposition;
-    }
-);
-
-function assertProductionSessionIntegrityComposition(options: unknown): void {
-  if (!isRecord(options) || options.runtimeMode !== 'production') return;
-  if (!options.sessionIntegrityProvider) {
-    throw new Error('Production session composition requires a non-null integrity provider');
-  }
-  const operatorAlert = options.sessionIntegrityOperatorAlert;
-  if (!isRecord(operatorAlert)
-    || !operatorAlert.notifier
-    || typeof operatorAlert.companionName !== 'string'
-    || !operatorAlert.companionName.trim()) {
-    throw new Error('Production session composition requires an operator integrity alert path');
-  }
-}
-
-/**
- * Build the Redis-backed session tail (psfn-framework-hgw3.5) when
- * settings.json enables it. Fail closed at startup: enabled config with
- * missing/invalid Redis env, a missing companion identity, or an unreachable
- * Redis refuses to start — a silently absent tail would hide the shared-view
- * guarantee. Tail/epoch keys are scoped by COMPANION_ID so multiple
- * companions sharing one Redis (fleet topology) can never read each other's
- * session tails.
- */
 async function composeSessionTailCache(
   config: SubstrateConfig,
   override: SessionTailCachePort | null | undefined,
@@ -256,321 +123,12 @@ async function composeSessionTailCache(
   });
 }
 
-function createSessionComposition(
-  options: SessionCompositionOptions,
-  sessionAdapters: Awaited<ReturnType<typeof createDefaultPostgresSessionAdapters>>,
-  sessionsDir: string,
-  sessionTailCache: SessionTailCachePort | null,
-  exactSessionWriteBarrier: FilesystemAutomataRetentionWriteBarrier,
-): SessionComposition {
-  const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
-  // Keep the adapter contract required at compile time while still rejecting
-  // malformed/custom runtime adapters at the composition boundary.
-  const turnRecordEligibilityFence = (sessionAdapters as Partial<typeof sessionAdapters>)
-    .turnRecordEligibilityFence;
-  if (!turnRecordEligibilityFence) {
-    throw new Error('PostgreSQL session composition requires a TurnRecord eligibility fence');
-  }
-  const conversationalActivityWorkset = (sessionAdapters as Partial<typeof sessionAdapters>)
-    .conversationalActivityWorkset;
-  if (!conversationalActivityWorkset) {
-    throw new Error('PostgreSQL session composition requires a conversational activity workset');
-  }
-  // Durable session-integrity incident seam (bead g59z): when a keyring makes
-  // HMAC verification active, a full journal load that surfaces a broken chain
-  // records one operator-only CogSec incident per session in the canonical
-  // cogsec-events.json store that Garden already reads. The provider mints a
-  // fresh store per write (concurrent gateway/Garden writers).
-  const cogSecEventsPath = resolveCogSecEventsPath(companionDataDir);
-  const integrityObserver = options.sessionIntegrityProvider
-    ? createSessionIntegrityIncidentObserver({
-      cogSecEvents: () => new CogSecEventStore(cogSecEventsPath),
-      ...(options.sessionIntegrityOperatorAlert
-        ? { operatorAlert: options.sessionIntegrityOperatorAlert }
-        : {}),
-    })
-    : null;
-  const sessionStore = new SessionStore(sessionsDir, {
-    integrityProvider: options.sessionIntegrityProvider ?? null,
-    sessionArchivePort: sessionAdapters.sessionArchivePort,
-    transcriptProjection: sessionAdapters.transcriptProjection,
-    turnRecordStore: sessionAdapters.turnRecordStore,
-    turnRecordEligibilityFence,
-    tailCache: sessionTailCache,
-    integrityObserver,
-    ...(options.sessionIntegrityProvider
-      ? {
-        backgroundWorkHandoffRecoveryDisposition:
-          createBackgroundWorkHandoffRecoveryDisposition({
-            sessionsDir,
-            backupRootDir: options.sessionIntegrityRepairBackupRootDir
-              ?? resolveBackupsDir(companionDataDir),
-            integrityProvider: options.sessionIntegrityProvider,
-            audit: createSafeguardAuditTrail(companionDataDir),
-          }),
-      }
-      : {}),
-    automataRetentionWriteBarrier: exactSessionWriteBarrier,
-    ...(options.config.sessionTombstoneAuthorityOwners !== undefined
-      ? { turnTombstoneAuthorityOwners: options.config.sessionTombstoneAuthorityOwners }
-      : {}),
-  });
-  // psfn-framework-5jx2v: canonical L0 turn-tombstone verification no longer
-  // runs inside the constructor. Warm it through the forked authority worker so
-  // startup timers and admin work keep advancing; owners this pass does not
-  // reach stay fail-closed and are rebuilt from the journal on first demand.
-  void sessionStore.primeTurnTombstoneAuthority()
-    .then((report) => {
-      log.debug('Primed L0 turn-tombstone authority off the primary event loop', {
-        considered: report.considered,
-        primed: report.primed,
-        alreadyCurrent: report.alreadyCurrent,
-        deferred: report.deferred.length,
-        bytesReadOffPrimary: report.bytesReadOffPrimary,
-      });
-    })
-    .catch((error: unknown) => {
-      log.warn('Deferred L0 turn-tombstone authority priming failed; '
-        + 'authority will be rebuilt fail-closed on demand', {
-        error: toErrorMessage(error),
-      });
-    });
-  const sessionManager = new SessionManager(
-    sessionStore,
-    options.config,
-    options.eventBus,
-    options.promptRegistry ?? null,
-    sessionAdapters.transcriptSearch,
-  );
-  const internalRoleEnvelopeLedger = wireInternalRoleEnvelopeRuntime(sessionManager, options.config);
-
-  let continuityStore: UserContinuityStore | null = null;
-  if (options.enableContinuity) {
-    if (!options.continuityChannelIds && !options.continuityChannelPrefixes) {
-      throw new Error('Enabled cross-channel continuity requires configured channels.json channel ids or channel plugin prefixes');
-    }
-    const continuityChannelIds = new Set(options.continuityChannelIds ?? []);
-    const continuityChannelPrefixes = options.continuityChannelPrefixes ?? [];
-    if (continuityChannelPrefixes.some(prefix => prefix.length === 0)) {
-      throw new Error('Cross-channel continuity channel prefixes must be non-empty');
-    }
-    continuityStore = new UserContinuityStore(resolveContinuityDir(companionDataDir));
-    sessionManager.crossChannelContinuity = createUserContinuityPort(
-      continuityStore,
-      (channelId, minId, maxId) => sessionStore.getEntriesInRange(channelId, minId, maxId),
-      channelId => continuityChannelIds.has(channelId)
-        || continuityChannelPrefixes.some(prefix => channelId.startsWith(prefix)),
-    );
-  } else {
-    sessionManager.crossChannelContinuity = createDisabledCrossChannelContinuityPort();
-  }
-
-  return {
-    sessionStore,
-    sessionManager,
-    continuityStore,
-    internalRoleEnvelopeLedger,
-    sessionTailCache,
-    sessionsDir,
-    exactSessionProjection: sessionAdapters.exactSessionProjection,
-    conversationalActivityWorkset,
-    exactSessionWriteBarrier,
-  };
-}
-
 export async function composeSessionRuntimeAsync(
   options: SessionCompositionOptions,
 ): Promise<SessionComposition> {
-  assertProductionSessionIntegrityComposition(options);
-  const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
-  migrateLegacyPersistenceLayout(companionDataDir);
-
-  const sessionsDir = options.sessionsDir ?? resolveSessionsDir(companionDataDir);
-  if (options.config.persistenceBackend !== 'postgres') {
-    throw new Error('PostgreSQL session composition requires config.persistenceBackend=postgres');
-  }
-  const databaseUrl = options.postgresDatabaseUrl?.trim()
-    || options.config.postgresDatabaseUrl?.trim();
-  if (!databaseUrl) {
-    throw new Error('PostgreSQL session composition requires config.postgresDatabaseUrl');
-  }
-  const tenantScope = resolveConfigTenantPoolScope(options.config);
-  const postgresSchema = tenantScope?.schema ?? options.config.postgresSchema?.trim();
-  const postgresRole = tenantScope?.role;
-  // Redaction projection-drift incident seam (bead 6oott): a failed
-  // redaction-driven projection write records one operator-only CogSec
-  // incident (session_integrity class, projectiondrift caseId prefix) in the
-  // canonical cogsec-events.json store that Garden already reads. Search is
-  // fail-closed by the durable drift record itself; this is the operator
-  // signal pointing at transcript-projection-repair. Mirrors the g59z
-  // session-integrity observer wiring below.
-  const redactionDriftObserver = createProjectionDriftIncidentObserver({
-    cogSecEvents: () => new CogSecEventStore(resolveCogSecEventsPath(companionDataDir)),
-  });
-  const automataRetentionCompanionId = options.automataRetentionCompanionId?.trim()
-    || options.config.companionId?.trim();
-  if (!automataRetentionCompanionId) {
-    throw new Error('PostgreSQL session composition requires an Automata retention companionId');
-  }
-  const exactSessionWriteBarrier = new FilesystemAutomataRetentionWriteBarrier(
-    sessionsDir,
-    automataRetentionCompanionId,
-  );
-  const sessionAdapters = await awaitPostgresStoreReadiness(
-    'session_transcripts',
-    () => createDefaultPostgresSessionAdapters(databaseUrl, {
-      sessionsDir,
-      redactionDriftObserver,
-      automataRetentionWriteBarrier: exactSessionWriteBarrier,
-      ...(postgresSchema ? { schema: postgresSchema } : {}),
-      ...(postgresRole ? { role: postgresRole } : {}),
-    }),
-  );
-  const sessionTailCache = await composeSessionTailCache(options.config, options.sessionTailCache);
-  return createSessionComposition(
+  return await composeSessionRuntimeCoreAsync(
     options,
-    sessionAdapters,
-    sessionsDir,
-    sessionTailCache,
-    exactSessionWriteBarrier,
-  );
-}
-
-export async function composeMemoryStoreAsync(
-  config: SubstrateConfig,
-  embeddingDims: number,
-): Promise<MemoryStorePort> {
-  const companionDataDir = resolveConfiguredCompanionDataDir(config);
-  migrateLegacyPersistenceLayout(companionDataDir);
-
-  if (config.persistenceBackend !== 'postgres') {
-    throw new Error('PostgreSQL memory composition requires config.persistenceBackend=postgres');
-  }
-  const databaseUrl = config.postgresDatabaseUrl?.trim();
-  if (!databaseUrl) {
-    throw new Error('PostgreSQL memory composition requires config.postgresDatabaseUrl');
-  }
-  const tenantScope = resolveConfigTenantPoolScope(config);
-  const postgresSchema = tenantScope?.schema ?? config.postgresSchema?.trim();
-
-  return await awaitPostgresStoreReadiness(
-    'memory',
-    () => createPostgresMemoryStore(databaseUrl, embeddingDims, {
-      notesDir: resolveNotesDir(companionDataDir),
-      scratchpadMirrorPath: resolveScratchpadMirrorPath(companionDataDir),
-      journal: new MemoryJournal(resolveMemoryJournalPath(companionDataDir)),
-      ...(postgresSchema
-        ? {
-            schema: postgresSchema,
-            ...(tenantScope ? { role: tenantScope.role } : {}),
-          }
-        : {}),
-    }),
-  );
-}
-
-export interface IdentityComposition {
-  companionId: RuntimeCompanionId;
-  card: CharacterCardV2;
-  systemPrompt: string;
-}
-
-export function composeIdentity(config: SubstrateConfig): IdentityComposition {
-  const card = loadCharacterCard(config.characterCardPath);
-  return {
-    companionId: resolveCompanionIdFromConfig(config),
-    card,
-    systemPrompt: composeSystemPrompt(card),
-  };
-}
-
-export interface SubstrateAgentCompositionOptions {
-  eventBus: EventBus;
-  llmProvider: LLMProviderPort;
-  runtime?: ProviderRuntime;
-  sessionManager: SessionManager;
-  systemPrompt: string;
-  characterName?: string;
-  characterPromptVariables?: Record<string, string>;
-  characterPromptVariablesProvider?: () => Record<string, string>;
-  config: CoreSubstrateConfig;
-  runtimeMode?: ToolWiringValidationMode;
-  emotionRuntime?: EmotionRuntimeWiring;
-  fatigueBudget?: FatigueBudgetPort | null;
-  humanAttentionPressure?: HumanAttentionPressurePort | null;
-  fatigueRegulationReservations?: IcpFatigueRegulationReservationPort | null;
-  observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
-  streamRuntimeOptions?: SubstrateAgentOptions['streamRuntimeOptions'];
-  streamTransport?: SubstrateAgentOptions['streamTransport'];
-  appCache?: AppCache;
-  /** Contact-tracking policy gate (E3.4). Absent gate behaves as 'auto' everywhere. */
-  contactTrackingGate?: ContactTrackingGate | null;
-  /** Places soft-registry (S10). Absent behaves as an empty registry. */
-  placesRegistryConfig?: PlacesRegistryConfig;
-  backgroundWorkStore?: SubstrateAgentOptions['backgroundWorkStore'];
-  backgroundWorkTuning?: SubstrateAgentOptions['backgroundWorkTuning'];
-  backgroundWorkDisabled?: boolean;
-  backgroundWorkWelfare?: SubstrateAgentOptions['backgroundWorkWelfare'];
-  backgroundWorkAutomataLifecycle?: SubstrateAgentOptions['backgroundWorkAutomataLifecycle'];
-  intentionHooksAutomataRunner?: SubstrateAgentOptions['intentionHooksAutomataRunner'];
-  classifySessionAtCreation?: SubstrateAgentOptions['classifySessionAtCreation'];
-  /** Durable per-turn custody snapshot sink (psfn-framework-ccgdz.1). */
-  custodySnapshotStore?: SubstrateAgentOptions['custodySnapshotStore'];
-  /** Durable egress delivery-record sink (psfn-framework-ccgdz.6). */
-  egressDeliveryRecordStore?: SubstrateAgentOptions['egressDeliveryRecordStore'];
-}
-
-export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions): SubstrateAgent {
-  return new SubstrateAgent(
-    options.eventBus,
-    options.llmProvider,
-    options.sessionManager,
-    options.systemPrompt,
-    options.config,
-    {
-      ...(options.characterName ? { characterName: options.characterName } : {}),
-      ...(options.characterPromptVariables ? { characterPromptVariables: options.characterPromptVariables } : {}),
-      ...(options.characterPromptVariablesProvider
-        ? { characterPromptVariablesProvider: options.characterPromptVariablesProvider }
-        : {}),
-      ...(options.runtimeMode ? { runtimeMode: options.runtimeMode } : {}),
-      ...(options.emotionRuntime ? { emotionRuntime: options.emotionRuntime } : {}),
-      ...(options.fatigueBudget ? { fatigueBudget: options.fatigueBudget } : {}),
-      ...(options.humanAttentionPressure
-        ? { humanAttentionPressure: options.humanAttentionPressure }
-        : {}),
-      ...(options.fatigueRegulationReservations
-        ? { fatigueRegulationReservations: options.fatigueRegulationReservations }
-        : {}),
-      ...(options.runtime ? { runtime: options.runtime } : {}),
-      ...(options.observerEvalSidecar ? { observerEvalSidecar: options.observerEvalSidecar } : {}),
-      ...(options.streamRuntimeOptions ? { streamRuntimeOptions: options.streamRuntimeOptions } : {}),
-      ...(options.streamTransport ? { streamTransport: options.streamTransport } : {}),
-      ...(options.appCache ? { appCache: options.appCache } : {}),
-      ...(options.contactTrackingGate ? { contactTrackingGate: options.contactTrackingGate } : {}),
-      ...(options.placesRegistryConfig ? { placesRegistryConfig: options.placesRegistryConfig } : {}),
-      ...(options.backgroundWorkStore ? { backgroundWorkStore: options.backgroundWorkStore } : {}),
-      ...(options.backgroundWorkTuning
-        ? { backgroundWorkTuning: options.backgroundWorkTuning }
-        : {}),
-      ...(options.backgroundWorkDisabled ? { backgroundWorkDisabled: true } : {}),
-      ...(options.backgroundWorkWelfare ? { backgroundWorkWelfare: options.backgroundWorkWelfare } : {}),
-      ...(options.backgroundWorkAutomataLifecycle
-        ? { backgroundWorkAutomataLifecycle: options.backgroundWorkAutomataLifecycle }
-        : {}),
-      ...(options.intentionHooksAutomataRunner
-        ? { intentionHooksAutomataRunner: options.intentionHooksAutomataRunner }
-        : {}),
-      ...(options.classifySessionAtCreation
-        ? { classifySessionAtCreation: options.classifySessionAtCreation }
-        : {}),
-      ...(options.custodySnapshotStore
-        ? { custodySnapshotStore: options.custodySnapshotStore }
-        : {}),
-      ...(options.egressDeliveryRecordStore
-        ? { egressDeliveryRecordStore: options.egressDeliveryRecordStore }
-        : {}),
-    },
+    () => composeSessionTailCache(options.config, options.sessionTailCache),
   );
 }
 
@@ -592,9 +150,6 @@ export async function composeFatigueBudgetRuntime(
 ): Promise<FatigueBudgetComposition> {
   const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
   migrateLegacyPersistenceLayout(companionDataDir);
-  // Bounded, cooperative ledger hydration (psfn-framework-z3e2x): startup
-  // streams both append-only ledgers off the blocking path so timers and admin
-  // work keep advancing on multi-megabyte files.
   const sharedOptions = {
     ...(options.now ? { now: options.now } : {}),
     readLimitSettings: options.config,
@@ -627,182 +182,6 @@ export async function composeFatigueBudgetRuntime(
   };
 }
 
-export interface SelfModelRuntimeTarget {
-  setSelfModelRuntimeRequired(required: boolean): void;
-}
-
-export function wireSelfModelRuntime(target: SelfModelRuntimeTarget): void {
-  target.setSelfModelRuntimeRequired(true);
-}
-
-export function wireDiagnosticsRuntime(eventBus: EventBus): void {
-  wireRuntimeDiagnosticsEventCapture(eventBus);
-}
-
-export interface CoreMemoryRuntimeOptions {
-  agentLoop: SubstrateAgent;
-  sessionManager: SessionManager;
-  config: SubstrateConfig;
-  concernStore?: ConcernStorePort | null;
-  /** Event bus for the concern resolution-as-appraisal relief-delta event (vw3w.1). */
-  eventBus?: EventBus | null;
-}
-
-export function wireCoreMemoryRuntime(options: CoreMemoryRuntimeOptions): CoreMemoryStorePort {
-  const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
-  const store = createCoreMemoryStorePort(
-    new CoreMemoryStore(resolveCoreMemoryPath(companionDataDir)),
-  );
-  const valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(companionDataDir), {
-    legacyFilePaths: [resolveLegacyValuesJournalPath(companionDataDir)],
-  });
-  options.sessionManager.setCoreMemoryProvider(store);
-  options.agentLoop.registerTool(createOrientTool(store, {
-    valuesJournal,
-  }));
-  if (options.concernStore) {
-    options.agentLoop.registerTool(createConcernsTool(options.concernStore, {
-      eventBus: options.eventBus ?? null,
-      // Resolution-as-appraisal (vw3w.1): snapshot the agent's live VAD when the
-      // companion decides to resolve/terminally-transition a concern.
-      resolutionVadProvider: concern => resolveCurrentInternalStateConcernVAD(
-        concern,
-        options.agentLoop.getCurrentInternalState(),
-        new Date().toISOString(),
-      ),
-    }), 'core');
-  }
-  return store;
-}
-
-export interface MemoryRuntimeOptions {
-  agentLoop: SubstrateAgent;
-  llmProvider: LLMProviderPort;
-  /** Typed decision runtime for opt-in retrieval sites (epic 4lf3r). */
-  decisionRuntime?: RetrievalDecisionPort;
-  sessionManager: SessionManager;
-  sessionStore?: SessionStore | null;
-  memoryStore: MemoryStorePort;
-  embeddingService: EmbeddingProviderPort;
-  eventBus: EventBus;
-  config?: SubstrateConfig;
-  promptRegistry?: PromptRegistryStatePort | null;
-  contactStore?: ContactStorePort | null;
-  episodicStore?: EpisodicRetrievalStore | null;
-  concernCandidateSink?: ConcernCandidateExtractionSink | null;
-  /** Contact-tracking policy gate predicate (E3.4); absent behaves as 'auto'. */
-  isAutoContactCreationAllowed?: ((channelId: string) => boolean) | null;
-  /** Shared persona preamble service (E6.1); soft persona framing before extraction/profile prompts. */
-  personaPreamble?: PersonaPreamblePort | null;
-  biographicalProjection?: Pick<MemoryProvider, 'projectBiographicalContext'> | null;
-  biographicalRebuild?: MemoryExtractorFormationOptions['biographicalRebuild'];
-  /** Eligible extraction-only Bus access; foreground MemoryRetriever never receives it. */
-  automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
-  /** Authoritative lifecycle for extraction workers admitted to the Bus. */
-  automataRunRegistry?: AutomataRunRegistry | null;
-  /** Durable terminal handoff adapter shared with the bounded subagent class. */
-  automataTerminalLifecycle?: AutomataTerminalLifecyclePort | null;
-}
-
-export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtractor {
-  const costTelemetry = createEventBusCostTelemetryPort(options.eventBus);
-  const roomMembershipAuthority = options.sessionStore
-    ? createCompanionRoomMembershipAuthority(options.sessionStore)
-    : null;
-  const memoryRetriever = options.config
-    ? new MemoryRetriever(
-      options.memoryStore,
-      options.embeddingService,
-      options.config,
-	      costTelemetry,
-	      options.contactStore ?? null,
-	      options.llmProvider,
-	      options.episodicStore ?? null,
-	      options.sessionManager,
-	      true,
-	      options.biographicalProjection ?? null,
-	      roomMembershipAuthority,
-	    )
-	    : new MemoryRetriever(
-	      options.memoryStore,
-	      options.embeddingService,
-      undefined,
-	      costTelemetry,
-	      options.contactStore ?? null,
-	      options.llmProvider,
-	      options.episodicStore ?? null,
-	      options.sessionManager,
-	      true,
-	      options.biographicalProjection ?? null,
-	      roomMembershipAuthority,
-	    );
-  if (options.decisionRuntime) memoryRetriever.setDecisionRuntime(options.decisionRuntime);
-  options.agentLoop.memoryProvider = memoryRetriever;
-
-  const extractorFormationOptions = {
-    ...(options.decisionRuntime ? { decisions: options.decisionRuntime } : {}),
-    ...(options.concernCandidateSink
-      ? { emitConcernCandidates: options.concernCandidateSink }
-      : {}),
-    ...(options.isAutoContactCreationAllowed
-      ? { isAutoContactCreationAllowed: options.isAutoContactCreationAllowed }
-      : {}),
-    ...(options.personaPreamble
-      ? { personaPreamble: options.personaPreamble }
-      : {}),
-    ...(options.biographicalRebuild
-      ? { biographicalRebuild: options.biographicalRebuild }
-      : {}),
-    ...(options.automataBusWorkerAccess
-      ? { automataBusWorkerAccess: options.automataBusWorkerAccess }
-      : {}),
-    ...(options.automataRunRegistry
-      ? { automataRunRegistry: options.automataRunRegistry }
-      : {}),
-    ...(options.automataTerminalLifecycle
-      ? { automataTerminalLifecycle: options.automataTerminalLifecycle }
-      : {}),
-  };
-  const memoryExtractor = options.config
-    ? new MemoryExtractor(
-      options.llmProvider,
-      options.sessionManager,
-      options.memoryStore,
-      options.embeddingService,
-      costTelemetry,
-      options.config,
-      options.promptRegistry ?? null,
-      options.sessionStore ?? null,
-      options.contactStore ?? null,
-      extractorFormationOptions,
-    )
-    : new MemoryExtractor(
-      options.llmProvider,
-      options.sessionManager,
-      options.memoryStore,
-      options.embeddingService,
-      costTelemetry,
-      undefined,
-      options.promptRegistry ?? null,
-      options.sessionStore ?? null,
-      options.contactStore ?? null,
-      extractorFormationOptions,
-    );
-  options.sessionManager.setPreCompactionExtractionHandler(async ({
-    channelId,
-    entries,
-    canonicalContactId,
-  }) => {
-    await memoryExtractor.queueCompactionExtraction(
-      channelId,
-      entries,
-      canonicalContactId,
-    );
-  });
-  options.agentLoop.memoryExtractor = memoryExtractor;
-  return memoryExtractor;
-}
-
 export interface ToolRuntimeOptions {
   agentLoop: SubstrateAgent;
   eventBus: EventBus;
@@ -828,18 +207,11 @@ export interface ToolRuntimeOptions {
   executionPort?: SandboxExecutionPort | SandboxExecutionPortSeed | null;
   compressionGuidelineEvolution?: CompressionGuidelineEvolutionPort | null;
   shardParentIcpDelivery: PolicyGovernedShardParentIcpDeliveryPort | null;
-  /**
-   * Lifecycle port for registering shard workloads with the gateway-owned
-   * approval-grant authority. Split production supplies its authenticated
-   * gateway RPC client. Local/test composition may omit it and use the
-   * process-local registry while retaining the same lifecycle contract.
-   */
   shardWorkloadRegistry?: ShardWorkloadLifecyclePort;
   automataRunRegistry?: AutomataRunRegistry;
   automataSessionClassification?: Pick<AutomataSessionClassificationService, 'classifyAtCreation'>;
   automataBusWorkerAccess?: AutomataBusWorkerAccess | null;
   automataLifecyclePort?: AutomataTerminalLifecyclePort | null;
-  /** Governed Bus lifecycle for the long-horizon shard class. */
   automataClassLifecycle?: AutomataClassLifecycleRuntime | null;
 }
 
@@ -865,8 +237,6 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
         })(),
       )
     : null;
-  // htm9.3: shard fold-back memory writes gate at the memory_write sink; the
-  // gate is late-bound onto the session manager by composition.
   const foldReviewMemoryWriter = new MemoryWriter(options.memoryStore, options.embeddingService, {
     memoryRetrievalPolicy: () => options.config.memoryRetrievalPolicy,
     ...(options.config.companionId ? { companionId: options.config.companionId } : {}),
@@ -921,12 +291,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     auditTrail: options.shardAuditTrail ?? undefined,
     runtimeMode: options.runtimeMode,
     snapshotParentCapabilityGrant: options.snapshotParentCapabilityGrant,
-    // c7d: restricted-class subagent memory candidates stage through the same
-    // fold-review queue the shard runtime uses (no parallel review system).
     foldReviewController,
-    // hrmrq.54: subagent tool results screen like the parent's. Lazy — the
-    // agent entrypoint assigns intakeScreening onto the parent SessionManager
-    // after this composition runs.
     intakeScreeningProvider: () => options.sessionManager.intakeScreening,
     completionIntakeProvider: () => ({
       screening: options.sessionManager.intakeScreening,
@@ -972,7 +337,6 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
 
 export interface OperatorHookRuntimeOptions {
   eventBus: EventBus;
-  /** The companion's Personal Workspace root (WORKSPACE_PATH). */
   workspacePath: string;
 }
 
@@ -981,15 +345,6 @@ export interface OperatorHookRuntime {
   hookLoadResult: WorkspaceHookLoadResult;
 }
 
-/**
- * Operator-extensible hook runtime (bead vvf.2): scans
- * `<workspacePath>/hooks/` for HOOK.yaml + handler definitions, registers the
- * valid ones, and attaches the async fire-and-forget lifecycle consumer to
- * the agent-process EventBus. Invalid hook definitions are rejected with a
- * logged reason and never crash startup; an absent hooks directory is a
- * clean no-op. See src/boundary/gateway/hook-registry.ts for the trust model
- * and payload-redaction posture.
- */
 export async function wireOperatorHookRuntime(
   options: OperatorHookRuntimeOptions,
 ): Promise<OperatorHookRuntime> {

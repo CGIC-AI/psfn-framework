@@ -7,8 +7,9 @@ import {
   type FleetGardenRequestContext,
 } from '../garden-request-context.js';
 import type { AdminAuditHistoryService } from './audit-history-service.js';
+import type { ProtectedConcernAction } from '../routes/types.js';
 
-export type ProtectedConcernAction = 'resolve' | 'suppress' | 'transition' | 'resolve_stale';
+export type { ProtectedConcernAction };
 export type ProtectedQuarantineAction = 'release_raw' | 'release_sanitized' | 'discard';
 
 interface ProtectedActionCategory {

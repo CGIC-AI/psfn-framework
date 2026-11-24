@@ -1306,3 +1306,26 @@ export function resolveIntakeSnapshotEnforcementPosture(
   }
   return fallback;
 }
+
+/**
+ * THE active datamark token (htm9.13) — the single marker the interleave
+ * renderer inserts between untrusted content segments at prompt-assembly time.
+ * Built from Private Use Area codepoints so inbound scanners can strip any
+ * forged copy before content reaches a prompt.
+ */
+export const INTAKE_DATAMARK_MARKER = '\u{E1D5}\u{E2A7}';
+
+export const INTAKE_MARKING_INTENSITIES = [
+  'none',
+  'wrap',
+  'interleave',
+  'summary_only',
+] as const;
+
+export type IntakeMarkingIntensity = typeof INTAKE_MARKING_INTENSITIES[number];
+
+export interface IntakeMarkingPlan {
+  intensity: IntakeMarkingIntensity;
+  /** Calm, factual provenance note rendered with the wrapper. */
+  provenanceNote: string;
+}

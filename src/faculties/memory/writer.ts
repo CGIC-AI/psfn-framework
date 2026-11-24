@@ -59,7 +59,7 @@ import {
   createMemoryEmbeddingCallOptions,
 } from '../../core/agent/embedding-usage-provenance.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
-import type { IntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
+import type { IntakeSinkGate } from '../../shared/contracts/intake-sink-gate-port.js';
 import {
   buildEvolutionLinkInput,
   chooseWriteAction,

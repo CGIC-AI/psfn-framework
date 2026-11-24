@@ -1,6 +1,6 @@
 import type { LLMProviderPort } from '../../agent/contracts.js';
 import { randomUUID } from 'node:crypto';
-import type { IntakeSinkGate } from '../../cogsec/intake/sink-gates.js';
+import type { IntakeSinkGate } from '../../../shared/contracts/intake-sink-gate-port.js';
 import { applyPromptAssemblySinkGate } from '../intake-sink-gating.js';
 import { countMessageTokens, countTokens } from '../../../primitives/llm/tokens.js';
 import { createComponentLogger } from '../../../shared/logger.js';

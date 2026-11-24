@@ -56,7 +56,7 @@ import type { HealthEvent } from './contracts/health-event.js';
 import type {
   IntakeInlineShadowFindingEvent,
   IntakePostEscalationEvent,
-} from '../core/cogsec/intake/screening.js';
+} from './contracts/intake-screening-port.js';
 import type {
   CompanionApprovalRequestedPayload,
   CompanionApprovalResolvedPayload,

@@ -1,7 +1,7 @@
 import type { MemorySourceType, MemoryType } from '../../faculties/memory/types.js';
 import { isIntakeFirewallNoticeText } from './intake-firewall-notice-templates.js';
 import { isRuntimeFallbackNoticeText } from '../../shared/runtime-fallback-provenance.js';
-import type { IntakeSinkGateDecision } from './intake/sink-gates.js';
+import type { IntakeSinkGateDecision } from '../../shared/contracts/intake-sink-gate-port.js';
 
 export type CogSecMemoryRiskClass =
   | 'A_harmless_fact'

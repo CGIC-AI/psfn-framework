@@ -1,6 +1,6 @@
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { SessionEntry } from '../../../core/session/types.js';
-import type { IntakeSinkGate } from '../../../core/cogsec/intake/sink-gates.js';
+import type { IntakeSinkGate } from '../../../shared/contracts/intake-sink-gate-port.js';
 import {
   buildExtractionAdmissionIndex,
   resolveAdmissionEnvelopesForSource,

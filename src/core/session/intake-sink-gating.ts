@@ -22,8 +22,8 @@ import type {
 import { isRecord } from '../../shared/utils/types.js';
 import type { SessionEntry } from './types.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../cogsec/intake-firewall-notice-templates.js';
-import type { IntakeScreeningService } from '../cogsec/intake/screening.js';
-import type { IntakeSinkGate } from '../cogsec/intake/sink-gates.js';
+import type { IntakeScreeningService } from '../../shared/contracts/intake-screening-port.js';
+import type { IntakeSinkGate } from '../../shared/contracts/intake-sink-gate-port.js';
 import { renderMarkedContent } from '../cogsec/intake/marking.js';
 import {
   INTAKE_SCREENING_METADATA_KEY,

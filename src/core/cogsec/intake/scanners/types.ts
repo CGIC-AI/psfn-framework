@@ -18,9 +18,20 @@
 import {
   INTAKE_L1_SCAN_MAX_CHARS,
   truncateUtf16AtCodePointBoundary,
-  type IntakeL1RuleMatchProvenance,
-  type IntakeRiskLabel,
 } from '../../../../shared/contracts/intake-envelope.js';
+import {
+  INTAKE_SCAN_SCOPES,
+  type IntakeScannerFinding,
+  type IntakeScannerResult,
+  type IntakeScanScope,
+} from '../../../../shared/contracts/intake-screening-port.js';
+
+export {
+  INTAKE_SCAN_SCOPES,
+  type IntakeScannerFinding,
+  type IntakeScannerResult,
+  type IntakeScanScope,
+};
 
 /**
  * Hard cap on characters scanned by any regex or per-codepoint pass.
@@ -31,22 +42,6 @@ import {
  * may expand UTF-16 length (Hermes MAX_SCAN_CHARS).
  */
 export const MAX_SCAN_CHARS = INTAKE_L1_SCAN_MAX_CHARS;
-
-// ── Scope tiers ──
-//
-// Ordered, cumulative (all ⊂ context ⊂ strict), mirroring the Hermes
-// threat-pattern scopes:
-// - 'all':     zero-false-positive classic injection/exfil — safe to apply
-//              anywhere, including untrusted tool results.
-// - 'context': adds promptware / C2 / role-play patterns — warn-only tier
-//              for context files, memory entries, and tool results.
-// - 'strict':  adds persistence / SSH / exfil-URL / hardcoded-secret
-//              patterns — block-tier checks for user-mediated writes where
-//              a false positive can be resolved interactively.
-
-export const INTAKE_SCAN_SCOPES = ['all', 'context', 'strict'] as const;
-
-export type IntakeScanScope = typeof INTAKE_SCAN_SCOPES[number];
 
 export function isIntakeScanScope(value: unknown): value is IntakeScanScope {
   return typeof value === 'string'
@@ -63,36 +58,6 @@ export function scanScopeIncludes(
   patternScope: IntakeScanScope,
 ): boolean {
   return INTAKE_SCAN_SCOPES.indexOf(patternScope) <= INTAKE_SCAN_SCOPES.indexOf(scanScope);
-}
-
-// ── Findings and results ──
-
-export interface IntakeScannerFinding {
-  /** Rule/detector name. For rule-file rules this doubles as the audit id. */
-  ruleId: string;
-  /** Envelope taxonomy labels this finding contributes. May be empty for score-only structural findings. */
-  labels: readonly IntakeRiskLabel[];
-  /** Score contribution in (0, 1]. Combined per scanner via noisy-or. */
-  weight: number;
-  /** Narrowest scope tier this finding belongs to (already scope-filtered when emitted). */
-  scope: IntakeScanScope;
-  /** Human-auditable detail. Must never carry raw payload bytes. */
-  detail?: string;
-  /** Bounded evidence for an owner-file rule match; absent for other detectors. */
-  match?: IntakeL1RuleMatchProvenance;
-}
-
-export interface IntakeScannerResult {
-  scannerId: string;
-  /** Deduplicated union of finding labels. */
-  labels: readonly IntakeRiskLabel[];
-  /** Calibrated 0–1 score for this scanner (envelope `scores[scannerId]`). */
-  score: number;
-  findings: readonly IntakeScannerFinding[];
-  /** Transformed text when the scanner sanitizes (llm-guard transform contract). */
-  sanitized?: string;
-  /** Safe schema-extracted metadata (envelope `extractedFields` candidates). */
-  extracted?: Readonly<Record<string, string>>;
 }
 
 /** Noisy-or combination: 1 - Π(1 - wᵢ), clamped to [0, 1]. */

@@ -1,5 +1,5 @@
 /**
- * `@psfn/core/lifecycle` entrypoint: stream transport, explicit tool contract
+ * `@cgic/psfn-core/lifecycle` entrypoint: stream transport, explicit tool contract
  * helpers, request context, turn records, memory-deletion approval ports, and
  * host-executed automata ingress APIs.
  */

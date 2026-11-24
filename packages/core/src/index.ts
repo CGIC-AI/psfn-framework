@@ -1,5 +1,5 @@
 /**
- * `@psfn/core` primary entrypoint: standalone companion runtime, inner-life
+ * `@cgic/psfn-core` primary entrypoint: standalone companion runtime, inner-life
  * policy config loader, core defaults, session integrity, embeddings, hosted
  * automata execution, canonical tool catalog, and bundled policy seeds.
  */

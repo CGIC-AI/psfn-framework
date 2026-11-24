@@ -152,7 +152,7 @@ bus/runs/
 /openwiki/*
 !/openwiki/INSTRUCTIONS.md
 
-# Generated standalone @psfn/core package build outputs and synced seeds/license
+# Generated standalone @cgic/psfn-core package build outputs and synced seeds/license
 /packages/core/dist/
 /packages/core/config/
 /packages/core/LICENSE

@@ -1,5 +1,5 @@
 /**
- * `@psfn/core/operator` entrypoint: Light Garden route builders, request
+ * `@cgic/psfn-core/operator` entrypoint: Light Garden route builders, request
  * authorization & HTTP primitives, admin data services, companion stores, and
  * owner-file config loaders/savers.
  */

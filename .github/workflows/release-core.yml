@@ -1,4 +1,4 @@
-name: Release @psfn/core
+name: Release @cgic/psfn-core
 
 on:
   push:
@@ -23,7 +23,7 @@ env:
 
 jobs:
   publish-core:
-    name: Build, verify, and publish @psfn/core
+    name: Build, verify, and publish @cgic/psfn-core
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -74,10 +74,17 @@ jobs:
             fi
           fi
 
-      - name: Publish @psfn/core via npm Trusted Publishing (OIDC)
+      - name: Publish @cgic/psfn-core via npm Trusted Publishing (OIDC)
         if: github.event_name == 'push' || inputs.dry_run == false
         working-directory: packages/core
-        run: npm publish --provenance --access public
+        env:
+          CORE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if npm view "@cgic/psfn-core@${CORE_VERSION}" version >/dev/null 2>&1; then
+            echo "@cgic/psfn-core@${CORE_VERSION} is already published on npm; skipping publish."
+            exit 0
+          fi
+          npm publish --provenance --access public
 
       - name: Notify psfn-lite release roller
         if: github.event_name == 'push' || inputs.dry_run == false

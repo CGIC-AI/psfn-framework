@@ -17,7 +17,7 @@ import type {
   ActiveMemoryContextRequest,
   ActiveMemoryContextSnapshot,
 } from '../../faculties/memory/active-context.js';
-import type { WikiContextSnapshot } from '../../faculties/wiki/active-context.js';
+import type { WikiContextSnapshot } from '../../shared/contracts/wiki-context.js';
 import type { ConversationScope } from '../session/conversation-scope.js';
 import type { DisclosureSourceContribution } from '../cogsec/disclosure/contracts.js';
 import type { MessageAddressingMetadata } from '../../shared/contracts/message-addressing.js';

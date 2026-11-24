@@ -82,7 +82,7 @@ import {
 import { assertPolicyToolHydration } from '../tool-surface/hydration.js';
 import type { ToolUsageRanking } from '../tool-surface/usage-ranking.js';
 import { createComponentLogger } from '../../../shared/logger.js';
-import type { RuntimeServiceHealthStatus } from '../../../operator/tool-health/types.js';
+import type { RuntimeServiceHealthStatus } from '../../../shared/contracts/runtime-service-health.js';
 import {
   buildRuntimeToolCatalogEntry,
   type RuntimeToolCatalogSnapshot,

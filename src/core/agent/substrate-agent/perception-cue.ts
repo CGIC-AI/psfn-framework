@@ -1,4 +1,4 @@
-import type { ImageEmbodimentConsistency } from '../../../primitives/images/types.js';
+import type { ImageEmbodimentConsistency } from '../../../shared/contracts/image-vision-review.js';
 
 /**
  * psfn-framework-lpxg3.1 — current-turn perception as a RETRIEVAL CUE.

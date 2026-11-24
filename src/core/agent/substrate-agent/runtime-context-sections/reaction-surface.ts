@@ -9,7 +9,7 @@ import { wrapPromptSectionXml } from '../../../identity/prompt-sections.js';
 import {
   reactionSurfaceIsEmpty,
   type ResolvedReactionSurface,
-} from '../../../../channels/shared/reaction-surface.js';
+} from '../../../../shared/contracts/reaction-surface.js';
 
 export function buildReactionSurfaceContextBlock(
   surface: ResolvedReactionSurface | undefined,

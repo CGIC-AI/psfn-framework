@@ -21,7 +21,7 @@
 
 import type { ContactStorePort } from '../../contacts/contact-store-port.js';
 import type { RelationshipType } from '../../contacts/types.js';
-import type { HubIdentityResolution } from '../../enrollment/types.js';
+import type { HubIdentityResolution } from '../../../shared/contracts/hub-identity-resolution.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type {

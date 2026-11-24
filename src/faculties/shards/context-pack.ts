@@ -12,11 +12,12 @@ import {
 } from '../../boundary/gateway/policy.js';
 import { appendShardSessionMemorySyncAudit } from '../../persistence/jsonl.js';
 import type { MemoryScopeQuery } from '../memory/types.js';
-import type {
-  ShardConfig,
-  ShardContextPack,
-  ShardContextPackEntry,
-  ShardSourceContext,
+import {
+  truncateShardContextText,
+  type ShardConfig,
+  type ShardContextPack,
+  type ShardContextPackEntry,
+  type ShardSourceContext,
 } from './types.js';
 
 const CONTEXT_PACK_SESSION_SCAN_LIMIT = 12;
@@ -377,12 +378,4 @@ export class ShardContextPackHelper {
         : []),
     ].join('\n');
   }
-}
-
-export function truncateShardContextText(value: string, maxChars: number): string {
-  const normalized = value.trim();
-  if (normalized.length <= maxChars) {
-    return normalized;
-  }
-  return `${normalized.slice(0, maxChars - 3)}...`;
 }

@@ -3,10 +3,12 @@ import type {
   FalEditModel,
   ImageProvider,
   ImageWorkflowSettings,
-} from '../../primitives/images/types.js';
+} from '../../shared/contracts/image-config-contracts.js';
 import type { CredentialReference, CredentialVaultPort } from '../../shared/contracts/credential-contracts.js';
-import type { StreamingSttProvider } from '../../primitives/voice/connectors/stt/index.js';
-import type { StreamingTtsProvider } from '../../primitives/voice/connectors/tts/index.js';
+import type {
+  StreamingSttProvider,
+  StreamingTtsProvider,
+} from '../../shared/contracts/voice-provider-registry.js';
 import type { CapabilityTier } from '../capabilities/tier-types.js';
 import type { ChargePolicyConfig } from './charge-policy-config.js';
 import type { SubagentRoleRegistryConfig } from '../../faculties/subagents/role-registry.js';

@@ -2,10 +2,8 @@ import type { ImportProcessingRouteMode } from '../../shared/contracts/runtime.j
 import type { ActiveMemoryRetrievalMode, SessionRestartBehavior, SubstrateConfig } from '../config/runtime-config-contracts.js';
 import {
   isStreamingSttProvider,
-} from '../../primitives/voice/connectors/stt/index.js';
-import {
   isStreamingTtsProvider,
-} from '../../primitives/voice/connectors/tts/index.js';
+} from '../../shared/contracts/voice-provider-registry.js';
 
 const IMPORT_PROCESSING_ROUTE_MODE_VALUES = new Set<ImportProcessingRouteMode>([
   'background',

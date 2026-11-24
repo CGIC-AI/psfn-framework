@@ -42,3 +42,51 @@ export interface WikiContextSnapshot {
   refreshStatus: WikiRefreshStatus;
   lastRefreshError?: string;
 }
+
+export type CompanionOwnedVisibility = 'self' | 'primary_contact' | 'public';
+
+export function requiredProjectText(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`${field} must be a non-empty string`);
+  }
+  return value.trim();
+}
+
+export function normalizeProjectEntityId(value: unknown, field: string): string {
+  const id = requiredProjectText(value, field).toLowerCase();
+  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(id)) {
+    throw new Error(`${field} must contain only lowercase letters, digits, underscores, or hyphens`);
+  }
+  return id;
+}
+
+export interface SleeptimeWikiPassRunInput {
+  sessionId: string;
+  sourceMessageId?: string;
+  throughRevision?: number;
+  throughOccurredAtMs?: number;
+}
+
+export type WikiPassSkipReason =
+  | 'disabled'
+  | 'no_material'
+  | 'malformed_output'
+  | 'nothing_durable';
+
+export interface SleeptimeWikiPassRunResult {
+  ran: boolean;
+  skippedReason?: WikiPassSkipReason;
+  reviewedEpisodes: number;
+  reviewedMemories: number;
+  entriesCreated: number;
+  entriesUpdated: number;
+  proposalsRejected: number;
+  entriesHeld: number;
+  entriesUnchanged: number;
+  nearDuplicatesFolded: number;
+}
+
+/** Narrow structural port satisfied by host `SleeptimeWikiPass`. */
+export interface SleeptimeWikiPassPort {
+  run(input: SleeptimeWikiPassRunInput): Promise<SleeptimeWikiPassRunResult>;
+}

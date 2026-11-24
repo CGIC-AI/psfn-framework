@@ -57,7 +57,17 @@ import type {
   WikiSearchInput,
   WikiSearchResult,
 } from './types.js';
+import type {
+  SleeptimeWikiPassRunInput,
+  SleeptimeWikiPassRunResult,
+} from '../../shared/contracts/wiki-context.js';
 import type { WikiAdmissionGate } from './admission.js';
+
+export type {
+  SleeptimeWikiPassRunInput,
+  SleeptimeWikiPassRunResult,
+  WikiPassSkipReason,
+} from '../../shared/contracts/wiki-context.js';
 
 const log = createComponentLogger('SleeptimeWikiPass');
 
@@ -141,51 +151,6 @@ export interface SleeptimeWikiPassOptions {
   now?: () => Date;
   /** Bounds how many active memories are scanned to find the review window. */
   memoryScanLimit?: number;
-}
-
-export interface SleeptimeWikiPassRunInput {
-  sessionId: string;
-  sourceMessageId?: string;
-  throughRevision?: number;
-  throughOccurredAtMs?: number;
-}
-
-/**
- * `nothing_durable` (psfn-framework-lpxg3.3): the pass ran a full proposal
- * cycle and nothing survived as durable world knowledge — every proposal was
- * a personal-boundary rejection, a byte-identical no-op, or absent entirely.
- * That is a real, recordable outcome, distinct from "the gate never opened",
- * and it advances the watermark like any other completed review.
- */
-export type WikiPassSkipReason =
-  | 'disabled'
-  | 'no_material'
-  | 'malformed_output'
-  | 'nothing_durable';
-
-export interface SleeptimeWikiPassRunResult {
-  ran: boolean;
-  skippedReason?: WikiPassSkipReason;
-  reviewedEpisodes: number;
-  reviewedMemories: number;
-  entriesCreated: number;
-  entriesUpdated: number;
-  proposalsRejected: number;
-  /**
-   * Generated syntheses that were written but held by CogSec admission
-   * (psfn-framework-1fjvm.2). They are durable on disk for the operator to
-   * review and are not retrievable; the rest of the run's entries continue
-   * normally, so one hostile synthesis never stops the pass.
-   */
-  entriesHeld: number;
-  /**
-   * Proposals whose exact content already existed on the target entry. They
-   * reuse the existing admitted version: no new version, no history entry, no
-   * repeated notice (psfn-framework-lpxg3.3 AC6).
-   */
-  entriesUnchanged: number;
-  /** Proposals folded into an existing near-duplicate entry instead of creating one. */
-  nearDuplicatesFolded: number;
 }
 
 export type WikiPassProposalOperation = 'create' | 'update';

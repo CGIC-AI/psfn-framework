@@ -25,7 +25,7 @@ import {
   normalizeFalEditModelSetting,
   normalizeImageProviderSetting,
   normalizeImageWorkflowSettings,
-} from '../../primitives/images/types.js';
+} from '../../shared/contracts/image-config-contracts.js';
 import { normalizeModelPurposeSelectionSetting } from '../config/model-selection-config.js';
 import {
   MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,

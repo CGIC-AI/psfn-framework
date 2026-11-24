@@ -11,15 +11,15 @@ import { validateToolArguments, type ToolCall } from '@earendil-works/pi-ai';
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult, SubstrateAgentTool } from '../../boundary/pi-agent/index.js';
 import { withChildProcessSandboxExecutionPort } from '../../boundary/sandbox/sandbox-execution-port.js';
-import type {
-  SandboxExecutionPortSeed,
-  SandboxHostHelper,
+import {
+  DEFAULT_REPL_CONFIG,
+  type SandboxExecutionPortSeed,
+  type SandboxHostHelper,
 } from '../../shared/contracts/sandbox-analysis-contracts.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../agent/tool-surface/descriptions.js';
 import type { ToolResultIntakeScreener } from '../agent/tool-call-scheduler.js';
-import { DEFAULT_REPL_CONFIG } from './analysis-workbench/types.js';
 
 /**
  * High-authority / permit-bound egress and turn-disposition tools that must

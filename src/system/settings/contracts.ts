@@ -15,7 +15,7 @@ import type {
   FalEditModel,
   ImageProvider,
   ImageWorkflowSettings,
-} from '../../primitives/images/types.js';
+} from '../../shared/contracts/image-config-contracts.js';
 import type { CogSecPersonaConformanceSettings } from '../../shared/contracts/cogsec-persona-conformance.js';
 
 export const SETTINGS_FILE_NAME = 'settings.json';

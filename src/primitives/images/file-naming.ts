@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { basename, extname } from 'node:path';
-import type { ImageResultAsset } from './types.js';
+import type { ImageResultAsset } from '../../shared/contracts/image-config-contracts.js';
 
 export function inferImageExtension(
   url: string,

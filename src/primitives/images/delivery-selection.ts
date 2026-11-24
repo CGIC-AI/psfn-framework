@@ -1,6 +1,6 @@
 import type { AgentMessage } from '../../boundary/pi-agent/index.js';
 import { extractTextContent } from '../llm/conversion.js';
-import type { ImageGenerationResult, ImageResultAsset } from './types.js';
+import type { ImageGenerationResult, ImageResultAsset } from '../../shared/contracts/image-config-contracts.js';
 
 export const GENERATED_IMAGE_ATTACHMENT_LIMIT = 4;
 

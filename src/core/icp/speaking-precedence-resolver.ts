@@ -45,7 +45,7 @@ import type { IcpAvailabilityState } from '../../shared/contracts/icp-autonomy.j
 import type {
   IcpSocialPrecedenceResolver,
   ReservationSignalContext,
-} from '../agent/arbiter/reservation-phase.js';
+} from '../../shared/contracts/speaking-arbiter-types.js';
 import type { IcpSocialPrecedenceInput } from './social-precedence.js';
 
 /** Reads the local companion's own current ICP availability lease/state. */

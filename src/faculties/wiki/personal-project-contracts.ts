@@ -3,10 +3,20 @@ import {
   SENSITIVITY_LEVELS,
   type SensitivityLevel,
 } from '../../system/trust/types.js';
+import {
+  normalizeProjectEntityId,
+  requiredProjectText,
+  type CompanionOwnedVisibility,
+} from '../../shared/contracts/wiki-context.js';
 import type { WikiDocument } from './types.js';
 
+export {
+  normalizeProjectEntityId,
+  requiredProjectText,
+  type CompanionOwnedVisibility,
+} from '../../shared/contracts/wiki-context.js';
+
 export type PersonalProjectStatus = 'active' | 'paused' | 'completed' | 'archived';
-export type CompanionOwnedVisibility = 'self' | 'primary_contact' | 'public';
 export type ProjectArtifactShareState = 'private' | 'requested' | 'shared';
 
 /** Publication/review mode for a publication work context (bible §10.9/§10.10). */
@@ -123,21 +133,6 @@ export interface ResolvedWardrobeLook {
   ref: string;
   name: string;
   promptFragment: string;
-}
-
-export function requiredProjectText(value: unknown, field: string): string {
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new Error(`${field} must be a non-empty string`);
-  }
-  return value.trim();
-}
-
-export function normalizeProjectEntityId(value: unknown, field: string): string {
-  const id = requiredProjectText(value, field).toLowerCase();
-  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(id)) {
-    throw new Error(`${field} must contain only lowercase letters, digits, underscores, or hyphens`);
-  }
-  return id;
 }
 
 function isProjectStatus(value: unknown): value is PersonalProjectStatus {

@@ -32,17 +32,13 @@ import type {
   ParticipationSuppressionReason,
 } from './contracts/participation-types.js';
 import type {
-  ReservationGateBlockReason,
-  ReservationGateErrorStage,
-} from '../core/agent/arbiter/reservation-phase.js';
-import type {
+  AcquireEgressLeaseDeclineReason,
   EgressLeaseErrorStage,
   EgressLeaseOutcome,
-} from '../core/agent/arbiter/egress-lease-phase.js';
-import type {
-  AcquireEgressLeaseDeclineReason,
+  ReservationGateBlockReason,
+  ReservationGateErrorStage,
   RoomEpisodeBreakerState,
-} from '../core/agent/arbiter/speaking-arbiter-store-port.js';
+} from './contracts/speaking-arbiter-types.js';
 import type { RoomEpisodeCircuitBreakerFiring } from '../core/agent/fatigue/room-episode-circuit-breaker.js';
 import type { SocialPotEnforcementOutcome } from '../core/agent/fatigue/social-pot-enforcement.js';
 import type { PartnerAffectShadowTelemetryEvent } from './contracts/partner-affect.js';

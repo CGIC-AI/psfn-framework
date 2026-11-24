@@ -21,11 +21,11 @@ import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { parseExactPostgresCredential } from '../../shared/utils/postgres-credential.js';
 import { RETIRED_FLEET_WELFARE_VERIFIER_ROLE } from '../../persistence/postgres/retired-fleet-grantees.js';
 import { loadRequiredJson } from './load-or-seed.js';
-import type { FleetAuthDatabaseRoles } from '../../persistence/postgres/fleet-auth/schema.js';
-import type {
-  HubDeviceAssertionVerifierConfig,
-} from '../../boundary/fleet-auth/hub-device-assertion.js';
-import { parseHubDeviceAssertionVerifierConfig } from '../../boundary/fleet-auth/hub-device-assertion-config.js';
+import {
+  parseHubDeviceAssertionVerifierConfig,
+  type FleetAuthDatabaseRoles,
+  type HubDeviceAssertionVerifierConfig,
+} from '../../shared/contracts/hub-device-assertion-verifier.js';
 import {
   assertBrokerSigningKeyNotTrustedByHub,
   assertFleetAuthPublicKeyBoundary,

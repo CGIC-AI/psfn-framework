@@ -1,5 +1,5 @@
 /**
- * `@psfn/core/ports` entrypoint: explicit host-injection port contracts that
+ * `@cgic/psfn-core/ports` entrypoint: explicit host-injection port contracts that
  * decouple the companion core from optional host modules (gateway, CogSec
  * intake firewall, wiki, skills, channels, caches, and external runners).
  */

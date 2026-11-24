@@ -1,12 +1,12 @@
 {
-  "name": "@psfn/core",
+  "name": "@cgic/psfn-core",
   "version": "0.1.0",
   "description": "Companion core runtime, typed host ports, lifecycle contracts, and operator services extracted from PSFN Framework",
   "license": "AGPL-3.0-only",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "https://github.com/CGIC-AI/psfn-framework.git",
+    "url": "git+https://github.com/CGIC-AI/psfn-framework.git",
     "directory": "packages/core"
   },
   "publishConfig": {

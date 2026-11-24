@@ -1,5 +1,5 @@
 /**
- * Canonical companion policy seed directory and manifest shipped with `@psfn/core`.
+ * Canonical companion policy seed directory and manifest shipped with `@cgic/psfn-core`.
  */
 export const COMPANION_SEED_FILES = Object.freeze([
   'automata-policy.seed.json',

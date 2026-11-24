@@ -9,7 +9,7 @@ import {
 } from '../../shared/contracts/icp-autonomy.js';
 import type {
   IcpDyadContinuationAuthorization,
-} from '../../boundary/gateway/icp-autonomy-contract.js';
+} from '../../shared/contracts/icp-gateway-contract.js';
 import type {
   AgentResponse,
   IcpContinuationTaskKind,

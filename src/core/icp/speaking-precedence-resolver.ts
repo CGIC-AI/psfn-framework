@@ -40,7 +40,7 @@
  * way: they throw rather than admit.
  */
 
-import type { IcpOwnAvailabilityResult } from '../../boundary/gateway/icp-autonomy-contract.js';
+import type { IcpOwnAvailabilityResult } from '../../shared/contracts/icp-gateway-contract.js';
 import type { IcpAvailabilityState } from '../../shared/contracts/icp-autonomy.js';
 import type {
   IcpSocialPrecedenceResolver,

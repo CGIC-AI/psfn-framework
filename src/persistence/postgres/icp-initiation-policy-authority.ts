@@ -10,7 +10,7 @@ import type {
   IcpInitiationCausalityAuthority,
   IcpInitiationPolicyAuthorityInput,
 } from '../../boundary/gateway/icp-initiation-policy-authority.js';
-import type { IcpInitiationPolicySnapshot } from '../../boundary/gateway/icp-autonomy-contract.js';
+import type { IcpInitiationPolicySnapshot } from '../../shared/contracts/icp-gateway-contract.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { resolveContactBlockListPath } from '../layout.js';
 import {

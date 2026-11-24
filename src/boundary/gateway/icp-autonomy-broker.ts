@@ -386,7 +386,7 @@ export class GatewayIcpAutonomyBroker {
 
   async listDyadLifecycle(
     companionId: string,
-  ): Promise<import('./icp-autonomy-contract.js').IcpDyadLifecycleProjection[]> {
+  ): Promise<import('../../shared/contracts/icp-gateway-contract.js').IcpDyadLifecycleProjection[]> {
     this.requireFleetCompanion(companionId, 'dyad owner');
     const dyads = await this.options.store.listDyadsForCompanion(companionId);
     return dyads.flatMap(dyad => {
@@ -554,7 +554,7 @@ export class GatewayIcpAutonomyBroker {
       expectedRevision: number;
       action: IcpDyadSideAction;
     },
-  ): Promise<import('./icp-autonomy-contract.js').IcpDyadLifecycleResult> {
+  ): Promise<import('../../shared/contracts/icp-gateway-contract.js').IcpDyadLifecycleResult> {
     this.requireFleetCompanion(companionId, 'dyad lifecycle owner');
     const release = await this.acquireDyadOperation(input.dyadId);
     try {

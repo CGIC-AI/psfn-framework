@@ -23,7 +23,7 @@ import type { EpisodicSynthesizer } from '../../faculties/memory/episodic/synthe
 import type { SleepCycleEpisodeConsolidator } from '../../faculties/memory/episodic/sleep-consolidation.js';
 import type { EpisodeArcWeaver } from '../../faculties/memory/episodic/arc-formation.js';
 import type { DreamMeaningPass } from '../../faculties/memory/episodic/dream-meaning-pass.js';
-import type { SleeptimeWikiPass } from '../../faculties/wiki/sleeptime-wiki-pass.js';
+import type { SleeptimeWikiPassPort } from '../../shared/contracts/wiki-context.js';
 import type { AutomataClassLifecycleRuntime } from '../../faculties/automata/bus/class-lifecycle.js';
 import type { NearTurnMemoryScopeClassifierPort } from '../../faculties/memory/near-turn-memory-lane.js';
 import type { ConversationalActivityWorksetPort } from '../session/conversational-activity-workset.js';
@@ -283,7 +283,7 @@ export interface ReflectionRuntimeOptions {
   /** Day's-episodes reader for her sleeptime end-of-day review (1gpol). */
   episodicReviewStore?: Pick<EpisodicStorePort, 'searchByTime'> | null;
   /** Sleeptime wiki update pass (E8.2): runs inside the sleeptime stack after settling. */
-  sleeptimeWikiPass?: Pick<SleeptimeWikiPass, 'run'> | null;
+  sleeptimeWikiPass?: SleeptimeWikiPassPort | null;
   proactiveOutbound?: Pick<ProactiveOutboundDispatcher, 'dispatch'> | null;
   /**
    * Shared outbound-reply dedupe guard. When present, an internal continuation

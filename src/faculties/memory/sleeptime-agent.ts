@@ -55,7 +55,7 @@ import type { MemoryWriteOptions, MemoryWriter, WriteResult } from './writer.js'
 import type { SleepCycleEpisodeConsolidator } from './episodic/sleep-consolidation.js';
 import type { EpisodeArcWeaver } from './episodic/arc-formation.js';
 import type { DreamMeaningPass } from './episodic/dream-meaning-pass.js';
-import type { SleeptimeWikiPass } from '../wiki/sleeptime-wiki-pass.js';
+import type { SleeptimeWikiPassPort } from '../../shared/contracts/wiki-context.js';
 import type {
   EpisodicMaintenanceDiagnostics,
   EpisodicStorePort,
@@ -163,7 +163,7 @@ type SleeptimeMemoryWriter = Pick<MemoryWriter, 'write'>;
 type SleeptimeEpisodeConsolidator = Pick<SleepCycleEpisodeConsolidator, 'run'>;
 type SleeptimeArcWeaver = Pick<EpisodeArcWeaver, 'run'>;
 type SleeptimeDreamMeaningPass = Pick<DreamMeaningPass, 'run'>;
-type SleeptimeWikiPassRunner = Pick<SleeptimeWikiPass, 'run'>;
+type SleeptimeWikiPassRunner = SleeptimeWikiPassPort;
 type SleeptimeMaintenanceStore = Pick<
   MemoryStorePort,
   'upsertMemoryMaintenanceReview' | 'getById' | 'getMemoryMaintenanceDiagnostics'

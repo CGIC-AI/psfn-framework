@@ -59,30 +59,23 @@ import {
 import { assertRoomEpisodeCircuitBreakerConfig } from '../fatigue/room-episode-circuit-breaker.js';
 import type { SocialPotConfig, SocialPotPort } from '../fatigue/social-pot.js';
 import type {
+  IcpSocialPrecedenceResolver,
+  ReservationGateBlockReason,
+  ReservationGateErrorStage,
+  ReservationSignalContext,
+} from '../../../shared/contracts/speaking-arbiter-types.js';
+import type {
   RoomEpisodeSnapshot,
   SpeakingArbiterStorePort,
   SpeakingReservationSnapshot,
 } from './speaking-arbiter-store-port.js';
 
-/** The deterministic context a reservation gate resolves its signals from. */
-export interface ReservationSignalContext {
-  channelId: string;
-  /** The room event that made this companion a candidate (candidate.sourceMessageId). */
-  triggerEventId: string;
-  companionId: string;
-  nowMs: number;
-}
-
-/**
- * Resolves the ICP-over-social precedence inputs for a candidate. ICP is a
- * separate, dominant autonomy authority; where it contends, social yields
- * (§8.5). The live signals (current availability lease, in-flight ICP turn
- * fence, ICP continuation exhaustion) are wired by the ICP transport seam
- * (jp36.5.2); this phase only consumes the resolved inputs.
- */
-export interface IcpSocialPrecedenceResolver {
-  resolve(ctx: ReservationSignalContext): IcpSocialPrecedenceInput | Promise<IcpSocialPrecedenceInput>;
-}
+export type {
+  IcpSocialPrecedenceResolver,
+  ReservationGateBlockReason,
+  ReservationGateErrorStage,
+  ReservationSignalContext,
+} from '../../../shared/contracts/speaking-arbiter-types.js';
 
 /**
  * Resolves the reconciled, decayed room-episode pressure for a channel (the
@@ -92,28 +85,6 @@ export interface IcpSocialPrecedenceResolver {
 export interface RoomEpisodePressureResolver {
   resolve(ctx: ReservationSignalContext): number | Promise<number>;
 }
-
-/** Why a candidate was gated out before appraisal. */
-export type ReservationGateBlockReason =
-  /** An in-flight ICP turn fence is live for this scope; social must not race it. */
-  | 'icp_turn_fenced'
-  /** The ICP continuation fatigue lane is at its hard stop. */
-  | 'icp_fatigue_exhausted'
-  /** The companion's own ICP availability lease is a non-open state (DND/busy/resting). */
-  | 'icp_availability'
-  /** Decayed room-episode pressure is at/above the Law-36 breaker trip threshold. */
-  | 'room_flooded'
-  /** The social pot cannot fund even a minimal social turn. */
-  | 'fatigue_pot_insufficient'
-  /** Fail-closed: a gate signal, gate input, or the store errored. */
-  | 'gate_error';
-
-/** The stage at which a `gate_error` occurred (content-free, for telemetry). */
-export type ReservationGateErrorStage =
-  | 'icp_precedence'
-  | 'room_pressure'
-  | 'social_pot'
-  | 'reserve';
 
 export interface ReservationReservedOutcome {
   outcome: 'reserved';

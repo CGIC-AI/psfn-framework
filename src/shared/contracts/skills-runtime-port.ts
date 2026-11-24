@@ -28,3 +28,9 @@ export interface SkillsRuntimePromptPort {
   getPromptXml(): Promise<string>;
   getCachedPromptXml(): string;
 }
+
+/** Narrow reflection-nudge facet satisfied by `ReflectionNudgeTracker`. */
+export interface ReflectionNudgePort {
+  evaluate(summary: TurnToolSummary): string | null;
+  reset(): void;
+}

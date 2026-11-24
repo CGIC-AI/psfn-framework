@@ -48,6 +48,16 @@
  * state and enforces exclusivity, fencing, and atomicity.
  */
 
+import type {
+  AcquireEgressLeaseDeclineReason,
+  RoomEpisodeBreakerState,
+} from '../../../shared/contracts/speaking-arbiter-types.js';
+
+export type {
+  AcquireEgressLeaseDeclineReason,
+  RoomEpisodeBreakerState,
+} from '../../../shared/contracts/speaking-arbiter-types.js';
+
 /** Reservation-phase lifecycle. Terminal states carry a {@link SpeakingArbiterReason}. */
 export type SpeakingReservationStatus = 'reserved' | 'released' | 'expired';
 
@@ -86,16 +96,6 @@ export type SpeakingEgressLeaseCompletion =
 
 /** Per-channel room-episode lifecycle. */
 export type RoomEpisodeStatus = 'open' | 'closed';
-
-/**
- * Durable Law-36 circuit-breaker position for a channel's room episode (charter
- * §8.11, bible §12.2/§20.2). Persisted in the arbiter store — the gateway-owned
- * home the design mandates — so the single-probe half-open discipline survives a
- * gateway reboot. Mirrors the pure breaker state machine's positions
- * (`../fatigue/room-episode-circuit-breaker`); kept as a local string union so
- * this low-level store contract does not depend on the fatigue module.
- */
-export type RoomEpisodeBreakerState = 'closed' | 'open' | 'half_open';
 
 export const SPEAKING_RESERVATION_STATUSES: readonly SpeakingReservationStatus[] = [
   'reserved',
@@ -314,15 +314,6 @@ export interface AcquireEgressLeaseInput {
    */
   chargedUnits?: number;
 }
-
-/**
- * Why an acquisition was declined:
- *   - `held`: a live held lease currently owns the triggering event;
- *   - `already_delivered`: the event was already spoken (a prior lease reached a
- *     `delivered`/`overridden` completion), so it is spent — send-once fencing.
- * In both cases the caller does NOT retry (silence is never retried into speech).
- */
-export type AcquireEgressLeaseDeclineReason = 'held' | 'already_delivered';
 
 export interface AcquireEgressLeaseResult {
   /**

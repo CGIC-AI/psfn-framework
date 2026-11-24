@@ -79,6 +79,10 @@ import {
 } from '../fatigue/social-pot-enforcement.js';
 import type { SocialPotPort } from '../fatigue/social-pot.js';
 import type {
+  EgressLeaseErrorStage,
+  EgressLeaseOutcome,
+} from '../../../shared/contracts/speaking-arbiter-types.js';
+import type {
   AcquireEgressLeaseDeclineReason,
   RoomEpisodeBreakerState,
   RoomEpisodeParticipant,
@@ -86,6 +90,11 @@ import type {
   SpeakingEgressLeaseSnapshot,
   SpeakingReservationSnapshot,
 } from './speaking-arbiter-store-port.js';
+
+export type {
+  EgressLeaseErrorStage,
+  EgressLeaseOutcome,
+} from '../../../shared/contracts/speaking-arbiter-types.js';
 
 /** The deterministic context an egress evaluation resolves its signals from. */
 export interface EgressLeaseSignalContext {
@@ -165,42 +174,6 @@ export interface EgressReplyDeliveryResult {
 export interface EgressReplySender {
   deliver(request: EgressReplyDeliveryRequest): Promise<EgressReplyDeliveryResult>;
 }
-
-/** The lifecycle stage a fail-closed `gate_error` occurred at (content-free). */
-export type EgressLeaseErrorStage =
-  | 'trigger'
-  | 'room_pressure'
-  | 'breaker'
-  | 'fairness'
-  | 'social_pot'
-  | 'acquire'
-  | 'deliver'
-  | 'complete';
-
-/** The terminal outcome of an egress evaluation. */
-export type EgressLeaseOutcome =
-  /** The reply was delivered and its lease completed `delivered`. */
-  | 'delivered'
-  /** The lease was acquired but the send failed; lease completed `failed`. */
-  | 'delivery_failed'
-  /** Shadow posture admitted the reply but deliberately performed no draw or send. */
-  | 'shadowed'
-  /** The reservation was no longer `reserved` (redelivery/settled); no bind. */
-  | 'reservation_not_reservable'
-  /** The Law-36 breaker suppressed the autonomous lease (open / spent probe). */
-  | 'breaker_suppressed'
-  /** Pressure raised the confidence bar above the appraisal (soft wrap-up). */
-  | 'below_confidence_bar'
-  /** A less-recent contender should speak; this companion yielded (speak-least). */
-  | 'yielded_speak_least'
-  /** The social pot refused to fund the turn (capped/insufficient/uncharged). */
-  | 'draw_refused'
-  /** Acquire declined: a live holder, or the event was already spoken. No retry. */
-  | 'lease_declined'
-  /** Fail-closed: a gate signal, resolver, or store errored. No send. */
-  | 'gate_error'
-  /** A retained `react` reservation was released (no speaking lease). */
-  | 'react_released';
 
 export interface EgressLeaseDecision {
   outcome: EgressLeaseOutcome;

@@ -38,7 +38,7 @@ import type { DisclosureDestination } from '../cogsec/disclosure/contracts.js';
 import {
   normalizeProjectEntityId,
   type CompanionOwnedVisibility,
-} from '../../faculties/wiki/personal-project-contracts.js';
+} from '../../shared/contracts/wiki-context.js';
 import { FREE_TIME_CHANNEL_PREFIX } from '../session/session-id.js';
 
 // ── Shared vocabulary ──

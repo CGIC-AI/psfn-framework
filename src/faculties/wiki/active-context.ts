@@ -1,11 +1,9 @@
 import type {
   WikiContextSnapshot,
-  WikiRefreshStatus,
   WikiRetrievalContextClass,
 } from '../../shared/contracts/wiki-context.js';
 export type {
   WikiContextSnapshot,
-  WikiRefreshStatus,
   WikiRetrievalContextClass,
 } from '../../shared/contracts/wiki-context.js';
 import type { WikiScope } from './scope.js';

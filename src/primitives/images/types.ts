@@ -42,11 +42,8 @@ export type ImageAspectRatio = typeof IMAGE_ASPECT_RATIO_VALUES[number];
 export type ImageProvider = typeof IMAGE_PROVIDER_VALUES[number];
 import type {
   EmbodimentConsistencyVerdict,
-  ImageEmbodimentConsistency,
   ImageMode,
   ImageVisionReview,
-  ImageVisionReviewRequest,
-  ImageVisionReviewer,
 } from '../../shared/contracts/image-vision-review.js';
 export type {
   EmbodimentConsistencyVerdict,

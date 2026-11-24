@@ -91,7 +91,6 @@ import type {
 import type { RuntimeServiceHealthSnapshot } from '../../operator/tool-health/types.js';
 import type { OperatorAlertSinkConfiguration } from '../../shared/contracts/operator-alerting.js';
 import type {
-  NotificationSenderMetadata,
   NotifyNtfyParams,
   NotifyNtfyResult,
 } from '../../shared/contracts/notification-port.js';

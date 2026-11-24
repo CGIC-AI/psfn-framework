@@ -30,7 +30,7 @@ import {
 const DEFAULT_BASELINE_PATH = resolve(process.cwd(), 'config/core-boundary-baseline.json');
 
 /**
- * Host-scaffolding prefixes outside the `@psfn/core` boundary.
+ * Host-scaffolding prefixes outside the companion-core boundary.
  * Entries ending with `.ts` match exact repo-relative `src/` paths;
  * entries ending with `/` match the entire subtree; other entries match by prefix.
  */

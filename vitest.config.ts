@@ -51,6 +51,9 @@ for (const path of include.filter(path => !path.includes('*'))) {
 }
 
 export default defineConfig({
+  esbuild: {
+    tsconfigRaw: '{"compilerOptions":{"target":"es2024","verbatimModuleSyntax":true}}',
+  },
   test: {
     globals: true,
     environment: 'node',

@@ -2,36 +2,16 @@ import { createHash } from 'node:crypto';
 import {
   compileCogSecPersonaConformancePattern,
   type CogSecPersonaConformanceBaseline,
+  type CogSecPersonaConformanceCheckId,
+  type CogSecPersonaConformanceCheckResult,
+  type CogSecPersonaConformanceEventRecord,
   type CogSecPersonaConformanceSettings,
+  type CogSecPersonaConformanceStatus,
 } from '../../shared/contracts/cogsec-persona-conformance.js';
 
-export type CogSecPersonaConformanceStatus = 'pass' | 'warning' | 'fail';
-
-export type CogSecPersonaConformanceCheckId =
-  | 'conformance_configuration'
-  | 'voice_fidelity'
-  | 'value_fidelity'
-  | 'refusal_boundary_consistency'
-  | 'assistant_genericness'
-  | 'relationship_continuity'
-  | 'unauthorized_persona_mutation'
-  | 'sealed_material_absence';
-
-export interface CogSecPersonaConformanceCheckResult {
-  id: CogSecPersonaConformanceCheckId;
-  status: CogSecPersonaConformanceStatus;
-  reasonCodes: string[];
-}
-
-export interface CogSecPersonaConformanceEventRecord {
-  status: CogSecPersonaConformanceStatus;
-  checkedAt: string;
-  summary: string;
-  failureCount: number;
-  warningCount: number;
-  promptContextHash: string;
-  checks: CogSecPersonaConformanceCheckResult[];
-}
+export type {
+  CogSecPersonaConformanceEventRecord,
+};
 
 export interface CogSecPersonaConformanceInput {
   caseId: string;

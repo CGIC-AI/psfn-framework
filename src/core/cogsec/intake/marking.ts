@@ -29,32 +29,26 @@
 // COMPANION UX: provenance notes are calm and factual, never alarming;
 // nothing here feeds the emotion model.
 
-import type {
-  IntakeRiskLabel,
-  IntakeSourceClass,
-  IntakeSourceRiskTier,
+import {
+  INTAKE_DATAMARK_MARKER,
+  INTAKE_MARKING_INTENSITIES,
+  type IntakeMarkingIntensity,
+  type IntakeMarkingPlan,
+  type IntakeRiskLabel,
+  type IntakeSourceClass,
+  type IntakeSourceRiskTier,
 } from '../../../shared/contracts/intake-envelope.js';
 import { COGSEC_MARKING_SOURCE_REF_MAX_CHARS } from './screening-envelope-policy.js';
-import { INTAKE_DATAMARK_MARKER } from './scanners/datamark.js';
 import { INTAKE_QUARANTINE_RISK_LABELS } from './risk-label-families.js';
 
-export const INTAKE_MARKING_INTENSITIES = [
-  'none',
-  'wrap',
-  'interleave',
-  'summary_only',
-] as const;
-export type IntakeMarkingIntensity = typeof INTAKE_MARKING_INTENSITIES[number];
+export {
+  type IntakeMarkingIntensity,
+  type IntakeMarkingPlan,
+};
 
 export function isIntakeMarkingIntensity(value: unknown): value is IntakeMarkingIntensity {
   return typeof value === 'string'
     && (INTAKE_MARKING_INTENSITIES as readonly string[]).includes(value);
-}
-
-export interface IntakeMarkingPlan {
-  intensity: IntakeMarkingIntensity;
-  /** Calm, factual provenance note rendered with the wrapper. */
-  provenanceNote: string;
 }
 
 /**

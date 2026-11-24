@@ -44,18 +44,15 @@ import {
   resolveChannelResponseStyle,
   type ChannelMeta,
 } from '../../system/trust/policy.js';
-import {
-  type CapsuleCustodyService,
-  type DisclosureLineage,
-} from '../cogsec/disclosure/index.js';
+import type { DisclosureLineage } from '../cogsec/disclosure/contracts.js';
 import type { CustodySnapshotStorePort } from '../cogsec/disclosure/custody-snapshot.js';
-import {
-  EgressDeliveryRecorder,
-  type ActiveTurnEgressCustody,
-  type CompletedTurnEgressCustody,
-  type CompletedTurnEgressCustodyCapture,
-  type EgressDeliveryRecordStorePort,
-} from '../cogsec/disclosure/index.js';
+import type {
+  ActiveTurnEgressCustody,
+  CompletedTurnEgressCustody,
+  CompletedTurnEgressCustodyCapture,
+  EgressDeliveryRecordStorePort,
+} from '../cogsec/disclosure/egress-delivery-record.js';
+import { EgressDeliveryRecorder } from '../cogsec/disclosure/egress-delivery-recorder.js';
 import { applyAdmittedToolResultDisclosureFloor } from '../cogsec/disclosure/mcp-turn-context.js';
 import type {
   ChannelPromptRegistryPort,
@@ -97,9 +94,7 @@ import type { PreToolHookGate } from '../../system/capabilities/pre-tool-hook.js
 import { assertToolCapabilityRequirementDeclared } from '../../system/capabilities/requirements.js';
 import { isCanonicalFirstPartyToolName } from './tool-surface/registry.js';
 import type { ToolUsageRanking } from './tool-surface/usage-ranking.js';
-import {
-  type IntakeSinkGate,
-} from '../cogsec/intake/sink-gates.js';
+import type { IntakeSinkGate } from '../../shared/contracts/intake-sink-gate-port.js';
 import { classifyToolResultCogSecProvenance } from '../cogsec/intake/tool-result-provenance.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
@@ -477,10 +472,6 @@ export class SubstrateAgent {
   // Pluggable memory — null until memory system is wired
   memoryProvider: MemoryProvider | null = null;
   artifactApprovalQueue: ApprovalQueuePort | null = null;
-  // Durable Share Capsule custody riding the same approval queue (jp36.7.1.2).
-  // Consumers (Garden approvals surface jp36.7.2, companion publication tool
-  // jp36.7.3) authorize exact-replay + revoke through this handle; null until wired.
-  shareCapsuleCustody: CapsuleCustodyService | null = null;
   artifactApprovalNotifier: NotificationPort | null = null;
   shareApprovedArtifacts: ((
     attachments: readonly Attachment[],

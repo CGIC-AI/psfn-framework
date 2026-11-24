@@ -1,4 +1,8 @@
-import { FILESYSTEM_READ_PAGE_CONTRACT } from '../../../shared/contracts/filesystem.js';
+import {
+  FILESYSTEM_READ_PAGE_CONTRACT,
+  type FilesystemReadResult,
+} from '../../../shared/contracts/filesystem.js';
+export type { FilesystemReadResult };
 
 export type FilesystemSearchMode = 'literal' | 'regex';
 
@@ -34,14 +38,6 @@ export function normalizeFilesystemReadOptions(
     );
   }
   return { maxBytes, offsetBytes };
-}
-
-export interface FilesystemReadResult {
-  content: string;
-  offsetBytes: number;
-  nextOffsetBytes: number | null;
-  eof: boolean;
-  truncated: boolean;
 }
 
 export interface FilesystemListOptions {

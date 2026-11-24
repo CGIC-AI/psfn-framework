@@ -16,8 +16,8 @@ import {
   type CompletionNoticeDeliveryPort,
 } from './completion-notices.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import type { IntakeScreeningService } from '../cogsec/intake/screening.js';
-import type { IntakeSinkGate } from '../cogsec/intake/sink-gates.js';
+import type { IntakeScreeningService } from '../../shared/contracts/intake-screening-port.js';
+import type { IntakeSinkGate } from '../../shared/contracts/intake-sink-gate-port.js';
 import { screenDerivedContent } from '../cogsec/intake/derived-content.js';
 
 export {

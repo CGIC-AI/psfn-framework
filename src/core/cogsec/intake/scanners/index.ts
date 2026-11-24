@@ -28,7 +28,6 @@
 
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import type { IntakeRiskLabel } from '../../../../shared/contracts/intake-envelope.js';
 import {
   createIntakeRuleEngine,
   INTAKE_L1_RULES_FILE_NAME,
@@ -96,6 +95,14 @@ export interface IntakeL1ScannerConfig {
   datamarkMarkers?: readonly string[];
 }
 
+import type {
+  IntakeL1ScannerError,
+  IntakeL1ScanReport,
+} from '../../../../shared/contracts/intake-screening-port.js';
+export type {
+  IntakeL1ScanReport,
+} from '../../../../shared/contracts/intake-screening-port.js';
+
 export interface IntakeL1ScanOptions {
   scope: IntakeScanScope;
   /** Per-scan override of the configured allowlist. */
@@ -104,35 +111,6 @@ export interface IntakeL1ScanOptions {
   schemeActions?: UrlScanOptions['schemeActions'];
   /** Per-scan override of the configured markers. */
   datamarkMarkers?: readonly string[];
-}
-
-export interface IntakeL1ScannerError {
-  scannerId: string;
-  message: string;
-}
-
-export interface IntakeL1ScanReport {
-  scope: IntakeScanScope;
-  /** True when the input exceeded MAX_SCAN_CHARS and was capped pre-regex. */
-  truncated: boolean;
-  /** Deduplicated union across scanners — envelope riskLabels input. */
-  riskLabels: readonly IntakeRiskLabel[];
-  /** Per-scanner 0–1 scores keyed by scanner id — envelope scores input. */
-  scores: Readonly<Record<string, number>>;
-  results: readonly IntakeScannerResult[];
-  /**
-   * Invisible-stripped, datamark-stripped, NFKC-normalized, secret-redacted
-   * text (capped). Substituting it for the raw content is a policy decision
-   * (htm9.3 'sanitize'), not L1's.
-   */
-  sanitizedText: string;
-  /** True when sanitizedText differs from the original input. */
-  sanitizedDiffers: boolean;
-  /** Merged scanner extractions, keyed `<scannerId>.<key>` — envelope extractedFields input. */
-  extractedFields: Readonly<Record<string, string>>;
-  /** Scanner failures (fail-open-advisory: visible, never swallowed). */
-  scannerErrors: readonly IntakeL1ScannerError[];
-  elapsedMs: number;
 }
 
 /**

@@ -46,10 +46,8 @@ import type { NotificationPort } from '../../../shared/contracts/notification-po
 import type { Attachment } from '../../../shared/contracts/runtime.js';
 import type { ArtifactEgressDestination } from '../../artifacts/sensitivity-egress.js';
 import type { DisclosureLineage } from '../../cogsec/disclosure/contracts.js';
-import type {
-  ActiveTurnEgressCustody,
-  EgressDeliveryRecorder,
-} from '../../cogsec/disclosure/index.js';
+import type { ActiveTurnEgressCustody } from '../../cogsec/disclosure/egress-delivery-record.js';
+import type { EgressDeliveryRecorder } from '../../cogsec/disclosure/egress-delivery-recorder.js';
 import type { ProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
 
 import type { ViewerCeiling } from '../../session/viewer-ceiling.js';

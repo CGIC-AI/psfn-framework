@@ -8,7 +8,7 @@ import type {
   CogSecPersonaConformanceCheckId,
   CogSecPersonaConformanceEventRecord,
   CogSecPersonaConformanceStatus,
-} from './persona-conformance.js';
+} from '../../shared/contracts/cogsec-persona-conformance.js';
 import { COGSEC_EVENT_SAFE_TEXT_MAX_CHARS } from './intake/screening-envelope-policy.js';
 
 export const COGSEC_EVENT_STORE_VERSION = 1 as const;

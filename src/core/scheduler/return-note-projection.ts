@@ -36,11 +36,11 @@
 //     broad summary to a destination that could not receive it.
 
 import type { SessionEntry } from '../session/types.js';
-import {
-  assessDisclosure,
-  type DisclosureDestination,
-  type DisclosureLineage,
-} from '../cogsec/disclosure/index.js';
+import type {
+  DisclosureDestination,
+  DisclosureLineage,
+} from '../cogsec/disclosure/contracts.js';
+import { assessDisclosure } from '../cogsec/disclosure/decision.js';
 
 /**
  * One free-time transcript entry paired with its captured per-turn disclosure

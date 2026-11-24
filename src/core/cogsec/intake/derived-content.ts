@@ -5,12 +5,12 @@ import type {
   IntakeSourceClass,
 } from '../../../shared/contracts/intake-envelope.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../intake-firewall-notice-templates.js';
-import type { IntakeScreeningService } from './screening.js';
+import type { IntakeScreeningService } from '../../../shared/contracts/intake-screening-port.js';
 import type {
   IntakeSinkDenialRouteContext,
   IntakeSinkGate,
   IntakeSinkGateDecision,
-} from './sink-gates.js';
+} from '../../../shared/contracts/intake-sink-gate-port.js';
 
 export interface DerivedContentIntakeDisposition {
   sourceClass: Extract<IntakeSourceClass, 'subagent_output' | 'shard_foldback'>;

@@ -17,8 +17,8 @@ import {
   screenDerivedContent,
   type DerivedContentIntakeDisposition,
 } from '../../core/cogsec/intake/derived-content.js';
-import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
-import type { IntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
+import type { IntakeScreeningService } from '../../shared/contracts/intake-screening-port.js';
+import type { IntakeSinkGate } from '../../shared/contracts/intake-sink-gate-port.js';
 
 const SHARD_FOLD_REVIEW_STORE_SCHEMA_VERSION = 1;
 const EMOTIONAL_REVIEW_TAG = 'interpretive:emotional_or_relational';

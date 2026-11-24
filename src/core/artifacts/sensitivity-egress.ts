@@ -1,12 +1,14 @@
 import {
   deriveRoomDisclosureDestination,
+  type ChannelDisclosureResolver,
+} from '../cogsec/disclosure/egress-composition.js';
+import {
   egressContentSha256,
   evaluateEgressCustodyHold,
-  type ChannelDisclosureResolver,
   type EgressCustodyHoldReason,
-  type EgressDeliveryRecorder,
   type TurnEgressCustodyProof,
-} from '../cogsec/disclosure/index.js';
+} from '../cogsec/disclosure/egress-delivery-record.js';
+import type { EgressDeliveryRecorder } from '../cogsec/disclosure/egress-delivery-recorder.js';
 import { canonicalJsonString } from '../../shared/utils/json-serialization.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { NotificationPort } from '../../shared/contracts/notification-port.js';

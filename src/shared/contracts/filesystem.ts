@@ -19,3 +19,11 @@ export function validateFilesystemReadMaxBytes(value: number): number {
   }
   return value;
 }
+
+export interface FilesystemReadResult {
+  content: string;
+  offsetBytes: number;
+  nextOffsetBytes: number | null;
+  eof: boolean;
+  truncated: boolean;
+}

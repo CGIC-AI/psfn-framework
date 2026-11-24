@@ -11,7 +11,7 @@ import type {
   SubstrateMessage,
   ResponseStyle,
 } from '../../../shared/contracts/runtime.js';
-import type { ApiHealthResponse } from '../../../channels/api/types.js';
+import type { ApiHealthResponse } from '../../../shared/contracts/api-health.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import type { CapabilityToken } from '../../../system/capabilities/tokens.js';
 import type { TrustLevel } from '../../../system/trust/types.js';

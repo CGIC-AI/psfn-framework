@@ -9,7 +9,7 @@ import type { Contact } from '../../../core/contacts/types.js';
 import { resolvePreferredContactName } from '../../../core/contacts/preferred-name.js';
 import type { PostTurnActionRuntime } from '../../../core/agent/post-turn-action-runtime.js';
 import type { MemoryProvider } from '../../../core/agent/contracts.js';
-import type { IntakeScreeningService } from '../../../core/cogsec/intake/screening.js';
+import type { IntakeScreeningService } from '../../../shared/contracts/intake-screening-port.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import {
   buildSessionMetadataWithIntakeScreening,

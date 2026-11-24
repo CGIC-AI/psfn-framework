@@ -66,7 +66,7 @@ import {
   type FreeTimeActivityPort,
 } from './free-time-activity.js';
 import type { FreeTimeReturnPolicy, FreeTimeWorkspace } from './free-time-workspace-resolver.js';
-import type { DisclosureDestination, DisclosureLineage } from '../cogsec/disclosure/index.js';
+import type { DisclosureDestination, DisclosureLineage } from '../cogsec/disclosure/contracts.js';
 import { projectReturnNoteEvidence } from './return-note-projection.js';
 import {
   returnPolicyToDisclosureDestination,

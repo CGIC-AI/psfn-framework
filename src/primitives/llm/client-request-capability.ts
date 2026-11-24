@@ -34,7 +34,7 @@ import { captureProviderWirePayload } from './wire-payload-capture.js';
 import {
   envCredential,
   resolveOptionalCredentialReference,
-} from '../../boundary/custody/credential-vault.js';
+} from '../../shared/contracts/credential-contracts.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { resolveExplicitToolContract } from './explicit-tool-request.js';
 import type {

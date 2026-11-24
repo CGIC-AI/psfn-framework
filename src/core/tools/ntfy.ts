@@ -22,11 +22,11 @@ import {
   resolveOptionalEnvCredential,
   type CredentialVaultPort,
 } from '../../shared/contracts/credential-contracts.js';
-import type { NotificationPort } from '../../boundary/gateway/notification-port.js';
+import type { NotificationPort } from '../../shared/contracts/notification-port.js';
 import {
   normalizeNotificationSenderMetadata,
   type NotificationSenderMetadata,
-} from '../../boundary/gateway/notification-sender.js';
+} from '../../shared/contracts/notification-port.js';
 import { textResult, textResultWithError } from './results.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
@@ -70,7 +70,7 @@ const SYSTEM_APPROVAL_REQUEST_SENDER = Object.freeze({
   provenance: 'system.approval.request',
 } satisfies NotificationSenderMetadata);
 
-export type { NotificationPort } from '../../boundary/gateway/notification-port.js';
+export type { NotificationPort } from '../../shared/contracts/notification-port.js';
 
 export type NotifyAction = 'brief' | 'send' | 'initiate_companion' | 'send_companion'
   | 'approval_request' | 'clarify' | 'list_dyads'

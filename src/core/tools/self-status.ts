@@ -23,7 +23,7 @@ import {
 import type { AdaptiveToolRuntimeState } from '../agent/adaptive-tools-telemetry.js';
 import type { RuntimeToolCatalogSnapshot } from '../agent/tool-catalog.js';
 import type { ObserverEvalSidecarHealthSnapshot } from '../eval/observer-sidecar/types.js';
-import type { RuntimeServiceHealthStatus } from '../../operator/tool-health/types.js';
+import type { RuntimeServiceHealthStatus } from '../../shared/contracts/runtime-service-health.js';
 import { buildSelfDiagnosisReport, type SelfDiagnosisDeps } from './self-diagnosis.js';
 import type { ToolConformanceRunResult } from '../agent/tool-conformance/types.js';
 import { textResult, textResultWithError } from './results.js';

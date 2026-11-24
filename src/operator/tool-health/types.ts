@@ -1,8 +1,5 @@
-export type RuntimeServiceHealthStatus =
-  | 'healthy'
-  | 'degraded'
-  | 'unavailable'
-  | 'not_applicable';
+import type { RuntimeServiceHealthStatus } from '../../shared/contracts/runtime-service-health.js';
+export type { RuntimeServiceHealthStatus } from '../../shared/contracts/runtime-service-health.js';
 
 export type RuntimeServiceId =
   | 'gateway'

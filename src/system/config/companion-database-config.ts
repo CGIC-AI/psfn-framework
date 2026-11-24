@@ -1,4 +1,4 @@
-import type { CredentialVaultPort } from '../../boundary/custody/credential-vault.js';
+import type { CredentialVaultPort } from '../../shared/contracts/credential-contracts.js';
 import { parseExactPostgresCredential } from '../../shared/utils/postgres-credential.js';
 import type {
   ResolvedCompanionFleetEntry,

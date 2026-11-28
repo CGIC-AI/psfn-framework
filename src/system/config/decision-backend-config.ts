@@ -86,6 +86,15 @@ interface JevDecisionSettings {
    * Jev calls (the site answers locally) rather than risk unknown spend.
    */
   pricing: JevDecisionPricing | null;
+  /**
+   * Per-companion ceiling on remote decision spend for one UTC day, in USD.
+   * Before dispatch the gateway adds the call's worst-case price to the
+   * companion's Jev spend already ledgered today; a call that would cross the
+   * ceiling is refused (the site answers locally) and a health event reports
+   * it once per companion per day. Requires `pricing`, so every call has a
+   * known worst case. Null means no Jev-specific ceiling.
+   */
+  dailyBudgetUsd: number | null;
 }
 
 export interface JevDecisionPricing {
@@ -103,7 +112,7 @@ export interface DecisionBackendSettings {
 }
 
 const DECISION_BACKEND_KEYS = ['mode', 'localQuestionMode', 'jev', 'sites'] as const;
-const JEV_KEYS = ['model', 'expectedSnapshot', 'timeoutMs', 'maxRequestChars', 'pricing'] as const;
+const JEV_KEYS = ['model', 'expectedSnapshot', 'timeoutMs', 'maxRequestChars', 'pricing', 'dailyBudgetUsd'] as const;
 const JEV_PRICING_KEYS = ['inputPer1MUsd', 'outputPer1MUsd', 'maxOutputTokens'] as const;
 const SITE_KEYS = ['mode', 'enabled', 'threshold', 'topN', 'latencyBudgetMs', 'blendWeight'] as const;
 
@@ -130,6 +139,7 @@ export function createDefaultDecisionBackendSettings(): DecisionBackendSettings 
       timeoutMs: 1_500,
       maxRequestChars: 96_000,
       pricing: null,
+      dailyBudgetUsd: null,
     },
     sites: {},
   };
@@ -175,6 +185,11 @@ function normalizeJevSettings(value: unknown, fieldPath: string): JevDecisionSet
     }
     expectedSnapshot = value.expectedSnapshot;
   }
+  const pricing = normalizeJevPricing(value.pricing, `${fieldPath}.pricing`);
+  const dailyBudgetUsd = normalizeJevDailyBudget(value.dailyBudgetUsd, `${fieldPath}.dailyBudgetUsd`);
+  if (dailyBudgetUsd !== null && pricing === null) {
+    fail(`${fieldPath}.dailyBudgetUsd`, 'requires jev.pricing so every call has a known worst-case price');
+  }
   return {
     model: value.model,
     expectedSnapshot,
@@ -184,8 +199,17 @@ function normalizeJevSettings(value: unknown, fieldPath: string): JevDecisionSet
       `${fieldPath}.maxRequestChars`,
       DECISION_BACKEND_RANGES.maxRequestChars,
     ),
-    pricing: normalizeJevPricing(value.pricing, `${fieldPath}.pricing`),
+    pricing,
+    dailyBudgetUsd,
   };
+}
+
+function normalizeJevDailyBudget(value: unknown, fieldPath: string): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    fail(fieldPath, 'expected a finite USD amount >= 0 or null');
+  }
+  return value;
 }
 
 function expectRate(value: unknown, fieldPath: string): number {

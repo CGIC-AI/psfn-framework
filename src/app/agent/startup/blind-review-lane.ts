@@ -64,7 +64,9 @@ export interface BlindReviewLaneRuntime {
 /**
  * Compose the lane, or return null with a loud reason.
  *
- * Disabled is `info` — it is the default and the operator chose it. A missing
+ * Disabled is `info` — the fresh-install seed enables the reviewer
+ * (psfn-framework-ik47b.1), so a disabled lane is an owner choice or an owner
+ * file that predates the block (the code default stays off). A missing
  * database URL while the reviewer is ENABLED is `error`: the operator asked for
  * a durable review window and cannot have one, and silence there would look
  * exactly like a working reviewer that never finds anything.

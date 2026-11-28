@@ -296,7 +296,8 @@ describe('ReflectionPolicyStore', () => {
     const weekly = policy.templates.find(t => t.id === 'weekly-review');
     expect(weekly?.mode).toBe('deliberation');
     expect(weekly?.deliberation?.maxRounds).toBe(3);
-    expect(weekly?.deliberation?.maxTotalTokens).toBe(14_000);
+    expect(weekly?.deliberation?.maxTotalTokens).toBe(280_000);
+    expect(weekly?.deliberation?.maxWallTimeMs).toBe(1_350_000);
     expect(weekly?.internalStateInput).toBe(true);
     expect(weekly?.cadence).toEqual({
       kind: 'weekly',

@@ -1,9 +1,7 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { rmSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Context } from '@earendil-works/pi-ai';
-import type { CanonicalModelRegistry, CorrelationMetadata } from '../../../shared/contracts/runtime.js';
+import type { CorrelationMetadata } from '../../../shared/contracts/runtime.js';
 import {
   sanitizeCoreSubstrateConfig,
   type SubstrateConfig,
@@ -11,7 +9,11 @@ import {
 import { LLMClient } from '../../../primitives/llm/client.js';
 import { PiProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
-import { createEnvCredentialVault, envCredential } from '../../../boundary/custody/credential-vault.js';
+import {
+  captureWire,
+  makeReasoningWireConfig,
+  reasoningWireRegistry,
+} from '../../../test-support/reasoning-wire.js';
 import { buildLLMWorkSpec, completeWithWorkSpec } from '../../../primitives/llm/work-spec.js';
 import { resolveRoutingCandidates } from '../../../primitives/llm/routing.js';
 import { resolveCandidates as resolveHintedCandidates } from '../../../primitives/llm/model-hint-routing.js';
@@ -29,76 +31,12 @@ afterEach(() => {
   while (tempDirs.length > 0) rmSync(tempDirs.pop()!, { recursive: true, force: true });
 });
 
-function registry(primary: { model?: string; tuning?: Record<string, unknown> } = {}): CanonicalModelRegistry {
-  return {
-    schemaVersion: 1,
-    models: [
-      {
-        id: 'primary',
-        rank: 100,
-        identity: { provider: 'openrouter', model: primary.model ?? 'z-ai/glm-5', source: { type: 'openrouter' } },
-        purposes: [{ purpose: 'chat', primary: true }],
-        capabilities: { maxOutputTokens: 16384, contextWindow: 128000 },
-        tuning: { maxOutputTokens: 16384, ...primary.tuning },
-      },
-      {
-        id: 'extraction',
-        rank: 80,
-        identity: { provider: 'openrouter', model: 'deepseek/deepseek-v3.2', source: { type: 'openrouter' } },
-        purposes: [
-          { purpose: 'background', primary: true },
-          { purpose: 'memory', primary: true },
-        ],
-        capabilities: { maxOutputTokens: 8192, contextWindow: 128000 },
-        tuning: { maxOutputTokens: 8192 },
-      },
-    ],
-  };
-}
+const registry = reasoningWireRegistry;
 
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
-  const dataDir = mkdtempSync(join(tmpdir(), 'psfn-reasoning-wire-'));
-  tempDirs.push(dataDir);
-  return {
-    primaryModel: 'z-ai/glm-5',
-    primaryProvider: 'openrouter',
-    openRouterApiBaseUrl: 'https://openrouter.ai/api/v1',
-    openRouterApiKeyRef: envCredential('OPENROUTER_API_KEY'),
-    credentialVault: createEnvCredentialVault({ OPENROUTER_API_KEY: 'test-openrouter-key' }),
-    extractionModel: 'deepseek/deepseek-v3.2',
-    extractionProvider: 'openrouter',
-    primaryMaxTokens: 4096,
-    extractionMaxTokens: 2048,
-    discordToken: '',
-    discordBotId: '',
-    characterCardPath: '',
-    dataDir,
-    databasePath: join(dataDir, 'test.db'),
-    extractionInterval: 5,
-    maintenanceIntervalMs: 300_000,
-    defaultContextWindow: 128_000,
-    extractionThresholdPct: 30,
-    compactionThresholdPct: 70,
-    modelRegistry: registry(),
-    ...overrides,
-  } as SubstrateConfig;
-}
-
-const SSE_DONE = [
-  `data: ${JSON.stringify({ id: 'gen-1', choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: null }] })}`,
-  `data: ${JSON.stringify({ id: 'gen-1', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 } })}`,
-  'data: [DONE]',
-  '',
-].join('\n\n');
-
-/** Stub only the network: every provider request body is captured as sent. */
-function captureWire(): Array<Record<string, unknown>> {
-  const bodies: Array<Record<string, unknown>> = [];
-  vi.stubGlobal('fetch', vi.fn(async (_url: unknown, init?: { body?: unknown }) => {
-    bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
-    return new Response(SSE_DONE, { status: 200, headers: { 'content-type': 'text/event-stream' } });
-  }));
-  return bodies;
+  const config = makeReasoningWireConfig(overrides);
+  tempDirs.push(config.dataDir);
+  return config;
 }
 
 function agentTurnContext(channelId: string, extra: Partial<CorrelationMetadata> = {}): Partial<CorrelationMetadata> {

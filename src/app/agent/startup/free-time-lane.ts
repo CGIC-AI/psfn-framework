@@ -227,6 +227,7 @@ export function registerFreeTimeLane(deps: FreeTimeLaneDeps): void {
     // The choice is the start of the companion's own time: it runs on the
     // free-time reasoning lane (psfn-framework-xzt46).
     llmProvider: withLaneReasoningEffort(llmProvider, agentLoop.getReasoningEffortRuntime()),
+    reasoningEffort: agentLoop.getReasoningEffortRuntime(),
     resolver: freeTimeResolver,
     restWindowPolicy: freeTimeRestWindowPolicy,
     listResumableProjects: (): FreeTimeProjectSummary[] => personalProjects.listProjects()

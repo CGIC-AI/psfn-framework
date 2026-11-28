@@ -157,6 +157,15 @@ export class ReasoningEffortRuntime {
   }
 
   /**
+   * The per-call output budget of a purpose's routed primary: owner tuning
+   * bounded by catalogue capability (resolveCompletionTokenBudget). Reasoning
+   * tokens share it, so own-time callers size their run budgets from it.
+   */
+  completionBudget(purpose: RoutingPurpose): number | undefined {
+    return this.options.resolvePurposeCandidate(purpose)?.maxTokens;
+  }
+
+  /**
    * A model hint carrying the lane effort for a direct (non-turn) own-time
    * call, decided against the purpose's routed primary; undefined off-lane or
    * when that model cannot reason.

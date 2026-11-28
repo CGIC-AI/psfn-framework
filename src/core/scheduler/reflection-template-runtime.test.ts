@@ -539,8 +539,8 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
         mode: 'background_bounded',
         budget: {
           maxRounds: 3,
-          maxTotalTokens: 14000,
-          maxWallTimeMs: 90000,
+          maxTotalTokens: 280_000,
+          maxWallTimeMs: 1_350_000,
         },
         exit: {
           reason: 'max_rounds',
@@ -898,8 +898,8 @@ describe('createReflectionTemplateRuntime reflection metacognition journal', () 
     expect(metacognitionEntry.deliberation?.episode).toMatchObject({
       budget: {
         maxRounds: 3,
-        maxTotalTokens: 10000,
-        maxWallTimeMs: 60000,
+        maxTotalTokens: 200_000,
+        maxWallTimeMs: 900_000,
       },
       exit: {
         reason: 'max_rounds',

@@ -96,7 +96,16 @@ import {
   resolveInternalStateContext,
 } from './reflection-template-runtime/internal-state-prompt.js';
 import { buildReflectionStarterPromptBundle } from './reflection-template-runtime/reflection-starter-prompt.js';
-import { runExperientialTemplateDeliberation } from './reflection-template-runtime/experiential-deliberation.js';
+import {
+  experientialDeliberationShape,
+  runExperientialTemplateDeliberation,
+} from './reflection-template-runtime/experiential-deliberation.js';
+import {
+  describeOwnTimeDeliberationCut,
+  resolveOwnTimeDeliberationCaps,
+  voiceDeliberationShape,
+  type OwnTimeDeliberationCaps,
+} from './reflection-template-runtime/own-time-deliberation-caps.js';
 import {
   ReflectionTemplateLoopGuardError,
   buildUnsupportedReflectionSupportFlags,
@@ -492,6 +501,7 @@ export function createReflectionTemplateRuntime(
     reflectionChannelId: string,
     processId: string,
     authoritativeSystemPrompt: string,
+    ownTimeCaps: OwnTimeDeliberationCaps,
   ) => ({
     episode: {
       kind: 'maintenance_reflection' as const,
@@ -504,12 +514,8 @@ export function createReflectionTemplateRuntime(
       ...(template.deliberation?.maxRounds !== undefined
         ? { maxRounds: template.deliberation.maxRounds }
         : {}),
-      ...(template.deliberation?.maxTotalTokens !== undefined
-        ? { maxTotalTokens: template.deliberation.maxTotalTokens }
-        : {}),
-      ...(template.deliberation?.maxWallTimeMs !== undefined
-        ? { maxWallTimeMs: template.deliberation.maxWallTimeMs }
-        : {}),
+      maxTotalTokens: ownTimeCaps.maxTotalTokens,
+      maxWallTimeMs: ownTimeCaps.maxWallTimeMs,
     },
     cost: {
       ...(template.deliberation?.inputUsdPerMillionTokens !== undefined
@@ -762,16 +768,49 @@ export function createReflectionTemplateRuntime(
       );
     }
 
-    if (isExperientialDeliberationTemplate(template)) {
-      return runExperientialTemplateDeliberation({
+    // Own time at medium reasoning or more: the run caps are sized from the
+    // routed per-call budgets so a cap cannot starve the result, and a cap
+    // that still stops the run is reported (psfn-framework-cdqin).
+    const experiential = isExperientialDeliberationTemplate(template);
+    const shape = experiential ? experientialDeliberationShape(template) : voiceDeliberationShape(template);
+    const ownTime = resolveOwnTimeDeliberationCaps({
+      template,
+      shape,
+      inputTexts: [authoritativeSystemPrompt, prompt],
+      ...(runtimeOptions.reasoningEffort
+        ? { completionBudget: purpose => runtimeOptions.reasoningEffort?.completionBudget(purpose) }
+        : {}),
+    });
+    for (const raised of ownTime.raised) {
+      log.info('Reflection deliberation cap raised to the own-time reasoning floor', {
+        templateId: template.id,
+        ...raised,
+      });
+    }
+    const reportCut = (result: DeliberationResult): void => {
+      const cut = describeOwnTimeDeliberationCut(result, shape);
+      if (!cut) return;
+      log.info('Reflection deliberation stopped by a cap', {
+        templateId: template.id,
+        ...cut,
+        stopReason: result.stopReason,
+        rounds: result.rounds.length,
+      });
+    };
+
+    if (experiential) {
+      const { deliberation, ...execution } = await runExperientialTemplateDeliberation({
         ...(deliberationProvider ? { llmProvider: deliberationProvider } : {}),
         template,
         prompt,
         authoritativeSystemPrompt,
         correlation: buildReflectionDeliberationCorrelation(source, reflectionChannelId, processId),
         logger: log,
+        caps: ownTime.caps,
         toDeliberationMetadata,
       });
+      reportCut(deliberation);
+      return execution;
     }
 
     if (!deliberationProvider) {
@@ -786,8 +825,10 @@ export function createReflectionTemplateRuntime(
         reflectionChannelId,
         processId,
         authoritativeSystemPrompt,
+        ownTime.caps,
       ),
     );
+    reportCut(result);
     return {
       reflection: result.output,
       metadata: toDeliberationMetadata(result),

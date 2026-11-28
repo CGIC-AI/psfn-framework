@@ -42,6 +42,13 @@ export interface FreeTimeChooserSettings {
    * S12.8). Persisted behind `RestWindowPolicyPort`.
    */
   silencePersistenceMinutes: number;
+  /**
+   * Wall-clock ceiling for the chooser call when it carries a reasoning effort
+   * (the free-time lane reasons at medium or more by default). Reasoning
+   * tokens precede the short choice, so the answer-sized `chooserDeadlineMs`
+   * would time a reasoning call out into degradation (psfn-framework-cdqin).
+   */
+  chooserReasoningDeadlineMs: number;
 }
 
 export function createDefaultFreeTimeChooserSettings(): FreeTimeChooserSettings {
@@ -52,6 +59,7 @@ export function createDefaultFreeTimeChooserSettings(): FreeTimeChooserSettings 
     projectListCap: 8,
     projectMetadataChars: 120,
     silencePersistenceMinutes: 180,
+    chooserReasoningDeadlineMs: 300_000,
   };
 }
 
@@ -105,6 +113,7 @@ export function parseFreeTimeChooserSettings(
       'projectListCap',
       'projectMetadataChars',
       'silencePersistenceMinutes',
+      'chooserReasoningDeadlineMs',
     ],
     fieldPath,
     { errorPrefix: FREE_TIME_CHOOSER_ERROR_PREFIX },
@@ -133,6 +142,10 @@ export function parseFreeTimeChooserSettings(
     silencePersistenceMinutes: chooserNonNegativeInteger(
       raw.silencePersistenceMinutes ?? defaults.silencePersistenceMinutes,
       `${fieldPath}.silencePersistenceMinutes`,
+    ),
+    chooserReasoningDeadlineMs: chooserPositiveInteger(
+      raw.chooserReasoningDeadlineMs ?? defaults.chooserReasoningDeadlineMs,
+      `${fieldPath}.chooserReasoningDeadlineMs`,
     ),
   };
 }

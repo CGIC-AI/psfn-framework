@@ -48,7 +48,8 @@ export function createDefaultFreeTimeChooserSettings(): FreeTimeChooserSettings 
   return {
     enabled: false,
     chooserDeadlineMs: 60_000,
-    chooserMaxOutputTokens: 1_024,
+    // Reasoning tokens count against this budget; the chosen project is short.
+    chooserMaxOutputTokens: 4_096,
     projectListCap: 8,
     projectMetadataChars: 120,
     silencePersistenceMinutes: 180,

@@ -141,7 +141,8 @@ export const DEFAULT_BLIND_REVIEWER_CONFIG: BlindReviewerConfig = {
   },
   cost: {
     maxReviewsPerRun: 2,
-    maxOutputTokens: 400,
+    // The verdict is tiny by contract; the rest is reasoning headroom.
+    maxOutputTokens: 2_048,
     deadlineMs: 60_000,
     costCeilingUsd: 0.25,
   },

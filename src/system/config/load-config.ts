@@ -109,9 +109,11 @@ const DEFAULT_CONTINUITY_MESSAGE_LIMIT = 10;
 const DEFAULT_SESSION_MIRROR_ENABLED = true;
 const DEFAULT_SESSION_MIRROR_MAX_CHARS = 220;
 const DEFAULT_SESSION_MIRROR_ACTIVE_WINDOW_MS = 1_800_000;
-const DEFAULT_THINK_MAX_TOKENS = 76_000;
-const DEFAULT_THINK_MAX_WALL_TIME_MS = 300_000;
-const DEFAULT_THINK_MAX_SUB_QUERIES = 24;
+// Bootstrap defaults match config/settings.seed.json, which raised the
+// workbench budget so bounded analyses can finish (8649328cb).
+const DEFAULT_THINK_MAX_TOKENS = 256_000;
+const DEFAULT_THINK_MAX_WALL_TIME_MS = 600_000;
+const DEFAULT_THINK_MAX_SUB_QUERIES = 60;
 // Mirrors DEFAULT_REPL_CONFIG.{executionTimeoutMs,outputTruncation} in
 // src/core/tools/analysis-workbench/types.ts — keep in lockstep.
 const DEFAULT_THINK_EXECUTION_TIMEOUT_MS = 5_000;

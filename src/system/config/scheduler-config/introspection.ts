@@ -27,9 +27,11 @@ export const DEFAULT_INTROSPECTION_AUDIT_CONFIG: IntrospectionAuditConfig = {
   maxCandidatesPerRun: 3,
   maxSourceChars: 4_000,
   minConfidence: 0.7,
-  estimatorMaxTokens: 500,
-  comparisonMaxTokens: 300,
-  reflectionMaxTokens: 300,
+  // The estimator reproduces a whole ordinary reply as JSON and the reflection
+  // is bounded at 2000 chars; reasoning tokens share each budget.
+  estimatorMaxTokens: 4_096,
+  comparisonMaxTokens: 2_048,
+  reflectionMaxTokens: 4_096,
 };
 
 export function validateIntrospectionAuditConfig(

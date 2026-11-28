@@ -282,7 +282,7 @@
     "freeTimeChooser": {
       "enabled": false,
       "chooserDeadlineMs": 60000,
-      "chooserMaxOutputTokens": 1024,
+      "chooserMaxOutputTokens": 4096,
       "projectListCap": 8,
       "projectMetadataChars": 120,
       "silencePersistenceMinutes": 180
@@ -411,9 +411,9 @@
     "maxCandidatesPerRun": 3,
     "maxSourceChars": 4000,
     "minConfidence": 0.7,
-    "estimatorMaxTokens": 500,
-    "comparisonMaxTokens": 300,
-    "reflectionMaxTokens": 300
+    "estimatorMaxTokens": 4096,
+    "comparisonMaxTokens": 2048,
+    "reflectionMaxTokens": 4096
   },
   "blindReviewer": {
     "enabled": false,
@@ -436,7 +436,7 @@
     },
     "cost": {
       "maxReviewsPerRun": 2,
-      "maxOutputTokens": 400,
+      "maxOutputTokens": 2048,
       "deadlineMs": 60000,
       "costCeilingUsd": 0.25
     },

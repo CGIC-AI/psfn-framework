@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { CanonicalModelPurpose, CanonicalModelRegistry, ModelRegistryEntry } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -142,6 +144,31 @@ function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
     ...overrides,
   };
 }
+
+describe('shipped model catalogue output budgets', () => {
+  const shipped = JSON.parse(
+    readFileSync(join(process.cwd(), 'config/models.seed.json'), 'utf8'),
+  ) as CanonicalModelRegistry;
+  const config = makeConfig({ modelRegistry: shipped });
+  const capabilityById = new Map(shipped.models.map(entry => [
+    entry.identity.model,
+    entry.capabilities?.maxOutputTokens,
+  ]));
+  // A long agentic turn or a dense extraction pass: reasoning plus a ~10k-token
+  // answer. The old seed cut it at 16384 (chat) and 8192 (background).
+  const longOutputTokens = 24_000;
+
+  it.each(['chat', 'background'] as const)(
+    'lets the primary %s slot emit a long output without exceeding provider capability',
+    (purpose) => {
+      const candidates = resolveRoutingCandidates(config, purpose);
+      expect(candidates[0]?.maxTokens).toBeGreaterThanOrEqual(longOutputTokens);
+      for (const candidate of candidates) {
+        expect(candidate.maxTokens).toBeLessThanOrEqual(capabilityById.get(candidate.model) ?? 0);
+      }
+    },
+  );
+});
 
 describe('resolveRoutingCandidates(background)', () => {
   it('skips disabled model registry entries', () => {

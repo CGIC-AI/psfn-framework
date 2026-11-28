@@ -7137,7 +7137,7 @@
     {
       "file": "src/faculties/memory/extraction/types.ts",
       "name": "DEFAULT_MAX_WRITES",
-      "value": "2"
+      "value": "12"
     },
     {
       "file": "src/faculties/memory/extraction/types.ts",
@@ -11712,7 +11712,7 @@
     {
       "file": "src/system/config/free-time-chooser-config.ts",
       "name": "createDefaultFreeTimeChooserSettings.chooserMaxOutputTokens",
-      "value": "1_024",
+      "value": "4_096",
       "form": "object-member",
       "note": "Canonical owner-file/schema metadata createDefaultFreeTimeChooserSettings.chooserMaxOutputTokens; the code literal defines validation, bootstrap, or Garden exposure for the owned JSON contract rather than a parallel runtime override."
     },
@@ -12096,7 +12096,7 @@
     {
       "file": "src/system/config/load-config.ts",
       "name": "DEFAULT_MEMORY_EXTRACTION_MAX_WRITES",
-      "value": "2"
+      "value": "12"
     },
     {
       "file": "src/system/config/load-config.ts",
@@ -12196,17 +12196,17 @@
     {
       "file": "src/system/config/load-config.ts",
       "name": "DEFAULT_THINK_MAX_SUB_QUERIES",
-      "value": "24"
+      "value": "60"
     },
     {
       "file": "src/system/config/load-config.ts",
       "name": "DEFAULT_THINK_MAX_TOKENS",
-      "value": "76_000"
+      "value": "256_000"
     },
     {
       "file": "src/system/config/load-config.ts",
       "name": "DEFAULT_THINK_MAX_WALL_TIME_MS",
-      "value": "300_000"
+      "value": "600_000"
     },
     {
       "file": "src/system/config/load-config.ts",
@@ -12838,7 +12838,7 @@
     {
       "file": "src/system/config/scheduler-config/blind-review.ts",
       "name": "DEFAULT_BLIND_REVIEWER_CONFIG.cost.maxOutputTokens",
-      "value": "400",
+      "value": "2_048",
       "form": "object-member",
       "note": "Canonical scheduler.json owner-file default for the passive Blind Reviewer (psfn-framework-yxz0z.3). Operators tune blindReviewer.* in scheduler.json and the lane reads the loaded owner value; this literal is the seed default the owner file is written from, never a value the lane consults directly."
     },
@@ -13083,14 +13083,14 @@
     {
       "file": "src/system/config/scheduler-config/introspection.ts",
       "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.comparisonMaxTokens",
-      "value": "300",
+      "value": "2_048",
       "form": "object-member",
       "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
     },
     {
       "file": "src/system/config/scheduler-config/introspection.ts",
       "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.estimatorMaxTokens",
-      "value": "500",
+      "value": "4_096",
       "form": "object-member",
       "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
     },
@@ -13139,7 +13139,7 @@
     {
       "file": "src/system/config/scheduler-config/introspection.ts",
       "name": "DEFAULT_INTROSPECTION_AUDIT_CONFIG.reflectionMaxTokens",
-      "value": "300",
+      "value": "4_096",
       "form": "object-member",
       "note": "Canonical scheduler.json owner-file default value relocated by aicg6.30 P3 domain split; seed/default literal preserved, not an operator-tunable policy constant."
     },

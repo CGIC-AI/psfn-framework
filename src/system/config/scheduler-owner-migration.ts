@@ -14,6 +14,9 @@ import {
   readPinnedRegularFile,
 } from '../../persistence/pinned-filesystem.js';
 import { canonicalOwnerFileMode } from './owner-file-modes.js';
+import { createDefaultFreeTimeChooserSettings } from './free-time-chooser-config.js';
+import { DEFAULT_BLIND_REVIEWER_CONFIG } from './scheduler-config/blind-review.js';
+import { DEFAULT_INTROSPECTION_AUDIT_CONFIG } from './scheduler-config/introspection.js';
 import {
   createDefaultParticipationAppraiserSettings,
   RETIRED_APPRAISAL_DEADLINE_MS,
@@ -55,13 +58,44 @@ export interface SchedulerOwnerMigrationResult {
 }
 
 /**
+ * Output budgets shipped for small non-reasoning models. Reasoning tokens count
+ * against each one, so the JSON answer was cut off before it was complete.
+ * Each `retired` value is the exact former seed value, a migration marker.
+ */
+const RETIRED_SMALL_MODEL_OUTPUT_BUDGETS: ReadonlyArray<{
+  path: readonly [string, ...string[]];
+  retired: number;
+  current: () => number;
+}> = [{
+  path: ['socialAutonomy', 'freeTimeChooser', 'chooserMaxOutputTokens'],
+  retired: 1_024,
+  current: () => createDefaultFreeTimeChooserSettings().chooserMaxOutputTokens,
+}, {
+  path: ['introspectionAudit', 'estimatorMaxTokens'],
+  retired: 500,
+  current: () => DEFAULT_INTROSPECTION_AUDIT_CONFIG.estimatorMaxTokens,
+}, {
+  path: ['introspectionAudit', 'comparisonMaxTokens'],
+  retired: 300,
+  current: () => DEFAULT_INTROSPECTION_AUDIT_CONFIG.comparisonMaxTokens,
+}, {
+  path: ['introspectionAudit', 'reflectionMaxTokens'],
+  retired: 300,
+  current: () => DEFAULT_INTROSPECTION_AUDIT_CONFIG.reflectionMaxTokens,
+}, {
+  path: ['blindReviewer', 'cost', 'maxOutputTokens'],
+  retired: 400,
+  current: () => DEFAULT_BLIND_REVIEWER_CONFIG.cost.maxOutputTokens,
+}];
+
+/**
  * psfn-framework-0eq2x: shipped defaults that proved wrong for real models.
  * An owner file still carrying EXACTLY the retired seed value never chose it —
  * it inherited it from the seed — so the migration moves it to the current
  * default. Any other operator value is left untouched.
  */
 const RETIRED_SCHEDULER_DEFAULTS: ReadonlyArray<{
-  path: readonly [string, string, string];
+  path: readonly [string, ...string[]];
   retired: number;
   current: () => number;
 }> = [{
@@ -73,19 +107,33 @@ const RETIRED_SCHEDULER_DEFAULTS: ReadonlyArray<{
   path: ['socialAutonomy', 'appraiser', 'appraisalMaxOutputTokens'],
   retired: RETIRED_APPRAISAL_MAX_OUTPUT_TOKENS,
   current: () => createDefaultParticipationAppraiserSettings().appraisalMaxOutputTokens,
-}];
+}, ...RETIRED_SMALL_MODEL_OUTPUT_BUDGETS];
+
+function upgradeRetiredValue(
+  block: Record<string, unknown>,
+  path: readonly string[],
+  retired: number,
+  current: number,
+): Record<string, unknown> | undefined {
+  const [key, ...rest] = path;
+  if (key === undefined) return undefined;
+  if (rest.length === 0) {
+    return block[key] === retired ? { ...block, [key]: current } : undefined;
+  }
+  const child = block[key];
+  if (!isRecord(child)) return undefined;
+  const upgraded = upgradeRetiredValue(child, rest, retired, current);
+  return upgraded ? { ...block, [key]: upgraded } : undefined;
+}
 
 function upgradeRetiredSchedulerDefaults(
   candidate: Record<string, unknown>,
   upgradedPaths: string[],
 ): void {
   for (const entry of RETIRED_SCHEDULER_DEFAULTS) {
-    const [outer, inner, leaf] = entry.path;
-    const outerBlock = candidate[outer];
-    if (!isRecord(outerBlock)) continue;
-    const innerBlock = outerBlock[inner];
-    if (!isRecord(innerBlock) || innerBlock[leaf] !== entry.retired) continue;
-    candidate[outer] = { ...outerBlock, [inner]: { ...innerBlock, [leaf]: entry.current() } };
+    const upgraded = upgradeRetiredValue(candidate, entry.path, entry.retired, entry.current());
+    if (!upgraded) continue;
+    Object.assign(candidate, upgraded);
     upgradedPaths.push(entry.path.join('.'));
   }
 }

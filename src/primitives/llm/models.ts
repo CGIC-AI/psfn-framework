@@ -27,8 +27,8 @@ export interface OpenAICompatibleEndpointModelConfig {
   routeLabel?: string;
   /** Context window size in tokens */
   contextWindow?: number;
-  /** Max output tokens */
-  maxTokens?: number;
+  /** Max output tokens, resolved from the catalogue entry's tuning/capability. */
+  maxTokens: number;
   /** Supports reasoning/thinking blocks */
   reasoning?: boolean;
   /** Supports image input */
@@ -126,7 +126,7 @@ export function createOpenAICompatibleEndpointModel(
       cacheWrite: config.cost?.cacheWritePer1MUsd ?? 0,
     },
     contextWindow: config.contextWindow ?? 128_000,
-    maxTokens: config.maxTokens ?? 4096,
+    maxTokens: config.maxTokens,
     compat: {
       supportsStore: false,
       maxTokensField: 'max_tokens',

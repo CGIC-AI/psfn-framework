@@ -37,11 +37,11 @@
         }
       ],
       "capabilities": {
-        "maxOutputTokens": 16384,
+        "maxOutputTokens": 131072,
         "contextWindow": 128000
       },
       "tuning": {
-        "maxOutputTokens": 16384
+        "maxOutputTokens": 32768
       }
     },
     {
@@ -73,11 +73,11 @@
         }
       ],
       "capabilities": {
-        "maxOutputTokens": 8192,
+        "maxOutputTokens": 147456,
         "contextWindow": 128000
       },
       "tuning": {
-        "maxOutputTokens": 8192
+        "maxOutputTokens": 32768
       }
     },
     {
@@ -89,8 +89,8 @@
         "source": { "type": "openrouter" }
       },
       "purposes": [{ "purpose": "chat", "primary": false }],
-      "capabilities": { "maxOutputTokens": 4096, "contextWindow": 256000 },
-      "tuning": { "maxOutputTokens": 4096 }
+      "capabilities": { "maxOutputTokens": 131072, "contextWindow": 256000 },
+      "tuning": { "maxOutputTokens": 32768 }
     },
     {
       "id": "glm-5.1",
@@ -101,8 +101,8 @@
         "source": { "type": "openrouter" }
       },
       "purposes": [{ "purpose": "chat", "primary": false }],
-      "capabilities": { "maxOutputTokens": 16384, "contextWindow": 128000 },
-      "tuning": { "maxOutputTokens": 16384 }
+      "capabilities": { "maxOutputTokens": 131072, "contextWindow": 128000 },
+      "tuning": { "maxOutputTokens": 32768 }
     },
     {
       "id": "gemini-3.1-flash",
@@ -132,8 +132,8 @@
         "source": { "type": "openrouter" }
       },
       "purposes": [{ "purpose": "chat", "primary": false }],
-      "capabilities": { "maxOutputTokens": 8192, "contextWindow": 128000 },
-      "tuning": { "maxOutputTokens": 8192 }
+      "capabilities": { "maxOutputTokens": 147456, "contextWindow": 128000 },
+      "tuning": { "maxOutputTokens": 32768 }
     },
     {
       "id": "minimax-m2.7",
@@ -144,8 +144,8 @@
         "source": { "type": "openrouter" }
       },
       "purposes": [{ "purpose": "chat", "primary": false }],
-      "capabilities": { "maxOutputTokens": 8192, "contextWindow": 100000 },
-      "tuning": { "maxOutputTokens": 8192 }
+      "capabilities": { "maxOutputTokens": 131072, "contextWindow": 100000 },
+      "tuning": { "maxOutputTokens": 32768 }
     },
     {
       "id": "mimo-v2-pro",
@@ -168,8 +168,8 @@
         "source": { "type": "openrouter" }
       },
       "purposes": [{ "purpose": "chat", "primary": false }],
-      "capabilities": { "maxOutputTokens": 8192, "contextWindow": 131072 },
-      "tuning": { "maxOutputTokens": 8192 }
+      "capabilities": { "maxOutputTokens": 81920, "contextWindow": 131072 },
+      "tuning": { "maxOutputTokens": 32768 }
     },
     {
       "id": "gemma-4-31b-it",
@@ -180,8 +180,8 @@
         "source": { "type": "openrouter" }
       },
       "purposes": [{ "purpose": "chat", "primary": false }],
-      "capabilities": { "maxOutputTokens": 8192, "contextWindow": 128000 },
-      "tuning": { "maxOutputTokens": 8192 }
+      "capabilities": { "maxOutputTokens": 16384, "contextWindow": 128000 },
+      "tuning": { "maxOutputTokens": 16384 }
     },
     {
       "id": "gpt-5.4-nano",
@@ -192,8 +192,8 @@
         "source": { "type": "openrouter" }
       },
       "purposes": [{ "purpose": "chat", "primary": false }],
-      "capabilities": { "maxOutputTokens": 8192, "contextWindow": 128000 },
-      "tuning": { "maxOutputTokens": 8192 }
+      "capabilities": { "maxOutputTokens": 128000, "contextWindow": 128000 },
+      "tuning": { "maxOutputTokens": 32768 }
     },
     {
       "id": "shared-router-exacto-example",

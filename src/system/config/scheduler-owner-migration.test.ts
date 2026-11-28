@@ -32,6 +32,9 @@ import {
 import { DEFAULT_HEALTH_DETECTORS_CONFIG } from './scheduler-config/health-detectors.js';
 import { DEFAULT_HUMAN_ESCALATION_CONFIG } from './scheduler-config/human-escalation.js';
 import { DEFAULT_FLEET_STAGGER_CONFIG } from './scheduler-config/fleet-stagger.js';
+import { DEFAULT_BLIND_REVIEWER_CONFIG } from './scheduler-config/blind-review.js';
+import { DEFAULT_INTROSPECTION_AUDIT_CONFIG } from './scheduler-config/introspection.js';
+import { createDefaultFreeTimeChooserSettings } from './free-time-chooser-config.js';
 
 const fixturePath = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -475,6 +478,50 @@ describe('migrateLegacySchedulerOwner', () => {
     withAppraiser(12_000, 600);
     expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).not.toHaveProperty('upgradedPaths');
     expect(maxTokensOnDisk()).toBe(600);
+  });
+
+  it('moves inherited small-model output budgets to the current defaults and keeps chosen ones', () => {
+    // The pre-bundled fixture carries the old seeded 500/300/300 introspection
+    // budgets and the 400-token blind-review budget.
+    const { dataDir, filePath } = prepareOwner();
+    const first = migrateLegacySchedulerOwner({ dataDir, apply: true });
+    expect(first.upgradedPaths).toEqual(expect.arrayContaining([
+      'introspectionAudit.estimatorMaxTokens',
+      'introspectionAudit.comparisonMaxTokens',
+      'introspectionAudit.reflectionMaxTokens',
+      'blindReviewer.cost.maxOutputTokens',
+    ]));
+    const loaded = loadSchedulerConfig(dataDir);
+    expect(loaded.introspectionAudit).toMatchObject({
+      estimatorMaxTokens: DEFAULT_INTROSPECTION_AUDIT_CONFIG.estimatorMaxTokens,
+      comparisonMaxTokens: DEFAULT_INTROSPECTION_AUDIT_CONFIG.comparisonMaxTokens,
+      reflectionMaxTokens: DEFAULT_INTROSPECTION_AUDIT_CONFIG.reflectionMaxTokens,
+    });
+    expect(loaded.blindReviewer?.cost.maxOutputTokens)
+      .toBe(DEFAULT_BLIND_REVIEWER_CONFIG.cost.maxOutputTokens);
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({ status: 'not_needed' });
+
+    const writeChooser = (chooserMaxOutputTokens: number, estimatorMaxTokens: number) => {
+      const owner = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
+      const socialAutonomy = (owner.socialAutonomy ?? {}) as Record<string, unknown>;
+      owner.socialAutonomy = {
+        ...socialAutonomy,
+        freeTimeChooser: { ...createDefaultFreeTimeChooserSettings(), chooserMaxOutputTokens },
+      };
+      owner.introspectionAudit = {
+        ...(owner.introspectionAudit as Record<string, unknown>),
+        estimatorMaxTokens,
+      };
+      writeFileSync(filePath, `${JSON.stringify(owner, null, 2)}\n`, 'utf8');
+    };
+    writeChooser(1_024, 777);
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true }).upgradedPaths)
+      .toEqual(['socialAutonomy.freeTimeChooser.chooserMaxOutputTokens']);
+    const after = loadSchedulerConfig(dataDir);
+    expect(after.socialAutonomy.freeTimeChooser.chooserMaxOutputTokens)
+      .toBe(createDefaultFreeTimeChooserSettings().chooserMaxOutputTokens);
+    // An operator-chosen value is never rewritten.
+    expect(after.introspectionAudit?.estimatorMaxTokens).toBe(777);
   });
 
   it('plans then removes only the retired artifactLifecycle block, idempotently (cziwg)', () => {

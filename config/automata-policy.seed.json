@@ -55,9 +55,9 @@
       "maxEvidenceRefsPerReview": 20,
       "maxReviewInputChars": 24000,
       "maxDecisionReasonChars": 2000,
-      "maxOutputTokens": 1200,
+      "maxOutputTokens": 8192,
       "deadlineMs": 120000,
-      "tokenCeiling": 4000,
+      "tokenCeiling": 20000,
       "costCeilingUsd": 0.25
     },
     "lessonProposal": {

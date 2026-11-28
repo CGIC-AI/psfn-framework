@@ -158,16 +158,22 @@ function registerConfiguredProviders(models: MutableModels, config: ProviderRunt
         if (!entry.apiKind) {
           throw new Error(`Configured model "${entry.id}" is missing apiKind`);
         }
+        const maxTokens = resolveCompletionTokenBudget({
+          configuredMaxOutputTokens: entry.tuning?.maxOutputTokens,
+          capabilityMaxOutputTokens: entry.capabilities?.maxOutputTokens,
+        });
+        if (maxTokens === undefined) {
+          throw new Error(
+            `Configured model "${entry.id}" declares neither tuning.maxOutputTokens nor capabilities.maxOutputTokens`,
+          );
+        }
         return createOpenAICompatibleEndpointModel({
           baseUrl: apiBaseUrl,
           modelId: entry.identity.model,
           provider: provider.id,
           routeLabel: provider.label ?? provider.id,
           contextWindow: entry.tuning?.contextWindow ?? entry.capabilities?.contextWindow,
-          maxTokens: resolveCompletionTokenBudget({
-            configuredMaxOutputTokens: entry.tuning?.maxOutputTokens,
-            capabilityMaxOutputTokens: entry.capabilities?.maxOutputTokens,
-          }),
+          maxTokens,
           reasoning: entry.capabilities?.supportsReasoning === true
             && entry.tuning?.thinkingEnabled !== false,
           supportsVision: entry.capabilities?.supportsVision === true,

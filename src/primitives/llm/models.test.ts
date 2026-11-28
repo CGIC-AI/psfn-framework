@@ -11,6 +11,7 @@ describe('createOpenAICompatibleEndpointModel', () => {
       baseUrl: 'http://localhost:4000/v1',
       modelId: 'z-ai/glm-5',
       provider: 'shared-router',
+      maxTokens: 8192,
     });
 
     expect(model.id).toBe('z-ai/glm-5');
@@ -24,6 +25,7 @@ describe('createOpenAICompatibleEndpointModel', () => {
       baseUrl: 'http://localhost:4000/v1',
       modelId: 'test-model',
       provider: 'shared-router',
+      maxTokens: 8192,
     });
 
     expect(model.compat).toBeDefined();
@@ -44,15 +46,16 @@ describe('createOpenAICompatibleEndpointModel', () => {
     expect(model.contextWindow).toBe(200_000);
   });
 
-  it('defaults contextWindow to 128k and maxTokens to 4096', () => {
+  it('defaults contextWindow to 128k and carries the resolved maxTokens', () => {
     const model = createOpenAICompatibleEndpointModel({
       baseUrl: 'http://localhost:4000/v1',
       modelId: 'unknown-model',
       provider: 'shared-router',
+      maxTokens: 8192,
     });
 
     expect(model.contextWindow).toBe(128_000);
-    expect(model.maxTokens).toBe(4096);
+    expect(model.maxTokens).toBe(8192);
   });
 
   it('uses caller-provided token and context values', () => {
@@ -74,12 +77,13 @@ describe('createOpenAICompatibleEndpointModel', () => {
       baseUrl: 'http://localhost:4000/v1',
       modelId: 'some/new-model',
       provider: 'shared-router',
+      maxTokens: 8192,
     });
 
     expect(model.id).toBe('some/new-model');
     expect(model.api).toBe('openai-completions');
     expect(model.contextWindow).toBe(128_000);
-    expect(model.maxTokens).toBe(4096);
+    expect(model.maxTokens).toBe(8192);
   });
 
   it('can preserve routed vision capability when the registry marks the model as vision-capable', () => {
@@ -100,6 +104,7 @@ describe('createOpenAICompatibleEndpointModel', () => {
       baseUrl: 'https://router.example.test/v1',
       modelId: 'openrouter/z-ai/glm-4.5v',
       provider: 'shared-router',
+      maxTokens: 8192,
       reasoning: true,
       supportsVision: true,
     });
@@ -112,6 +117,7 @@ describe('createOpenAICompatibleEndpointModel', () => {
       baseUrl: 'https://api.z.ai/api/paas/v4',
       modelId: 'zai-code/zai/glm-5.2',
       provider: 'vega-testing',
+      maxTokens: 8192,
     });
 
     expect((model.compat as { zaiToolStream?: boolean } | undefined)?.zaiToolStream).toBe(true);
@@ -122,6 +128,7 @@ describe('createOpenAICompatibleEndpointModel', () => {
       baseUrl: 'https://router.example.test/v1',
       modelId: 'z-ai/glm-5.2',
       provider: 'shared-router',
+      maxTokens: 8192,
     });
 
     expect((model.compat as { zaiToolStream?: boolean } | undefined)?.zaiToolStream).toBeUndefined();
@@ -134,6 +141,7 @@ describe('resolveSystemRoleCapabilityMetadata', () => {
       baseUrl: 'http://localhost:4000/v1',
       modelId: 'test-model',
       provider: 'shared-router',
+      maxTokens: 8192,
       reasoning: true,
     });
 
@@ -150,6 +158,7 @@ describe('resolveSystemRoleCapabilityMetadata', () => {
       baseUrl: 'http://localhost:4000/v1',
       modelId: 'test-model',
       provider: 'shared-router',
+      maxTokens: 8192,
       reasoning: false,
     });
 
@@ -186,6 +195,7 @@ describe('resolveSystemRoleCapabilityMetadata', () => {
         baseUrl: endpoint.baseUrl,
         modelId: 'test-model',
         provider: endpoint.provider,
+        maxTokens: 8192,
         reasoning: true,
       });
 

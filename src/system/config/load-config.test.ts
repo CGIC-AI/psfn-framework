@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { loadAgentConfig, loadOperatorConfig } from './load-config.js';
@@ -502,9 +502,13 @@ describe('loadConfig path defaults', () => {
     expect(config.sessionMirrorMaxChars).toBe(220);
     expect(config.sessionMirrorActiveWindowMs).toBe(1_800_000);
     expect(config.sessionMirrorChannelOverrides).toEqual({});
-    expect(config.analysisWorkbenchMaxTokens).toBe(76_000);
-    expect(config.analysisWorkbenchMaxWallTimeMs).toBe(300_000);
-    expect(config.analysisWorkbenchMaxSubQueries).toBe(24);
+    // The bootstrap workbench budget is the shipped seed budget, not an older one.
+    const shippedSettings = JSON.parse(
+      readFileSync(resolve('config/settings.seed.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(config.analysisWorkbenchMaxTokens).toBe(shippedSettings.analysisWorkbenchMaxTokens);
+    expect(config.analysisWorkbenchMaxWallTimeMs).toBe(shippedSettings.analysisWorkbenchMaxWallTimeMs);
+    expect(config.analysisWorkbenchMaxSubQueries).toBe(shippedSettings.analysisWorkbenchMaxSubQueries);
     expect(config.fsReadMaxBytes).toBe(100_000);
     expect(config.observerEvalSidecar).toEqual(createDefaultObserverEvalSidecarSettings());
     expect(config.sessionTailCache).toEqual(createDefaultSessionTailCacheSettings());

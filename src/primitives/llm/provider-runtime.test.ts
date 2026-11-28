@@ -111,6 +111,36 @@ describe('PiProviderRuntime auth', () => {
     });
   });
 
+  it('rejects a configured model with no output budget instead of inventing one', () => {
+    expect(() => new PiProviderRuntime(createModels(), {
+      providerRegistry: {
+        schemaVersion: 1,
+        providers: [{
+          id: 'shared-router',
+          type: 'generic_openai',
+          enabled: true,
+          apiBaseUrl: 'https://router.example.test/v1',
+          apiKeyRef: { kind: 'env', envName: TEST_API_KEY_ENV },
+        }],
+      },
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [{
+          id: 'unbudgeted',
+          rank: 1,
+          apiKind: 'openai-completions',
+          identity: {
+            provider: 'shared-router',
+            model: 'unbudgeted/test-model',
+            source: { type: 'configured' },
+          },
+          purposes: [{ purpose: 'chat', primary: true }],
+          capabilities: { contextWindow: 128_000 },
+        }],
+      },
+    })).toThrow(/unbudgeted.*neither tuning\.maxOutputTokens nor capabilities\.maxOutputTokens/u);
+  });
+
   it('returns undefined for an unknown provider', async () => {
     const runtime = new PiProviderRuntime(createModels());
 

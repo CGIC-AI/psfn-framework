@@ -28,13 +28,13 @@ describe('seed defaults', () => {
     expect(defaults.primary).toEqual({
       provider: 'openrouter',
       model: 'z-ai/glm-5',
-      maxOutputTokens: 16_384,
+      maxOutputTokens: 131_072,
       contextWindow: 128_000,
     });
     expect(defaults.extraction).toEqual({
       provider: 'openrouter',
       model: 'deepseek/deepseek-v3.2',
-      maxOutputTokens: 8_192,
+      maxOutputTokens: 147_456,
       contextWindow: 128_000,
     });
   });

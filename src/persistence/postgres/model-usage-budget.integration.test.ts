@@ -402,17 +402,62 @@ describe('Postgres model-usage budget projection', () => {
         status: 200,
         text: async () => JSON.stringify(TUTORIAL_RESPONSE_BODY),
       }));
+      const healthEvents: HealthEvent[] = [];
+      const eventBus = new EventBus();
+      eventBus.on('runtime.health.event', ({ event }) => { healthEvents.push(event); });
       const jev = createGatewayJevDecisionService({
         config,
         requireCompanionAttribution: false,
         usageRecorder: store,
         budgetQuery: store,
+        healthEvents: eventBus,
         fetch,
       });
       const input = { ...CEILING_REQUEST, companionId: 'companion-a' };
       const settled = await Promise.allSettled([jev.decide(input), jev.decide(input)]);
       expect(settled.map(result => result.status).sort()).toEqual(['fulfilled', 'rejected']);
       expect(fetch).toHaveBeenCalledTimes(1);
+      // Refused only by the concurrent reservation, not by ledgered spend:
+      // transient, so the day's one report is not spent on it.
+      expect(healthEvents).toEqual([]);
+    } finally {
+      await pool.end();
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('keeps each companion on its own Jev ceiling in a fleet ledger (na1r9)', async () => {
+    if (!harness) throw new Error('Postgres test harness is unavailable');
+    const { databaseUrl } = await harness.createDatabase();
+    const pool = createPostgresPool(databaseUrl, {
+      applicationName: 'model-usage-jev-ceiling-fleet',
+      allowExitOnIdle: true,
+      max: 2,
+    });
+    const dataDir = mkdtempSync(join(tmpdir(), 'model-usage-jev-ceiling-fleet-'));
+    const config = makeJevCeilingConfig(dataDir, 1.2);
+    const companionA = '11111111-1111-4111-8111-111111111111';
+    const companionB = '22222222-2222-4222-8222-222222222222';
+    try {
+      // The fleet gateway's store: no tenant, every row carries its companion.
+      const store = new PostgresModelUsageStore(pool, { fleetAggregation: true });
+      const fetch = vi.fn<DecisionsFetch>(async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(TUTORIAL_RESPONSE_BODY),
+      }));
+      const jev = createGatewayJevDecisionService({
+        config,
+        requireCompanionAttribution: true,
+        usageRecorder: store,
+        budgetQuery: store,
+        fetch,
+      });
+      await expect(jev.decide({ ...CEILING_REQUEST, companionId: companionA })).resolves.toMatchObject({ ok: true });
+      await expect(jev.decide({ ...CEILING_REQUEST, companionId: companionA }))
+        .rejects.toMatchObject({ reasonCode: 'jev_daily_budget_exceeded' });
+      await expect(jev.decide({ ...CEILING_REQUEST, companionId: companionB })).resolves.toMatchObject({ ok: true });
+      expect(fetch).toHaveBeenCalledTimes(2);
     } finally {
       await pool.end();
       rmSync(dataDir, { recursive: true, force: true });

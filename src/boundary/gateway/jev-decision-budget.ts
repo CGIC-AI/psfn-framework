@@ -188,7 +188,12 @@ export function createJevDecisionBudgetGate(options: {
       // Check and reserve with no await between them, so the next admission
       // on this gateway always sees this call.
       if (projectedUsd > dailyBudgetUsd) {
-        reportExceeded(key, companionId, spend.dayKey, spend.dailyEstimatedCostUsd, dailyBudgetUsd, nowMs);
+        // Only ledgered spend reaching the ceiling is the reportable condition;
+        // a refusal caused by concurrent reservations alone is transient, and
+        // reporting it would spend the day's one report before the real one.
+        if (spend.dailyEstimatedCostUsd + worstCaseUsd > dailyBudgetUsd) {
+          reportExceeded(key, companionId, spend.dayKey, spend.dailyEstimatedCostUsd, dailyBudgetUsd, nowMs);
+        }
         return { ok: false, reasonCode: 'jev_daily_budget_exceeded' };
       }
       return { ok: true, release: reserve(ledger, worstCaseUsd) };

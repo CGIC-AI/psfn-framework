@@ -1,6 +1,11 @@
+// @vitest-environment node
+
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildSpriteManifest } from './manifest.js';
-import { isPng } from './png.js';
+import { assertSpriteManifest, buildSpriteManifest } from './manifest.js';
+import { SPRITE_PNG_BUDGET_BYTES } from './pack-sprites.js';
+import { decodePng, isPng } from './png.js';
 import { renderSpriteSheets } from './render-sprites.js';
 
 describe('renderSpriteSheets', () => {
@@ -38,6 +43,45 @@ describe('renderSpriteSheets', () => {
 
   it('stays well under the 1.5MB sprite budget', () => {
     const total = sheets.reduce((sum, sheet) => sum + sheet.png.length, 0);
-    expect(total).toBeLessThan(1_500_000);
+    expect(total).toBeLessThan(SPRITE_PNG_BUDGET_BYTES);
+  });
+});
+
+// Guards whatever art is committed under public/sprites: the runtime only
+// detects a wrong-sized sheet after it loads, so catch it before shipping.
+describe('committed public/sprites atlas', () => {
+  const dir = resolve(import.meta.dirname, '../../../public/sprites');
+  const committed: unknown = JSON.parse(readFileSync(resolve(dir, 'manifest.json'), 'utf8'));
+  assertSpriteManifest(committed);
+  const canonical = buildSpriteManifest();
+
+  it('keeps the canonical grid, frame ordering and lazy avatar sheet', () => {
+    for (const [name, sheet] of Object.entries(canonical.sheets)) {
+      const { placeholder: _flag, ...geometry } = committed.sheets[name]!;
+      const { placeholder: _expected, ...expected } = sheet;
+      expect(geometry).toEqual(expected);
+    }
+    for (const [id, entry] of Object.entries(canonical.entries)) {
+      expect(committed.entries[id]!.frames).toEqual(entry.frames);
+    }
+    expect(Object.keys(committed.entries).sort()).toEqual(Object.keys(canonical.entries).sort());
+  });
+
+  it('ships sheets whose pixel size matches the manifest within the size budget', () => {
+    let total = 0;
+    for (const [name, sheet] of Object.entries(committed.sheets)) {
+      const bytes = new Uint8Array(readFileSync(resolve(dir, `${name}.png`)));
+      total += bytes.length;
+      const image = decodePng(bytes);
+      expect([image.width, image.height]).toEqual([sheet.cols * sheet.frameSize.w, sheet.rows * sheet.frameSize.h]);
+    }
+    expect(total).toBeLessThan(SPRITE_PNG_BUDGET_BYTES);
+  });
+
+  it('reports truthful provenance at sheet and manifest level', () => {
+    for (const [name, sheet] of Object.entries(committed.sheets)) {
+      expect(sheet.placeholder).toBe(Object.values(committed.entries).some((entry) => entry.sheet === name && entry.placeholder));
+    }
+    expect(committed.placeholder).toBe(Object.values(committed.sheets).some((sheet) => sheet.placeholder));
   });
 });

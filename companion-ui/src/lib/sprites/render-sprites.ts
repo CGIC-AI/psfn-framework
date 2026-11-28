@@ -27,11 +27,14 @@ const FONT: Record<string, readonly number[]> = {
 
 type Rgb = readonly [number, number, number];
 
-interface Canvas {
+/** Straight-alpha RGBA pixel buffer for one sheet. */
+export interface SheetCanvas {
   readonly data: Uint8Array;
   readonly width: number;
   readonly height: number;
 }
+
+type Canvas = SheetCanvas;
 
 function makeCanvas(width: number, height: number): Canvas {
   return { data: new Uint8Array(width * height * 4), width, height };
@@ -158,30 +161,30 @@ export interface RenderedSheet {
 }
 
 /**
- * Render every sheet's placeholder PNG. Deterministic: identical output every
- * run (fixed layout, fixed colours, fixed zlib level).
+ * Draw every sheet's placeholder pixels, keyed by sheet name, with each frame
+ * at the rect buildSpriteManifest() assigned it. Deterministic.
  */
-export function renderSpriteSheets(): RenderedSheet[] {
+export function renderPlaceholderCanvases(): Map<string, SheetCanvas> {
   const manifest = buildSpriteManifest();
   const canvases = new Map<string, Canvas>();
-  const sheetMeta = new Map<string, SpriteSheet>();
 
   for (const [name, sheet] of Object.entries(manifest.sheets)) {
-    const width = sheet.cols * sheet.frameSize.w;
-    const height = Math.max(sheet.rows, 1) * sheet.frameSize.h;
-    canvases.set(name, makeCanvas(width, height));
-    sheetMeta.set(name, sheet);
+    canvases.set(name, makeCanvas(sheet.cols * sheet.frameSize.w, Math.max(sheet.rows, 1) * sheet.frameSize.h));
   }
 
   for (const entry of Object.values(manifest.entries)) {
     const canvas = canvases.get(entry.sheet)!;
-    const sheet = sheetMeta.get(entry.sheet)!;
+    const sheet: SpriteSheet = manifest.sheets[entry.sheet]!;
     entry.frames.forEach((globalFrame, localFrame) => {
       const rect = frameRect(sheet, globalFrame);
       drawFrame(canvas, entry, localFrame, rect.x, rect.y, rect.w, rect.h);
     });
   }
+  return canvases;
+}
 
+/** Encode sheet canvases as `<name>.png`, sorted by sheet name. */
+export function encodeSheetCanvases(canvases: ReadonlyMap<string, SheetCanvas>): RenderedSheet[] {
   const rendered: RenderedSheet[] = [];
   for (const [name, canvas] of canvases) {
     rendered.push({
@@ -192,4 +195,12 @@ export function renderSpriteSheets(): RenderedSheet[] {
   }
   rendered.sort((a, b) => a.name.localeCompare(b.name));
   return rendered;
+}
+
+/**
+ * Render every sheet's placeholder PNG. Deterministic: identical output every
+ * run (fixed layout, fixed colours, fixed zlib level).
+ */
+export function renderSpriteSheets(): RenderedSheet[] {
+  return encodeSheetCanvases(renderPlaceholderCanvases());
 }

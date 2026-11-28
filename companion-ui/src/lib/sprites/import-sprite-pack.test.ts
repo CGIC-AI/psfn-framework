@@ -23,7 +23,7 @@ describe('local sprite-pack import', () => {
   it('accepts the actual canonical sheets, replaces only sources and disposes URLs exactly once', async () => {
     const create = vi.spyOn(URL, 'createObjectURL').mockImplementation((_blob) => `blob:local-${Math.random()}`);
     const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
-    const canonical = buildSpriteManifest({ placeholder: false });
+    const canonical = buildSpriteManifest({ artEntries: new Set(Object.keys(buildSpriteManifest().entries)) });
     const pack = await readLocalSpritePack(makeFiles(canonical));
     expect(create).toHaveBeenCalledTimes(4);
     expect(pack.manifest.entries).toEqual(canonical.entries);

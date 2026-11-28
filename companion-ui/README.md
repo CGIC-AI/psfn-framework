@@ -225,7 +225,7 @@ manifest is missing or malformed (fail-visible, never blank).
   `emotion.snapshot` and tool-domain signals land; the entry ids are
   art-agnostic.
 
-### Placeholder art (current) and swapping in final art
+### Placeholder art (committed default)
 
 The committed sheets under `public/sprites/` are **programmatically generated
 placeholder art** — flat-coloured, labelled frames, one per manifest frame,
@@ -238,12 +238,43 @@ Regenerate them with:
 npm run sprites:generate
 ```
 
-To swap in real art, replace each PNG in `public/sprites/` with a final sheet
-that honours the same grid (`cols` x `rows`, `frameSize`) and frame ordering
-from the manifest — the swap is file-for-file with no code change — then set
-`placeholder` to false where the manifest is built. Real art is produced offline
-via the Satellite-Hub fal.ai sprite pipeline (satellite-side, out of scope for
-this package); only the packed sheets and manifest are consumed here.
+### Packing real art
+
+Pack transparent full-body character PNGs into the same atlas with:
+
+```bash
+npm run sprites:pack -- --source <art dir> --map <mapping.json> --out <dir>
+```
+
+The mapping names one source PNG (relative to `--source`) per emotional base,
+a square head crop in source pixels for the mini sprite, and an alpha floor
+that drops faint background-extraction haze:
+
+```json
+{
+  "expressions": { "neutral": "neutral.png", "happy": "happy.png" },
+  "miniCrop": { "x": 292, "y": 0, "size": 440 },
+  "alphaFloor": 16
+}
+```
+
+Each mapped base fills both crops: the whole source canvas, contain-fit and
+bottom-aligned, for the avatar sheet, and the head crop for the mini sheet.
+Scaling is an area average in premultiplied alpha, so transparent edges stay
+free of halos. Source images are static, so both idle frames of an expression
+hold the same image. Unmapped expressions, tool loops, and touch reactions keep
+their placeholder frames. Provenance stays per entry: a sheet keeps
+`placeholder: true` while any of its entries does, and so does the manifest
+while any sheet does. Before it writes anything, the packer checks every sheet's
+pixel size against the grid, round-trips each placed frame, confirms that only
+the avatar sheet is lazy, and enforces the 1.5MB budget.
+
+The output directory is a complete local sprite pack: select its five files
+under Settings → Appearance. `npm run sprites:generate` refuses to overwrite a manifest
+that lists real-art entries. If packed art is ever committed under
+`public/sprites/`, the committed-atlas tests in
+`src/lib/sprites/render-sprites.test.ts` check its dimensions, budget, and
+provenance.
 
 ## Container image
 

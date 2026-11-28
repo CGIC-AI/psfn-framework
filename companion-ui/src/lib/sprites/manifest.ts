@@ -53,12 +53,13 @@ export interface SpriteSheet {
   readonly frameSize: { readonly w: number; readonly h: number };
   /** Load only on demand (avatar-view sheets) to keep the default bundle small. */
   readonly lazy: boolean;
+  /** Provenance: true while any entry on this sheet still holds placeholder art. */
   readonly placeholder: boolean;
 }
 
 export interface SpriteManifest {
   readonly version: typeof SPRITE_MANIFEST_VERSION;
-  /** Provenance flag: the whole manifest is placeholder art until real art lands. */
+  /** Provenance: true while any sheet still holds placeholder art. */
   readonly placeholder: boolean;
   readonly generator: string;
   readonly sheets: Readonly<Record<string, SpriteSheet>>;
@@ -72,7 +73,6 @@ interface MutableSheet {
   frameCount: number;
   frameSize: { w: number; h: number };
   lazy: boolean;
-  placeholder: boolean;
   /** Running frame cursor while entries are appended (build-time only). */
   cursor: number;
 }
@@ -86,7 +86,6 @@ function initSheet(name: SheetName): MutableSheet {
     frameCount: 0,
     frameSize: { w: geo.frameSize.w, h: geo.frameSize.h },
     lazy: geo.lazy,
-    placeholder: true,
     cursor: 0,
   };
 }
@@ -106,13 +105,25 @@ function titleCase(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+const PLACEHOLDER_GENERATOR = 'companion-ui/scripts/generate-sprite-sheets.ts (placeholder art)';
+
+export interface SpriteManifestOptions {
+  /**
+   * Entry ids whose frames carry real art. Every other entry keeps placeholder
+   * provenance; a sheet is placeholder while any of its entries is, and the
+   * manifest while any sheet is. Unknown ids reject.
+   */
+  readonly artEntries?: ReadonlySet<string>;
+  readonly generator?: string;
+}
+
 /**
  * Build the canonical sprite manifest from the frozen taxonomy. Deterministic:
  * the same taxonomy always yields byte-identical JSON (stable key order via the
  * fixed taxonomy iteration order).
  */
-export function buildSpriteManifest(options?: { placeholder?: boolean; generator?: string }): SpriteManifest {
-  const placeholder = options?.placeholder ?? true;
+export function buildSpriteManifest(options?: SpriteManifestOptions): SpriteManifest {
+  const artEntries = options?.artEntries ?? new Set<string>();
   const sheets: Record<SheetName, MutableSheet> = {
     'expr-mini': initSheet('expr-mini'),
     'expr-avatar': initSheet('expr-avatar'),
@@ -135,7 +146,7 @@ export function buildSpriteManifest(options?: { placeholder?: boolean; generator
         fps: FPS.expression,
         loop: true,
         label: `${titleCase(base)} (${crop})`,
-        placeholder,
+        placeholder: !artEntries.has(id),
         base,
         crop,
       };
@@ -156,7 +167,7 @@ export function buildSpriteManifest(options?: { placeholder?: boolean; generator
         fps: phase === 'started' ? FPS.toolStarted : FPS.toolDone,
         loop: phase === 'started',
         label: `${titleCase(domain)} ${phase}`,
-        placeholder,
+        placeholder: !artEntries.has(id),
         domain,
         phase,
       };
@@ -175,9 +186,13 @@ export function buildSpriteManifest(options?: { placeholder?: boolean; generator
       fps: FPS.touch,
       loop: false,
       label: titleCase(reaction.replace('-', ' ')),
-      placeholder,
+      placeholder: !artEntries.has(id),
       reaction,
     };
+  }
+
+  for (const id of artEntries) {
+    if (!(id in entries)) throw new Error(`unknown sprite entry id with real art: ${id}`);
   }
 
   const finalizedSheets: Record<string, SpriteSheet> = {};
@@ -189,14 +204,14 @@ export function buildSpriteManifest(options?: { placeholder?: boolean; generator
       frameCount: sheet.frameCount,
       frameSize: sheet.frameSize,
       lazy: sheet.lazy,
-      placeholder,
+      placeholder: Object.values(entries).some((entry) => entry.sheet === name && entry.placeholder),
     };
   }
 
   return {
     version: SPRITE_MANIFEST_VERSION,
-    placeholder,
-    generator: 'companion-ui/scripts/generate-sprite-sheets.ts (placeholder art)',
+    placeholder: Object.values(finalizedSheets).some((sheet) => sheet.placeholder),
+    generator: options?.generator ?? PLACEHOLDER_GENERATOR,
     sheets: finalizedSheets,
     entries,
   };

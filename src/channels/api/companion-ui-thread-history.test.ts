@@ -172,7 +172,7 @@ describe('Companion UI main-thread history (jtr6e)', () => {
     })).resolves.toMatchObject(denied);
   });
 
-  it('reads the verified Hub attachment channel, not any browser-named thread', async () => {
+  it('never serves history over the per-connection Hub attachment route', async () => {
     await record(manager, turn(HUB_CHANNEL, 1_800_000_004_000, 'hub ask', 'hub reply'));
     await record(manager, turn('api:operator-key-a', 1_800_000_004_100, 'key ask', 'key reply'));
     const instance = backend(manager);
@@ -214,16 +214,8 @@ describe('Companion UI main-thread history (jtr6e)', () => {
       companionUiCapability: fromAny({}),
     };
 
-    await expect(instance.handleCompanionUiShardAction(params)).resolves.toEqual({
-      ok: true,
-      response: [
-        { role: 'user', content: 'hub ask', createdAt: 1_800_000_004_000 },
-        { role: 'assistant', content: 'hub reply', createdAt: 1_800_000_004_005 },
-      ],
-    });
-    await expect(instance.handleCompanionUiShardAction({
-      ...params,
-      hubDeviceAttachment: { ...attachment, actor: { kind: 'guest' as const, companionId: COMPANION } },
-    })).resolves.toMatchObject({ ok: false, error: { status: 403 } });
+    const result = await instance.handleCompanionUiShardAction(params);
+    expect(result).toMatchObject({ ok: false, error: { status: 403 } });
+    expect(JSON.stringify(result)).not.toContain('hub ask');
   });
 });

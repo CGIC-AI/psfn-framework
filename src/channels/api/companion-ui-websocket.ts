@@ -286,19 +286,21 @@ function reportActionFailure(
 
 /**
  * Echo of the negotiated wire capabilities in `session.ready`. Thread history
- * is granted only to a human session: a guest has no durable thread, and an
- * action it may not run would close its socket.
+ * is granted only where the session's source channel is durable across
+ * reconnects: the operator-key principal channel. A Hub attachment channel is
+ * per connection (and a guest has no thread), so an empty read there would
+ * erase the browser's in-session memory instead of restoring it.
  */
 function readyEventCapabilities(input: Readonly<{
   approvals: boolean;
   replyDeltas: boolean;
   threadHistory: boolean;
-  human: boolean;
+  durableThread: boolean;
 }>): readonly string[] {
   return [
     ...(input.approvals ? [COMPANION_APPROVALS_V2_CAPABILITY] : []),
     ...(input.replyDeltas ? [COMPANION_UI_REPLY_DELTAS_CAPABILITY] : []),
-    ...(input.threadHistory && input.human ? [COMPANION_UI_THREAD_HISTORY_CAPABILITY] : []),
+    ...(input.threadHistory && input.durableThread ? [COMPANION_UI_THREAD_HISTORY_CAPABILITY] : []),
   ];
 }
 
@@ -826,7 +828,7 @@ export class CompanionUiWebSocketAdapter {
               approvals: eventCapabilities.length > 0,
               replyDeltas,
               threadHistory: negotiated.threadHistory,
-              human: authority.sessionToken !== undefined,
+              durableThread: false,
             }),
           });
           return;
@@ -984,7 +986,7 @@ export class CompanionUiWebSocketAdapter {
               approvals: true,
               replyDeltas,
               threadHistory: negotiated.threadHistory,
-              human: true,
+              durableThread: true,
             }),
           });
           return;

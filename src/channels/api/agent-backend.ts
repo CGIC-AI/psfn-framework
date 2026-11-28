@@ -408,7 +408,7 @@ export class AgentApiBackend {
   ): Promise<ApiCompanionUiShardActionRpcResult> {
     let compiled: CompiledCompanionUiAction | undefined;
     try {
-      if (!this.companionId
+      if (!this.shardDirectory || !this.companionId
         || !isHubDevicePrincipalSnapshot(params.hubDevicePrincipal)
         || !isHubDeviceAttachmentSnapshot(params.hubDeviceAttachment)
         || !sameHubDevicePrincipal(
@@ -422,18 +422,6 @@ export class AgentApiBackend {
         throw new Error('shard action attachment denied');
       }
       compiled = this.compileVerifiedCompanionUiCapability(params);
-      if (compiled.frame.resource === 'conversation.history') {
-        // The attachment's server-owned channel is exactly where this
-        // human's turns on this attachment were written.
-        return {
-          ok: true,
-          response: readCompanionUiThreadHistory(
-            this.sessionManager,
-            params.hubDeviceAttachment.channel.id,
-          ),
-        };
-      }
-      if (!this.shardDirectory) throw new Error('shard action attachment denied');
       return await dispatchCompanionUiShardFrame({
         directory: this.shardDirectory,
         parentCompanionId: this.companionId as CompanionId,

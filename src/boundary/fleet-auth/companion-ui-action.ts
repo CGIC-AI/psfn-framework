@@ -137,7 +137,7 @@ export interface CompanionUiSessionConfigureFrame {
   readonly eventCapabilities: readonly [typeof COMPANION_APPROVALS_V2_CAPABILITY];
   /** The browser opted into correlated reply `delta` frames before its terminal `result`. */
   readonly replyDeltas: boolean;
-  /** The browser asked to read its main-thread history (granted to humans only). */
+  /** The browser asked to read its main-thread history (granted only to a durable thread). */
   readonly threadHistory: boolean;
 }
 

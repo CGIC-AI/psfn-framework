@@ -193,11 +193,12 @@ describe('Companion browser through Hub and gateway sockets', () => {
     } finally { await f.close(); }
   });
 
-  it('grants a fleet SSO human thread history and relays correlated reply deltas through the Hub (mg891, jtr6e)', async () => {
+  it('relays correlated reply deltas through the Hub and withholds per-connection thread history (mg891, jtr6e)', async () => {
     const f = await fixture({ eventCapabilities: ['approvals.v2', 'reply.deltas.v1', 'thread.history.v1'] });
     try {
-      // This endpoint has no approvals telemetry scope, so only the opt-ins are echoed.
-      expect(f.messages[0]?.eventCapabilities).toEqual(['reply.deltas.v1', 'thread.history.v1']);
+      // No approvals telemetry scope here; the per-connection attachment
+      // channel has no durable thread, so history is not granted.
+      expect(f.messages[0]?.eventCapabilities).toEqual(['reply.deltas.v1']);
       f.execute.mockImplementationOnce(async (input: { onReplyDelta?: (text: string) => void }) => {
         input.onReplyDelta?.('Hello from ');
         input.onReplyDelta?.('the companion.');

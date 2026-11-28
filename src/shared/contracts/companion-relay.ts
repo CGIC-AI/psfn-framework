@@ -56,7 +56,8 @@ export const COMPANION_UI_REPLY_DELTAS_CAPABILITY = 'reply.deltas.v1' as const;
 /**
  * Opt-in Companion UI wire capability for the authorized main-thread history
  * read (psfn-framework-jtr6e). The server echoes it in `session.ready` only
- * for a human session; a browser sends `conversation.history` only when echoed.
+ * when the session's source channel is durable (operator-key sessions); a
+ * browser sends `conversation.history` only when echoed.
  */
 export const COMPANION_UI_THREAD_HISTORY_CAPABILITY = 'thread.history.v1' as const;
 

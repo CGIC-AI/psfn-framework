@@ -1002,10 +1002,10 @@ export async function startOptionalGatewayApiServer(
             dispatch: async input => {
               const frame = input.compiled.frame;
               const body = frame.body as Record<string, unknown>;
-              // Agent-owned reads and shard frames share the verified
-              // child-capability route; the agent derives the thread itself.
-              if (frame.resource === 'conversation.history'
-                || frame.resource === 'shards.list'
+              // A Hub attachment channel is per connection, so it has no
+              // durable thread to read yet (the gateway never grants it).
+              if (frame.resource === 'conversation.history') throw new CompanionUiActionDeniedError();
+              if (frame.resource === 'shards.list'
                 || frame.resource === 'shards.history'
                 || frame.resource === 'shards.interact'
                 || frame.resource === 'shards.interrupt') {

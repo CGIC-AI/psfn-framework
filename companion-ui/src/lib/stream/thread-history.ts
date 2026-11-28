@@ -15,7 +15,7 @@ export function hydrateThreadHistory(
   state: HubStreamState,
   history: SatelliteHubThreadHistoryEvent['messages'],
 ): HubStreamState {
-  if (state.session?.activeShardId !== undefined) return state;
+  if (state.session?.activeShardId) return state;
   const hydrated: HubStreamMessage[] = history.map((message, index) => ({
     id: `history:${index + 1}:${message.role}`,
     role: message.role,

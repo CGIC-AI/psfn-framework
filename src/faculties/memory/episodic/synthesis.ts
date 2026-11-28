@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import { createComponentLogger } from '../../../shared/logger.js';
+import { formatErrorCauseChain } from '../../../shared/utils/errors.js';
 import { toIsoInstant } from '../../../shared/utils/timing.js';
 import type {
   Episode,
@@ -35,7 +36,11 @@ import {
   type EpisodicThemeDecisionPort,
 } from './theme-classification.js';
 import { resolveEpisodeParticipantContactIds } from './synthesis/participant-attribution.js';
-import { proposeTopicSegments, type TopicSegment } from './topic-segmentation.js';
+import {
+  proposeTopicSegments,
+  type TopicSegmentRepair,
+  type TopicSegmentationResult,
+} from './topic-segmentation.js';
 import { applyThreadUnionForArc, type ThreadAssignmentEvent } from './thread-assignment.js';
 import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 import { resolveEpisodeSessionEntryTurnId } from './turn-reference.js';
@@ -61,6 +66,10 @@ export interface EpisodeSegmentationEvent {
   chunkEntryCount: number;
   segmentCount: number;
   heldBackEntryCount: number;
+  /** Deterministic corrections applied to the accepted proposal (iu7v0). */
+  repairs?: TopicSegmentRepair[];
+  /** The first proposal was rejected and one corrective retry was accepted. */
+  correctiveRetry?: boolean;
   error?: string;
   timestamp: number;
 }
@@ -126,6 +135,8 @@ export interface EpisodicSynthesisRunResult {
   heldBackEntryCount: number;
   /** Chunks whose segmentation output failed schema validation (fail closed). */
   segmentationFailedChunkCount: number;
+  /** Root cause of the failed chunk, carried to the lane's durable failure record. */
+  segmentationFailure?: string;
 }
 
 export interface EpisodicSynthesisWatermarkScope {
@@ -162,6 +173,7 @@ interface SegmentationRunOutcome {
   heldBackEntryCount: number;
   segmentationFailedChunkCount: number;
   candidateEpisodeCount: number;
+  segmentationFailure?: string;
 }
 
 interface CandidateDecisionResult {
@@ -802,12 +814,14 @@ export class EpisodicSynthesizer {
     let candidateEpisodeCount: number;
     let heldBackEntryCount = 0;
     let segmentationFailedChunkCount = 0;
+    let segmentationFailure: string | undefined;
 
     if (this.segmentationEnabled) {
       const outcome = await this.runSegmentedGroups(input, salientGroups, state);
       candidateEpisodeCount = outcome.candidateEpisodeCount;
       heldBackEntryCount = outcome.heldBackEntryCount;
       segmentationFailedChunkCount = outcome.segmentationFailedChunkCount;
+      segmentationFailure = outcome.segmentationFailure;
     } else {
       const groups = salientGroups.slice(-this.maxEpisodesPerRun);
       candidateEpisodeCount = groups.length;
@@ -825,6 +839,7 @@ export class EpisodicSynthesizer {
       linkedArcs: state.linkedArcs,
       heldBackEntryCount,
       segmentationFailedChunkCount,
+      ...(segmentationFailure ? { segmentationFailure } : {}),
     };
   }
 
@@ -853,9 +868,9 @@ export class EpisodicSynthesizer {
       const isFinalGroup = groupIndex === groups.length - 1;
       const channelId = group.entries.at(0)?.channelId ?? input.sessionId;
 
-      let segments: TopicSegment[];
+      let proposal: TopicSegmentationResult;
       try {
-        segments = await proposeTopicSegments(this.segmentationProvider, {
+        proposal = await proposeTopicSegments(this.segmentationProvider, {
           sessionId: input.sessionId,
           channelId,
           entries: group.entries,
@@ -864,7 +879,7 @@ export class EpisodicSynthesizer {
         // Fail closed: no episode is written for this chunk, nothing from it
         // is claimed, and the run stops so the watermark never advances past
         // the chunk — its turns stay visible to the next pass.
-        const message = error instanceof Error ? error.message : String(error);
+        const message = formatErrorCauseChain(error);
         this.emitSegmentationEvent({
           sessionId: input.sessionId,
           channelId,
@@ -880,7 +895,22 @@ export class EpisodicSynthesizer {
           chunkEntryCount: group.entries.length,
           error: message,
         });
-        return { heldBackEntryCount, segmentationFailedChunkCount: 1, candidateEpisodeCount };
+        return {
+          heldBackEntryCount,
+          segmentationFailedChunkCount: 1,
+          candidateEpisodeCount,
+          segmentationFailure: message,
+        };
+      }
+      const segments = proposal.segments;
+      if (proposal.repairs.length > 0 || proposal.correctiveRetry) {
+        log.info('Topic segmentation proposal accepted after repair', {
+          sessionId: input.sessionId,
+          channelId,
+          chunkEntryCount: group.entries.length,
+          repairs: proposal.repairs,
+          correctiveRetry: proposal.correctiveRetry,
+        });
       }
 
       let heldForChunk = 0;
@@ -910,6 +940,8 @@ export class EpisodicSynthesizer {
         chunkEntryCount: group.entries.length,
         segmentCount: segments.length,
         heldBackEntryCount: heldForChunk,
+        ...(proposal.repairs.length > 0 ? { repairs: proposal.repairs } : {}),
+        ...(proposal.correctiveRetry ? { correctiveRetry: true } : {}),
       });
 
       for (const segmentGroup of segmentGroups) {

@@ -467,6 +467,7 @@ describe('EpisodeSynthesisLane', () => {
       linkedArcs: [],
       heldBackEntryCount: 0,
       segmentationFailedChunkCount: 1,
+      segmentationFailure: 'segments must be contiguous; segment 1 leaves a gap or overlap',
     });
     const clock = { now: WATERMARK_END_MS };
     const options = {
@@ -483,7 +484,16 @@ describe('EpisodeSynthesisLane', () => {
     await expect(new EpisodeSynthesisLane(options).execute(timerAction())).resolves.toEqual({ outcome: 'complete' });
     expect(workset.checkpoint).not.toHaveBeenCalled();
     expect(await workset.enumerate('episodic_synthesis')).toEqual([
-      expect.objectContaining({ logicalSessionId: sessionId, checkpointRevision: 0, failureCount: 1 }),
+      expect.objectContaining({
+        logicalSessionId: sessionId,
+        checkpointRevision: 0,
+        failureCount: 1,
+        // iu7v0: the validator's root cause, not only the lane's wrapper, is durable.
+        lastFailure: expect.objectContaining({
+          message: 'Episode topic segmentation failed; unprocessed source remains retryable'
+            + ' <- caused by: segments must be contiguous; segment 1 leaves a gap or overlap',
+        }),
+      }),
     ]);
 
     clock.now += 31 * 60_000;

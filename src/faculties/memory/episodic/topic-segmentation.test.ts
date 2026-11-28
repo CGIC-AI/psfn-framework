@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SessionEntry } from '../../../core/session/types.js';
 import {
   TOPIC_SEGMENTATION_SYSTEM_PROMPT,
+  TopicSegmentationValidationError,
   formatSegmentationTranscript,
   parseTopicSegments,
   proposeTopicSegments,
@@ -21,17 +22,59 @@ describe('parseTopicSegments', () => {
       ]),
     ].join('\n');
 
-    expect(parseTopicSegments(content, 10)).toEqual([
-      { startIndex: 0, endIndex: 7, topic: 'atlas scheduler debugging', status: 'closed' },
-      { startIndex: 8, endIndex: 9, topic: 'dinner planning', status: 'open' },
-    ]);
+    expect(parseTopicSegments(content, 10)).toEqual({
+      segments: [
+        { startIndex: 0, endIndex: 7, topic: 'atlas scheduler debugging', status: 'closed' },
+        { startIndex: 8, endIndex: 9, topic: 'dinner planning', status: 'open' },
+      ],
+      repairs: [],
+    });
   });
 
   it('accepts a single closed segment covering the whole chunk', () => {
     const content = segmentsJson([
       { start_index: 0, end_index: 3, topic: 'release planning', status: 'closed' },
     ]);
-    expect(parseTopicSegments(content, 4)).toHaveLength(1);
+    expect(parseTopicSegments(content, 4).segments).toHaveLength(1);
+  });
+
+  // iu7v0 regression fixtures: the two validator failures seen in production
+  // (an uncovered trailing tail, an over-long topic label) are now repaired
+  // deterministically and reported, instead of failing the whole chunk.
+  it('repairs an uncovered trailing tail by extending the final segment', () => {
+    const content = segmentsJson([
+      { start_index: 0, end_index: 6, topic: 'atlas scheduler debugging', status: 'closed' },
+      { start_index: 7, end_index: 10, topic: 'dinner planning', status: 'open' },
+    ]);
+    expect(parseTopicSegments(content, 14)).toEqual({
+      segments: [
+        { startIndex: 0, endIndex: 6, topic: 'atlas scheduler debugging', status: 'closed' },
+        { startIndex: 7, endIndex: 13, topic: 'dinner planning', status: 'open' },
+      ],
+      repairs: ['trailing_gap_extended'],
+    });
+  });
+
+  it('truncates an over-long topic label to the label cap', () => {
+    const longTopic = `${'release planning and rollout coordination '.repeat(4)}tail`;
+    const { segments, repairs } = parseTopicSegments(segmentsJson([
+      { start_index: 0, end_index: 13, topic: longTopic, status: 'closed' },
+    ]), 14);
+    expect(segments[0]!.topic.length).toBeLessThanOrEqual(80);
+    expect(longTopic.startsWith(segments[0]!.topic)).toBe(true);
+    expect(repairs).toEqual(['topic_truncated']);
+  });
+
+  it('repairs the remaining unambiguous boundary defects and reports each one', () => {
+    const { segments, repairs } = parseTopicSegments(segmentsJson([
+      { start_index: 1, end_index: 4, topic: 'a', status: 'open' },
+      { start_index: 5, end_index: 12, topic: 'b', status: 'closed' },
+    ]), 10);
+    expect(segments).toEqual([
+      { startIndex: 0, endIndex: 4, topic: 'a', status: 'closed' },
+      { startIndex: 5, endIndex: 9, topic: 'b', status: 'closed' },
+    ]);
+    expect(repairs.sort()).toEqual(['final_segment_clamped', 'leading_gap_extended', 'non_final_open_closed']);
   });
 
   it.each([
@@ -55,31 +98,16 @@ describe('parseTopicSegments', () => {
       10,
     ],
     [
-      'cover not starting at zero',
-      segmentsJson([{ start_index: 1, end_index: 9, topic: 'a', status: 'closed' }]),
-      10,
-    ],
-    [
-      'cover not reaching the final entry',
-      segmentsJson([{ start_index: 0, end_index: 8, topic: 'a', status: 'closed' }]),
-      10,
-    ],
-    [
-      'open segment before the final segment',
+      'out-of-range index on a non-final segment',
       segmentsJson([
-        { start_index: 0, end_index: 4, topic: 'a', status: 'open' },
-        { start_index: 5, end_index: 9, topic: 'b', status: 'closed' },
+        { start_index: 0, end_index: 12, topic: 'a', status: 'closed' },
+        { start_index: 13, end_index: 14, topic: 'b', status: 'closed' },
       ]),
       10,
     ],
     [
       'start after end',
       segmentsJson([{ start_index: 4, end_index: 2, topic: 'a', status: 'closed' }]),
-      10,
-    ],
-    [
-      'out-of-range index',
-      segmentsJson([{ start_index: 0, end_index: 10, topic: 'a', status: 'closed' }]),
       10,
     ],
     [
@@ -97,13 +125,8 @@ describe('parseTopicSegments', () => {
       segmentsJson([{ start_index: 0, end_index: 9, topic: '  ', status: 'closed' }]),
       10,
     ],
-    [
-      'topic label over the length cap',
-      segmentsJson([{ start_index: 0, end_index: 9, topic: 'x'.repeat(81), status: 'closed' }]),
-      10,
-    ],
   ])('fails closed on %s', (_label, content, entryCount) => {
-    expect(() => parseTopicSegments(content, entryCount)).toThrow();
+    expect(() => parseTopicSegments(content, entryCount)).toThrow(TopicSegmentationValidationError);
   });
 
   it('fails closed on an empty chunk', () => {
@@ -153,14 +176,81 @@ describe('proposeTopicSegments', () => {
       entries: [entry(1, 'Please debug atlas.'), entry(2, 'Atlas failure found.')],
     });
 
-    expect(segments).toEqual([
-      { startIndex: 0, endIndex: 1, topic: 'atlas debugging', status: 'closed' },
-    ]);
+    expect(segments).toEqual({
+      segments: [{ startIndex: 0, endIndex: 1, topic: 'atlas debugging', status: 'closed' }],
+      repairs: [],
+      correctiveRetry: false,
+    });
     expect(captured).toHaveLength(1);
     expect(captured[0].systemPrompt).toBe(TOPIC_SEGMENTATION_SYSTEM_PROMPT);
     expect(captured[0].purpose).toBe('memory');
     expect(captured[0].userContent).toContain('[0] 2026-04-01T10:01:00.000Z user: Please debug atlas.');
     expect(captured[0].userContent).toContain('[1] 2026-04-01T10:02:00.000Z assistant: Atlas failure found.');
+  });
+
+  function queuedProvider(responses: Array<string | Error>) {
+    const prompts: string[] = [];
+    return {
+      prompts,
+      complete: async (context: { messages: Array<{ role: string; content: string }> }) => {
+        prompts.push(context.messages[0]!.content);
+        const next = responses.shift();
+        if (next === undefined) throw new Error('unexpected extra segmentation call');
+        if (next instanceof Error) throw next;
+        return {
+          content: next,
+          toolCalls: [],
+          model: 'test-model',
+          inputTokens: 0,
+          outputTokens: 0,
+          stopReason: 'stop',
+        };
+      },
+    };
+  }
+
+  const chunk = () => [entry(1, 'Please debug atlas.'), entry(2, 'Atlas failure found.'), entry(3, 'Dinner?')];
+  const request = () => ({ sessionId: 'terminal:daily', channelId: 'terminal:daily', entries: chunk() });
+
+  it('makes one corrective retry naming the violation when repair cannot settle it', async () => {
+    const provider = queuedProvider([
+      segmentsJson([{ start_index: 0, end_index: 2, topic: '   ', status: 'closed' }]),
+      segmentsJson([{ start_index: 0, end_index: 2, topic: 'atlas debugging', status: 'closed' }]),
+    ]);
+
+    const result = await proposeTopicSegments(provider as never, request());
+
+    expect(result).toEqual({
+      segments: [{ startIndex: 0, endIndex: 2, topic: 'atlas debugging', status: 'closed' }],
+      repairs: [],
+      correctiveRetry: true,
+    });
+    expect(provider.prompts).toHaveLength(2);
+    expect(provider.prompts[1]).toContain('Your previous answer was rejected: segment 0 topic must be a non-empty string');
+    expect(provider.prompts[1]).toContain('Cover every entry index from 0 through 2');
+  });
+
+  it('fails closed after the corrective retry also violates the schema, keeping both rejections', async () => {
+    const provider = queuedProvider([
+      'no json at all',
+      segmentsJson([
+        { start_index: 0, end_index: 0, topic: 'a', status: 'closed' },
+        { start_index: 2, end_index: 2, topic: 'b', status: 'closed' },
+      ]),
+    ]);
+
+    const failure = await proposeTopicSegments(provider as never, request()).catch(error => error);
+
+    expect(failure).toBeInstanceOf(TopicSegmentationValidationError);
+    expect(failure.message).toContain('segment 1 leaves a gap or overlap');
+    expect(failure.message).toContain('after one corrective retry; first rejection: segmentation response contains no JSON object');
+    expect(provider.prompts).toHaveLength(2);
+  });
+
+  it('never retries a provider failure', async () => {
+    const provider = queuedProvider([new Error('provider unavailable')]);
+    await expect(proposeTopicSegments(provider as never, request())).rejects.toThrow('provider unavailable');
+    expect(provider.prompts).toHaveLength(1);
   });
 
   it('rejects an empty chunk before any LLM spend', async () => {

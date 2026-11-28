@@ -735,7 +735,9 @@ export class EpisodeSynthesisLane {
       synthesis,
     });
     if (synthesis.segmentationFailedChunkCount > 0) {
-      throw new Error('Episode topic segmentation failed; unprocessed source remains retryable');
+      throw new Error('Episode topic segmentation failed; unprocessed source remains retryable', {
+        ...(synthesis.segmentationFailure ? { cause: new Error(synthesis.segmentationFailure) } : {}),
+      });
     }
     this.emitGateEvent({
       sessionId,

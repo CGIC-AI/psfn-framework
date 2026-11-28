@@ -501,6 +501,9 @@ export interface EventMap {
     chunkEntryCount: number;
     segmentCount: number;
     heldBackEntryCount: number;
+    // iu7v0: deterministic repairs applied, or a corrective retry accepted.
+    repairs?: string[];
+    correctiveRetry?: boolean;
     error?: string;
     timestamp: number;
   };

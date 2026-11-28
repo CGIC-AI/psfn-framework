@@ -55,10 +55,11 @@ export function createIntakeScreenerUsageLedger(options: {
       const rates = resolveModelUsageCostRates(options.config, model);
       const reportedTokens = attempt.inputTokens + attempt.outputTokens
         + attempt.cacheReadTokens + attempt.cacheWriteTokens;
-      // A timed-out dispatch reports no usage but may have been billed: charge
-      // its request bound so the row is a conservative known cost.
+      // A timed-out dispatch reports no usage but was sent: charge the prompt it
+      // carried. Its output cap is an admission bound, not something the
+      // provider produced, so no output is booked (lomm1).
       const billed = attempt.errorCode === 'timeout' && reportedTokens === 0
-        ? { inputTokens: attempt.worstCaseTokens.input, outputTokens: attempt.worstCaseTokens.output }
+        ? { inputTokens: attempt.worstCaseTokens.input, outputTokens: 0 }
         : { inputTokens: attempt.inputTokens, outputTokens: attempt.outputTokens };
       const estimatedCostUsd = estimateConservativeModelUsageCostUsd({
         ...billed,

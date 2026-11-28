@@ -47,7 +47,7 @@ import {
   ModelBudgetController,
   ModelBudgetExceededError,
   normalizeModelIdForProvider,
-  resolveModelUsageCostRates,
+  resolveModelUsagePrice,
 } from './model-budget.js';
 import { countMessageTokens } from './tokens.js';
 import type { LLMProviderPort, LLMProviderStreamOptions } from '../../core/agent/contracts.js';
@@ -619,8 +619,8 @@ export class LLMClient {
       error?: Error;
       providerObservability?: LLMProviderObservability;
       metadata?: Record<string, unknown>;
-      /** Request bound charged when an aborted/timed-out attempt reports no usage. */
-      worstCaseTokens?: { input: number; output: number };
+      /** The request's input token estimate, charged when a dispatched attempt ends unreported (lomm1). */
+      requestInputTokens?: number;
       /** Dispatch and cancellation evidence that settles an unreported attempt's charge (ge9w7). */
       attemptOutcome?: UnreportedAttemptOutcome;
     },
@@ -650,7 +650,9 @@ export class LLMClient {
     if (options.providerObservability && providerResponse) {
       options.providerObservability.providerResponse = providerResponse;
     }
-    const accountingRates = resolveModelUsageCostRates(this.config, candidate, purpose);
+    // Priced as of the attempt's start, the same quote its admission read (lomm1).
+    const accountingPrice = resolveModelUsagePrice(this.config, candidate, purpose, options.startedAtMs);
+    const accountingRates = accountingPrice.rates;
     // Provider cost is only what the provider put on the wire (body usage.cost,
     // cost headers), captured by the gateway. pi-ai's `usage.cost` is its own
     // calculateCost() over model.cost — the bundled catalogue snapshot or the
@@ -679,11 +681,8 @@ export class LLMClient {
       error: options.error,
       reportedTokens: (usageDetails?.input ?? inputTokens) + (usageDetails?.output ?? outputTokens)
         + (usageDetails?.cacheRead ?? 0) + (usageDetails?.cacheWrite ?? 0),
-      worstCaseTokens: options.worstCaseTokens
-        ? {
-          input: capInputTokensToContextWindow(options.worstCaseTokens.input, candidate),
-          output: options.worstCaseTokens.output,
-        }
+      requestInputTokens: options.requestInputTokens !== undefined
+        ? capInputTokensToContextWindow(options.requestInputTokens, candidate)
         : undefined,
       outcome: options.attemptOutcome,
     });
@@ -740,6 +739,17 @@ export class LLMClient {
         : {}),
       ...(providerCost ? { providerCost } : {}),
       ...(unreportedCharge ? { unreportedAttemptCharge: unreportedCharge.basis } : {}),
+      pricing: {
+        source: accountingPrice.source,
+        ...(accountingPrice.catalog
+          ? {
+              catalogModel: accountingPrice.catalog.catalogModel,
+              endpointTag: accountingPrice.catalog.endpointTag,
+              fetchedAtMs: accountingPrice.catalog.fetchedAtMs,
+            }
+          : {}),
+        ...(accountingPrice.catalogUnavailable ? { catalogUnavailable: accountingPrice.catalogUnavailable } : {}),
+      },
       ...(correlation?.icpCorrelation
         ? {
             icpCost: {
@@ -1023,8 +1033,8 @@ export class LLMClient {
                     record.usageDetails,
                     {
                       ...record.options,
-                      worstCaseTokens: { input: accountingInputTokens, output: candidateTarget.maxTokens },
-                      attemptOutcome: { ownerCancelled: transportSignal.aborted, dispatch },
+                      requestInputTokens: accountingInputTokens,
+                      attemptOutcome: { dispatch },
                     },
                   ),
                   throwIfAborted: () => throwIfTransportAborted(transportSignal),
@@ -1244,8 +1254,8 @@ export class LLMClient {
                 settlement: 'unknown',
                 error: err,
                 providerObservability,
-                worstCaseTokens: { input: worstCaseInputTokens, output: candidateTarget.maxTokens },
-                attemptOutcome: { ownerCancelled: transportSignal.aborted, dispatch },
+                requestInputTokens: worstCaseInputTokens,
+                attemptOutcome: { dispatch },
                 metadata: { completionPurpose: purpose, routingPurpose, emptyArgsRetries },
               },
             );
@@ -1357,8 +1367,8 @@ export class LLMClient {
                 stopReason: response.stopReason,
                 error: err,
                 providerObservability,
-                worstCaseTokens: { input: worstCaseInputTokens, output: candidateTarget.maxTokens },
-                attemptOutcome: { ownerCancelled: transportSignal.aborted, dispatch },
+                requestInputTokens: worstCaseInputTokens,
+                attemptOutcome: { dispatch },
                 metadata: {
                   completionPurpose: purpose,
                   routingPurpose,

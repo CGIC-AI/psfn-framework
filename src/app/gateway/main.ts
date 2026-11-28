@@ -5,7 +5,8 @@
 import '../../shared/utils/load-dotenv.js';
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
+import { MODEL_PRICE_SNAPSHOT_FILE_NAME, ModelPriceBook } from '../../primitives/llm/model-pricing/price-book.js';
 import { loadConfig } from '../../system/config/load-gateway-config.js';
 import {
   createFleetSystemHealthEventStore,
@@ -397,6 +398,15 @@ async function main(): Promise<void> {
   let quarantineHoldEscalation:
     ((entry: IntakeQuarantineEntry, companionId?: string) => void) | null = null;
   let quarantineExpiryEscalation: ((entry: IntakeQuarantineEntry) => void) | null = null;
+  // lomm1: current model prices, refreshed from the provider catalogue on the
+  // models.json `pricing.catalogRefresh` cadence. Installed on the live config
+  // before any LLM client exists, so every ledger estimate and budget
+  // admission reads the same prices.
+  const modelPriceBook = new ModelPriceBook({
+    config,
+    snapshotPath: join(startupHydration.pathSnapshot.systemDataDir, MODEL_PRICE_SNAPSHOT_FILE_NAME),
+  });
+  config.modelPriceBook = modelPriceBook;
   const privilegedCore = await buildGatewayPrivilegedCore({
     config,
     ...(companionDatabaseTopology ? { companionDatabaseTopology } : {}),
@@ -422,6 +432,8 @@ async function main(): Promise<void> {
   const modelsOwnerFileReload = startGatewayModelsOwnerFileReload({
     config,
     intakeScreening: privilegedCore.intakeScreening,
+    // A slot or a cadence the edit added is priced now, not at the next cycle.
+    onModelsReloaded: () => modelPriceBook.restart(eventBus),
   });
   // Bounded persisted health plane for this process. Constructed and
   // subscribed here — before the first gateway emitter below — because
@@ -517,6 +529,9 @@ async function main(): Promise<void> {
         }
       : {}),
   });
+  // Subscribed to the health plane above, so a slot left without a price is
+  // reported from the first refresh on.
+  modelPriceBook.start(eventBus);
   // One deduplicated operator alert per incident correlation id, delivered
   // through this gateway's existing alert dispatcher. Subscribed here beside
   // the stream sink, and for the same reason: the first incident this process
@@ -1425,6 +1440,7 @@ async function main(): Promise<void> {
     stopPromise = (async () => {
       await runShutdownSequence([
         { step: 'stop debug observer', action: () => stopDebugObserver() },
+        { step: 'stop model price refresh', action: () => modelPriceBook.stop() },
         { step: 'stop runtime health watchdog', action: () => healthDetectorScheduler.stop() },
         ...(fleetAuthBackupScheduler
           ? [{

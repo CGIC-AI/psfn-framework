@@ -20,8 +20,8 @@ import { ModelCallPreemptedError } from './model-call-gate.js';
 import { PiProviderRuntime, type ProviderRuntime } from './provider-runtime.js';
 
 /**
- * ge9w7: a failed attempt that reports no usage is booked from what the
- * provider can have billed. Every case runs the real LLMClient, the real pi-ai
+ * ge9w7, lomm1: a failed attempt that reports no usage is booked from what it
+ * actually sent and received. Every case runs the real LLMClient, the real pi-ai
  * OpenAI-compatible transport against a scripted HTTP endpoint, the real
  * model-call gate, and the real Postgres usage store and budget projection.
  */
@@ -31,7 +31,7 @@ const INTEGRATION_TIMEOUT_MS = 120_000;
 const API_KEY_ENV = 'PSFN_UNREPORTED_CHARGE_TEST_KEY';
 const COMPANION_ID = 'companion-a';
 const OUTPUT_CAP = 32_768;
-// Protective accounting rates used by the shakedown round for coding-plan routes.
+// Rates high enough that booking the output cap would be unmistakable.
 const RATES = { inputPer1MUsd: 3, outputPer1MUsd: 15, cacheReadPer1MUsd: 3, cacheWritePer1MUsd: 3.75 };
 
 function makeConfig(dataDir: string, baseUrl: string, priced: boolean): SubstrateConfig {
@@ -233,16 +233,20 @@ describe('unreported attempt charge through the real usage store (ge9w7)', () =>
     expect(await spend()).toMatchObject({ dailyEstimatedCostUsd: 0, dailyUnknownCostAttempts: 0 });
   }, INTEGRATION_TIMEOUT_MS);
 
-  it('keeps the worst case when the attempt ended in an upstream timeout its owner did not observe', async () => {
-    const { client, endpoint, failureRows } = await setup();
+  it('books an upstream timeout at the prompt it sent, never its output cap (lomm1)', async () => {
+    const { client, endpoint, failureRows, spend } = await setup();
     endpoint.enqueue('http_504');
     await expect(client.complete(context('background', 'upstream-timeout'), 'background', { disableRetry: true }))
       .rejects.toThrow(/504/u);
 
     const [row] = await failureRows();
-    expect(row).toMatchObject({ charge: 'worst_case' });
-    // Output cap alone: 32768 tokens at $15/M.
-    expect(Number(row!.estimated_cost_usd)).toBeGreaterThan(0.49);
+    expect(row).toMatchObject({ charge: 'input_bound', output_tokens: 0 });
+    const booked = Number(row!.estimated_cost_usd);
+    expect(booked).toBeGreaterThan(0);
+    // Booking the 32k output cap would be 32768 * $15/M = $0.49 for output
+    // that was never produced.
+    expect(booked).toBeLessThan(0.001);
+    expect((await spend()).dailyUnknownCostAttempts).toBe(0);
   }, INTEGRATION_TIMEOUT_MS);
 
   it('still refuses an unpriced model before dispatch under an enforced budget (fail closed)', async () => {

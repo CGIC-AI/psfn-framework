@@ -4390,7 +4390,7 @@ describe('LLMClient model budget gates and usage metering', () => {
       expect(failed.errorMessage).not.toContain('contained no text');
     });
 
-    it('charges an aborted attempt on a priced model its worst case, never unknown', async () => {
+    it('charges an aborted attempt on a priced model the prompt it sent, never its output cap or unknown (lomm1)', async () => {
       const config = twoCandidateConfig();
       config.modelRegistry!.models = config.modelRegistry!.models.map(entry => ({
         ...entry,
@@ -4398,18 +4398,26 @@ describe('LLMClient model budget gates and usage metering', () => {
       }));
       const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
       const client = new LLMClient(config, { usageRecorder });
-      mocks.completeSimple.mockResolvedValueOnce({
-        content: [],
-        model: 'primary-model',
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { total: 0 } },
-        stopReason: 'aborted',
-        errorMessage: 'Request was aborted',
+      mocks.completeSimple.mockImplementationOnce(async (_model: unknown, _context: unknown, options?: { onPayload?: (payload: unknown) => unknown }) => {
+        // The request left: pi-ai hands the payload over immediately before sending it.
+        await options?.onPayload?.({});
+        return {
+          content: [],
+          model: 'primary-model',
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { total: 0 } },
+          stopReason: 'aborted',
+          errorMessage: 'Request was aborted',
+        };
       });
       await expect(client.complete(request, 'background', { disableRetry: true }))
         .rejects.toMatchObject({ name: 'AbortError' });
       const [failed] = usageRecorder.recordUsageEvent.mock.calls.map(call => call[0]);
-      // Output cap 1024 tokens at $4/M alone is ~$0.0041; the input bound adds more.
-      expect(failed.estimatedCost?.total).toBeGreaterThan(0.004);
+      // The request was dispatched and ended without output: its prompt is
+      // charged at $1/M. The 1024-token output cap ($0.0041 at $4/M) is never
+      // booked: no output was produced.
+      expect(failed.metadata).toMatchObject({ unreportedAttemptCharge: 'input_bound' });
+      expect(failed.estimatedCost?.total).toBeGreaterThan(0);
+      expect(failed.estimatedCost?.total).toBeLessThan(0.001);
       expect(failed.costSource).toBe('estimate');
     });
 

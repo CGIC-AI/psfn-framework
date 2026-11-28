@@ -14,6 +14,7 @@ import type {
 import type { ModelUsageCostRates } from '../../shared/telemetry/model-usage-accounting.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { RoutingCandidate, RoutingPurpose } from './routing.js';
+import { resolveOwnerCostRates, type ResolvedSlotPrice } from './model-pricing/slot-price.js';
 
 export interface BudgetPreflightParams {
   candidate: RoutingCandidate;
@@ -52,17 +53,6 @@ export class ModelBudgetExceededError extends Error {
     this.name = 'ModelBudgetExceededError';
     this.event = event;
   }
-}
-
-/**
- * An explicit zero rate is known pricing (subscription or free route); only an
- * absent or invalid rate is unknown.
- */
-function toNonNegativeRate(value: unknown): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-    return undefined;
-  }
-  return value;
 }
 
 function toModelKey(provider: string, model: string): string {
@@ -126,72 +116,66 @@ function resolveRegistryEntryForIdentity(
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-function resolveUsdCostRates(
+/**
+ * The slot's current price (lomm1): the gateway price book when wired (fresh
+ * catalogue price, then owner `cost`), else the owner `cost` alone. `atMs` is
+ * when the priced attempt started, so admission and booking of one attempt
+ * read the same quote.
+ */
+export function resolveEntryPrice(
+  config: SubstrateConfig,
   entry: ModelRegistryEntry | undefined,
-): { inputPer1MUsd: number; outputPer1MUsd: number } | null {
-  if (!entry) return null;
-  const currency = typeof entry.cost?.currency === 'string'
-    ? entry.cost.currency.trim().toUpperCase()
-    : 'USD';
-  if (currency !== 'USD') return null;
+  atMs: number,
+): ResolvedSlotPrice {
+  if (!entry) return { source: 'unknown' };
+  if (config.modelPriceBook) return config.modelPriceBook.resolve(entry, atMs);
+  const owner = resolveOwnerCostRates(entry);
+  return owner ? { source: 'owner', rates: owner } : { source: 'unknown' };
+}
 
-  const inputRate = toNonNegativeRate(entry.cost?.inputPer1MUsd);
-  const outputRate = toNonNegativeRate(entry.cost?.outputPer1MUsd);
-  if (inputRate === undefined && outputRate === undefined) return null;
-  return {
-    inputPer1MUsd: inputRate ?? outputRate ?? 0,
-    outputPer1MUsd: outputRate ?? inputRate ?? 0,
-  };
+/** Admission needs both token rates; nothing is borrowed from another bucket. */
+function resolveAdmissionRates(
+  price: ResolvedSlotPrice,
+): { inputPer1MUsd: number; outputPer1MUsd: number } | null {
+  const input = price.rates?.inputPer1MUsd;
+  const output = price.rates?.outputPer1MUsd;
+  if (input === undefined || output === undefined) return null;
+  return { inputPer1MUsd: input, outputPer1MUsd: output };
+}
+
+export function resolveModelUsagePrice(
+  config: SubstrateConfig,
+  candidate: RoutingCandidate,
+  purpose: RoutingPurpose | undefined,
+  atMs: number,
+): ResolvedSlotPrice {
+  return resolveEntryPrice(config, resolveRegistryEntryForIdentity(config, candidate, purpose), atMs);
 }
 
 export function resolveModelUsageCostRates(
   config: SubstrateConfig,
   candidate: RoutingCandidate,
   purpose?: RoutingPurpose,
+  atMs = Date.now(),
 ): ModelUsageCostRates | undefined {
-  return resolveCostRatesForEntry(resolveRegistryEntryForIdentity(config, candidate, purpose));
+  return resolveModelUsagePrice(config, candidate, purpose, atMs).rates;
 }
 
 export function resolveModelUsageCostRatesForIdentity(
   config: SubstrateConfig,
   identity: ModelUsagePricingIdentity,
+  atMs = Date.now(),
 ): ModelUsageCostRates | undefined {
-  return resolveCostRatesForEntry(resolveRegistryEntryForIdentity(config, identity));
-}
-
-function resolveCostRatesForEntry(
-  entry: ModelRegistryEntry | undefined,
-): ModelUsageCostRates | undefined {
-  if (!entry?.cost) return undefined;
-  const currency = typeof entry.cost.currency === 'string'
-    ? entry.cost.currency.trim().toUpperCase()
-    : 'USD';
-  if (currency !== 'USD') return undefined;
-  const rate = toNonNegativeRate;
-  const rates: ModelUsageCostRates = {
-    ...(rate(entry.cost.inputPer1MUsd) !== undefined
-      ? { inputPer1MUsd: rate(entry.cost.inputPer1MUsd) }
-      : {}),
-    ...(rate(entry.cost.outputPer1MUsd) !== undefined
-      ? { outputPer1MUsd: rate(entry.cost.outputPer1MUsd) }
-      : {}),
-    ...(rate(entry.cost.cacheReadPer1MUsd) !== undefined
-      ? { cacheReadPer1MUsd: rate(entry.cost.cacheReadPer1MUsd) }
-      : {}),
-    ...(rate(entry.cost.cacheWritePer1MUsd) !== undefined
-      ? { cacheWritePer1MUsd: rate(entry.cost.cacheWritePer1MUsd) }
-      : {}),
-    currency,
-  };
-  return Object.keys(rates).length > 1 ? rates : undefined;
+  return resolveEntryPrice(config, resolveRegistryEntryForIdentity(config, identity), atMs).rates;
 }
 
 function resolveHistoricalBudgetPricing(
   config: SubstrateConfig,
+  nowMs: number,
 ): ModelUsageBudgetPricingRate[] {
   return (config.modelRegistry?.models ?? []).flatMap((entry) => {
     if (entry.enabled === false) return [];
-    const rates = resolveCostRatesForEntry(entry);
+    const rates = resolveEntryPrice(config, entry, nowMs).rates;
     if (
       rates?.inputPer1MUsd === undefined
       || rates.outputPer1MUsd === undefined
@@ -397,7 +381,7 @@ export class ModelBudgetController {
     let spend: ModelUsageBudgetSpendSnapshot;
     try {
       const companionId = params.correlation?.companionId?.trim();
-      const historicalPricing = resolveHistoricalBudgetPricing(this.config);
+      const historicalPricing = resolveHistoricalBudgetPricing(this.config, nowMs);
       const scope = companionId || policy.accountingStartMs !== undefined
         ? {
             ...(companionId ? { companionId } : {}),
@@ -444,8 +428,9 @@ export class ModelBudgetController {
       }
       estimatedRequestCostUsd = params.fixedEstimatedCostUsd;
     } else {
-      const entry = resolveRegistryEntryForIdentity(this.config, params.candidate, params.purpose);
-      const rates = resolveUsdCostRates(entry);
+      const rates = resolveAdmissionRates(
+        resolveModelUsagePrice(this.config, params.candidate, params.purpose, nowMs),
+      );
       if (!rates) {
         return {
           allowed: !policy.enabled,

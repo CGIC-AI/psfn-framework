@@ -1553,6 +1553,21 @@ export interface CanonicalProviderRegistry {
   providers: ProviderRegistryEntry[];
 }
 
+/**
+ * Where a slot's current price is read from the provider catalogue (lomm1).
+ * An OpenRouter slot defaults to its own model id; any other route (a coding
+ * plan, a direct vendor endpoint) names the catalogue model it serves.
+ * `upstreamProvider` is the OpenRouter endpoint tag whose price applies —
+ * unless set, the first provider the slot's `routing.providerOrder` pins, else
+ * the model's own vendor (the model id's author slug). A bare slug matches
+ * that provider's endpoints (its standard `slug` endpoint first) and a full
+ * tag (`slug/variant`) exactly one.
+ */
+export interface ModelRegistryPricingReference {
+  catalogModel?: string;
+  upstreamProvider?: string;
+}
+
 export interface ModelRegistryEntry {
   id: string;
   enabled?: boolean;
@@ -1563,8 +1578,27 @@ export interface ModelRegistryEntry {
   capabilities?: ModelRegistryCapabilityMetadata;
   tuning?: ModelRegistryTuningMetadata;
   routing?: ModelRegistryRoutingMetadata;
+  /**
+   * The provider's own published per-million-token price, used when no fresh
+   * catalogue price is available for the slot (lomm1).
+   */
   cost?: ModelRegistryCostMetadata;
+  pricing?: ModelRegistryPricingReference;
   metadata?: Record<string, unknown>;
+}
+
+/**
+ * Registry-wide price refresh policy (models.json owner, lomm1). The gateway
+ * re-reads every enabled slot's upstream price from the provider catalogue
+ * each `intervalMinutes`; a catalogue price older than `maxAgeMinutes` is no
+ * longer used, so the slot falls back to its owner `cost` or is unknown.
+ */
+export interface ModelRegistryPricingPolicy {
+  catalogRefresh: {
+    enabled: boolean;
+    intervalMinutes: number;
+    maxAgeMinutes: number;
+  };
 }
 
 /**
@@ -1622,6 +1656,7 @@ export interface CanonicalModelRegistry {
   models: ModelRegistryEntry[];
   budgetPolicy?: ModelRegistryBudgetPolicy;
   promptCaching?: ModelRegistryPromptCachingPolicy;
+  pricing?: ModelRegistryPricingPolicy;
   imageModels?: ImageModelRegistryEntry[];
 }
 

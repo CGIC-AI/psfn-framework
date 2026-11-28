@@ -138,7 +138,7 @@ export function defaultModelSlugs(
   const suggestions = discoverModelSuggestions(seedDir);
   const primary = suggestions.find((s) => s.role === 'primary')?.slug ?? 'z-ai/glm-5';
   const extraction = suggestions.find((s) => s.role === 'extraction')?.slug ?? 'deepseek/deepseek-v3.2';
-  const vision = suggestions.find((s) => s.role === 'vision')?.slug ?? 'google/gemini-3.1-flash';
+  const vision = suggestions.find((s) => s.role === 'vision')?.slug ?? 'google/gemini-3.1-flash-lite';
   const fallbackChat = suggestions.find((s) => s.role === 'catalog' && s.slug !== primary)?.slug
     ?? 'moonshotai/kimi-k2.5';
   return { primary, extraction, vision, fallbackChat };

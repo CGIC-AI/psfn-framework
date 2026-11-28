@@ -19,8 +19,6 @@ sources:
     resource: repo://admin-ui/src/lib/nav.ts
   - id: openwiki-source-105fd7a363cc82102fdbf570
     resource: repo://admin-ui/src/routes/%2Blayout.svelte
-  - id: openwiki-source-3386edb17178db223a9d070c
-    resource: repo://docs/garden-control-plane.md
   - id: openwiki-source-9d14543ef75a97f03641ca5c
     resource: repo://src/app/operator/main.ts
   - id: openwiki-source-aaeb5e845fae7f4956a03581
@@ -39,8 +37,6 @@ sources:
     resource: repo://src/operator/garden/fleet-child-assertion-client.ts
   - id: openwiki-source-1a476d65acd63773dd369788
     resource: repo://src/operator/garden/fleet-garden-control-plane.ts
-  - id: openwiki-source-1eb870c3858e2c5eca7d7f57
-    resource: repo://src/operator/garden/fleet-garden-direct-database.ts
   - id: openwiki-source-4bf9571c74de064669a3e938
     resource: repo://src/operator/garden/fleet-garden-operator-router.ts
   - id: openwiki-source-8aa2ced308368bf27ad03443

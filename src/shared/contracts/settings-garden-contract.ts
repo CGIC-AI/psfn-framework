@@ -207,7 +207,6 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   voiceReplySegmenter: { sectionId: 'voice', surface: 'advanced' },
   obsidianVaultName: { sectionId: 'obsidian', surface: 'advanced' },
   obsidianCliPath: { sectionId: 'obsidian', surface: 'advanced' },
-  obsidianAutoPublish: { sectionId: 'obsidian', surface: 'advanced' },
   obsidianTimeoutMs: { sectionId: 'obsidian', surface: 'advanced' },
   discordTriggerWords: { sectionId: 'channels', surface: 'advanced' },
   discordTriggerReactions: { sectionId: 'channels', surface: 'advanced' },

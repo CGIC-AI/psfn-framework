@@ -63,7 +63,6 @@ function createConfig(): SubstrateConfig {
     wyomingEnabled: false,
     telegramEnabled: false,
     capabilityTier: 'nursery',
-    obsidianAutoPublish: false,
     obsidianTimeoutMs: 1000,
     wyomingShardRouting: {
       enabled: true,

@@ -646,16 +646,6 @@ export function parseSettingsForm(
       }
     }
 
-    const obsidianAutoPublishRaw = params.get('obsidianAutoPublish');
-    if (obsidianAutoPublishRaw !== null) {
-      const enabled = toBoolean(obsidianAutoPublishRaw);
-      if (enabled === undefined) {
-        errors.push('obsidianAutoPublish must be true or false');
-      } else {
-        settings.obsidianAutoPublish = enabled;
-      }
-    }
-
     // obsidianTimeoutMs is handled by SETTINGS_VALIDATION numeric loop
   };
 

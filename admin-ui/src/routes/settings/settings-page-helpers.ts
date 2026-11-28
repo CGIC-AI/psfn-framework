@@ -500,7 +500,6 @@ export interface SettingsSimpleFormState {
   deepgramModel: string;
   obsidianVaultName: string;
   obsidianCliPath: string;
-  obsidianAutoPublish: boolean;
   obsidianTimeoutMs: number;
   discordTriggerWords: string;
   discordTriggerReactions: string;
@@ -542,7 +541,7 @@ export function buildAdvancedSettingsSections(input: {
       return parts.join(', ');
     },
     voice: () => `TTS: ${state.ttsProvider}, STT: ${state.sttProvider}`,
-    obsidian: () => state.obsidianVaultName ? `External vault: ${state.obsidianVaultName}${state.obsidianAutoPublish ? ', auto-publish' : ''}` : 'Disabled',
+    obsidian: () => state.obsidianVaultName ? `External vault: ${state.obsidianVaultName}` : 'Disabled',
     channels: () => {
       const wordsCount = splitCsv(state.discordTriggerWords).length;
       const reactionsCount = splitCsv(state.discordTriggerReactions).length;
@@ -624,7 +623,6 @@ export function populateSimpleSettingsForm(settingsData: AdminSettingsData): Set
     deepgramModel: String(config.deepgramModel ?? ''),
     obsidianVaultName: String(config.obsidianVaultName ?? ''),
     obsidianCliPath: String(config.obsidianCliPath ?? 'obsidian'),
-    obsidianAutoPublish: Boolean(config.obsidianAutoPublish),
     obsidianTimeoutMs: Number(config.obsidianTimeoutMs ?? 10000),
     discordTriggerWords: String(config.discordTriggerWords ?? ''),
     discordTriggerReactions: String(config.discordTriggerReactions ?? '👆'),
@@ -703,7 +701,6 @@ export function syncCuratedSettingsField(
     case 'deepgramModel': return { deepgramModel: stringFromConfigValue(value) };
     case 'obsidianVaultName': return { obsidianVaultName: stringFromConfigValue(value) };
     case 'obsidianCliPath': return { obsidianCliPath: stringFromConfigValue(value) };
-    case 'obsidianAutoPublish': return { obsidianAutoPublish: value === true };
     case 'obsidianTimeoutMs': return { obsidianTimeoutMs: numberFromConfigValue(value, current.obsidianTimeoutMs) };
     case 'discordTriggerWords': return { discordTriggerWords: stringFromConfigValue(value) };
     case 'discordTriggerReactions': return { discordTriggerReactions: stringFromConfigValue(value) };
@@ -770,7 +767,6 @@ export function collectSimpleSettingsPayload(
     deepgramModel: state.deepgramModel,
     obsidianVaultName: state.obsidianVaultName || undefined,
     obsidianCliPath: state.obsidianCliPath || 'obsidian',
-    obsidianAutoPublish: state.obsidianAutoPublish,
     obsidianTimeoutMs: state.obsidianTimeoutMs,
     discordTriggerWords: state.discordTriggerWords,
     discordTriggerReactions: state.discordTriggerReactions,

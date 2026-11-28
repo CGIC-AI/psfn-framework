@@ -282,7 +282,6 @@ export const SETTINGS_BOOLEAN_FIELDS = new Set<string>([
   'webFetchAllowInternalNetwork',
   'homeAssistantEnabled',
   'telegramEnabled',
-  'obsidianAutoPublish',
   'moaEnabled',
   'memoryExtractionTelemetryEnabled',
   'memoryRetrievalTelemetryEnabled',

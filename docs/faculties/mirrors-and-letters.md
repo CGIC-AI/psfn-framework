@@ -179,35 +179,39 @@ come back to her.*
 Introspection audits nothing without explicit companion consent. Consent is an
 append-only, hash-chained JSONL ledger (`IntrospectionConsentStore`) at
 `<companionDataDir>/state/introspection-consent.jsonl`
-(`repo://src/persistence/layout.ts#L750`): each revision carries a
+(`repo://src/persistence/layout.ts#L753-L755`): each revision carries a
 monotonically increasing `revision`, the previous hash, an `actor` (kind
 `companion` with `turnId` + `requestId` — operator or machinery actors are
 rejected by the parser), an exact allowlist of public channel ids (**wildcards
 are forbidden**, duplicates forbidden, an enabled policy requires at least one
 channel), and a SHA-256 hash over the canonical serialization. A missing file
-is the unconfigured policy: `enabled: false`, no channels. Every append
-re-loads the whole chain, so a corrupted, truncated, or tampered ledger fails
-closed with a thrown error
-(`repo://src/faculties/introspection/consent-store.ts#L168-L224`, contract
+is the unconfigured policy: `enabled: false`, no channels. Every load re-reads
+the whole chain, so a corrupted, truncated, or tampered ledger fails closed
+with a thrown error
+(`repo://src/faculties/introspection/consent-store.ts#L168-L225`, contract
 `repo://src/faculties/introspection/contracts.ts#L1-L37`). The complete chain
 is read at agent startup — corruption is fatal, absence is inert
-(`repo://src/app/agent/core-runtime.ts#L918-L925`).
+(`repo://src/app/agent/core-runtime.ts#L1192-L1197`).
 
-The companion draws those boundaries herself through the `orient` tool:
-`introspection_consent_set` refuses to run outside an active foreground
-companion turn — the request context must carry a `turnId` and `requestId` and
-must not be a background call — so a background lane or tool loop can never
-widen audit consent; `introspection_consent_get` merely reads back the current
-ledger state (`repo://src/faculties/core-memory/tools.ts#L408-L441`,
-tool-surface contract `repo://src/core/agent/tool-surface/descriptions/continuity-contracts.ts#L44-L46`).
-A companion turn can also mark its own current turn `non_intimate` /
-`intimate` via `introspection_turn_sensitivity_set`
-(`repo://src/faculties/core-memory/tools.ts#L382-L406`). That decision is a
-process-local bridge (`IntrospectionTurnSensitivityDecisions`, monotonic toward
-`intimate` for a repeated marking, capped at 512 pending entries) consumed by
-the durable `TurnRecord` writer — transport messages cannot populate the
-bridge, and it only ever classifies the exact active turn
-(`repo://src/faculties/introspection/turn-sensitivity.ts#L1-L65`).
+No companion surface writes that ledger today. The `orient` actions that let
+her draw the boundary herself — `introspection_consent_set`,
+`introspection_consent_get` and `introspection_turn_sensitivity_set` — were
+retired with the other standalone introspection writing surfaces when
+introspection reflections moved into the journal (psfn-framework-b3h5p.1, PR
+#640). `IntrospectionConsentStore.append` remains, but nothing in production
+calls it. A companion without a ledger therefore stays unconfigured and the
+audit runs nothing; a ledger written before the retirement still governs audits
+exactly as recorded, but she can no longer widen, narrow or read it from a
+turn.
+
+The per-turn sensitivity bridge (`IntrospectionTurnSensitivityDecisions`,
+monotonic toward `intimate` for a repeated marking, capped at 512 pending
+entries) is still constructed at startup and consumed by the durable
+`TurnRecord` writer, but its only producer was the retired
+`introspection_turn_sensitivity_set` action. No turn is marked any more, so
+turn records carry no companion sensitivity decision
+(`repo://src/faculties/introspection/turn-sensitivity.ts#L1-L65`,
+`repo://src/core/agent/substrate-agent/turn-support-runtime.ts#L677-L688`).
 
 ### The blinded audit pipeline
 

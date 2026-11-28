@@ -15,8 +15,6 @@ sources:
     resource: repo://deploy/helm/psfn/templates/validations.yaml
   - id: openwiki-source-58d1e0b7f64e4f6822ec1f79
     resource: repo://deploy/helm/psfn/values.yaml
-  - id: openwiki-source-dc08b037a4a0c1f6efc90bd0
-    resource: repo://docs/certificates.md
   - id: openwiki-source-5b54a58d1b51cd490b0e7162
     resource: repo://package.json
   - id: openwiki-source-21ff185c06d95d03a0471b17

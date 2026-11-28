@@ -225,9 +225,9 @@ time is a sanctioned first-class output, not a hidden side effect.
 
 ### Reflection auto-publish mirror
 
-When the `obsidianAutoPublish` setting is enabled (default off,
-`src/system/config/load-config.ts#L631`), `createOptionalJournalAutoPublisher`
-(`src/app/agent/journal-runtime.ts#L22-L33`) wires
+No setting gates this mirror: it writes only to the companion's local
+workspace journal, so `createOptionalJournalAutoPublisher`
+(`src/app/agent/journal-runtime.ts#L22-L33`) always wires
 `JournalAutoPublisher.publishReflection`
 (`src/boundary/integrations/journal/auto-publish.ts#L70-L85`), which the
 reflection template runtime invokes after every reflection

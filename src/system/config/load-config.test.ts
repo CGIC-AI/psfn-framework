@@ -543,7 +543,6 @@ describe('loadConfig path defaults', () => {
     expect(config.telegramEnabled).toBe(false);
     expect(config.wyomingShardRouting).toMatchObject({ enabled: false });
     expect(config.shardToolsets).toEqual({});
-    expect(config.obsidianAutoPublish).toBe(false);
     expect(config.ttsProvider).toBeUndefined();
   });
 

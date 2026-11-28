@@ -13,7 +13,7 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ResolvedCorrelationMetadata } from './correlation.js';
-import type { RoutingCandidate } from './routing.js';
+import { resolveCandidateRequestTemperature, type RoutingCandidate } from './routing.js';
 import {
   createOpenAICompatibleEndpointModel,
   requiresThinkingDisabledForRequiredTools,
@@ -134,8 +134,9 @@ export class LLMRequestCapability {
     if (candidate.contextWindow !== undefined) {
       requestOptions.contextWindow = candidate.contextWindow;
     }
-    if (candidate.temperature !== undefined) {
-      requestOptions.temperature = candidate.temperature;
+    const temperature = resolveCandidateRequestTemperature(candidate);
+    if (temperature !== undefined) {
+      requestOptions.temperature = temperature;
     }
     const reasoning = this.resolveReasoningLevel(candidate);
     if (reasoning) {
@@ -180,6 +181,7 @@ export class LLMRequestCapability {
     correlation: ResolvedCorrelationMetadata | undefined,
     accounting?: LLMCallAccountingContext,
   ): LLMContext {
+    const temperature = resolveCandidateRequestTemperature(candidate);
     return {
       systemPrompt: context.systemPrompt,
       messages: context.messages,
@@ -199,9 +201,7 @@ export class LLMRequestCapability {
           ? { thinkingEnabled: candidate.thinkingEnabled }
           : {}),
         ...(candidate.thinkingEffort ? { thinkingEffort: candidate.thinkingEffort } : {}),
-        ...(candidate.temperature !== undefined
-          ? { temperature: candidate.temperature }
-          : {}),
+        ...(temperature !== undefined ? { temperature } : {}),
         ...(candidate.topP !== undefined ? { topP: candidate.topP } : {}),
         ...(candidate.topK !== undefined ? { topK: candidate.topK } : {}),
         ...(candidate.frequencyPenalty !== undefined

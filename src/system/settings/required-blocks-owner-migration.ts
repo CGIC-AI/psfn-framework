@@ -19,6 +19,7 @@ import type {
   WikiStartupHydrationSettings,
 } from '../config/runtime-config-contracts.js';
 import {
+  REMOVED_RUNTIME_SETTINGS_KEYS,
   SETTINGS_FILE_NAME,
   type EditableSettings,
 } from './contracts.js';
@@ -61,6 +62,8 @@ export interface RequiredSettingsBlocksMigrationResult {
   filePath: string;
   addedPaths?: string[];
   updatedPaths?: string[];
+  /** Retired keys (REMOVED_RUNTIME_SETTINGS_KEYS) the owner file still carried. */
+  removedPaths?: string[];
 }
 
 function migrateLegacyEmosimProactivityBlock(
@@ -105,8 +108,8 @@ function migrateLegacyEmosimProactivityBlock(
 
 /**
  * Upgrade settings owners written before current default-bearing runtime
- * contract fields existed. The legacy function name remains the stable CLI
- * seam used by deployed init containers.
+ * contract fields existed, and drop keys the contract has retired. The legacy
+ * function name remains the stable CLI seam used by deployed init containers.
  */
 export function migrateRequiredSettingsBlocks(
   options: RequiredSettingsBlocksMigrationOptions,
@@ -149,6 +152,13 @@ export function migrateRequiredSettingsBlocks(
     if (migrateLegacyEmosimProactivityBlock(candidate, defaults)) {
       updatedPaths.push('emosimProactivity');
     }
+    const removedPaths: string[] = [];
+    for (const key of REMOVED_RUNTIME_SETTINGS_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(candidate, key)) {
+        delete candidate[key];
+        removedPaths.push(key);
+      }
+    }
     for (const [key, value] of Object.entries(defaults).sort(([left], [right]) => (
       left.localeCompare(right)
     ))) {
@@ -159,7 +169,7 @@ export function migrateRequiredSettingsBlocks(
     }
 
     normalizeEditableSettings(candidate as EditableSettings);
-    if (addedPaths.length === 0 && updatedPaths.length === 0) {
+    if (addedPaths.length === 0 && updatedPaths.length === 0 && removedPaths.length === 0) {
       assertSourceStillCurrent();
       const canonicalMode = canonicalOwnerFileMode({
         ownerFileName: SETTINGS_FILE_NAME,
@@ -190,6 +200,7 @@ export function migrateRequiredSettingsBlocks(
       filePath,
       ...(addedPaths.length > 0 ? { addedPaths } : {}),
       ...(updatedPaths.length > 0 ? { updatedPaths } : {}),
+      ...(removedPaths.length > 0 ? { removedPaths } : {}),
     };
     if (options.apply) {
       writeFileDurableAtomicSync(

@@ -126,7 +126,6 @@ export const CURATED_RENDERED_FIELD_KEYS: ReadonlySet<string> = new Set<string>(
   'echoTtsPreset',
   'obsidianVaultName',
   'obsidianCliPath',
-  'obsidianAutoPublish',
   'obsidianTimeoutMs',
   'discordTriggerWords',
   'discordTriggerReactions',

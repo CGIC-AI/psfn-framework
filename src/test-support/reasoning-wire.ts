@@ -5,41 +5,29 @@ import { vi } from 'vitest';
 import type { CanonicalModelRegistry } from '../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import { createEnvCredentialVault, envCredential } from '../boundary/custody/credential-vault.js';
+import fixture from './fixtures/reasoning-wire.json' with { type: 'json' };
 
 /**
  * Shared provider-wire fixtures for reasoning-effort tests: a two-slot
  * OpenRouter registry (glm-5 chat, deepseek-v3.2 background/memory), a
  * substrate config over it, and a fetch stub that captures every provider
  * request body as sent. Only the network is stubbed; LLMClient, routing and
- * pi-ai run for real.
+ * pi-ai run for real. The fixture values live in fixtures/reasoning-wire.json.
  */
 
 export function reasoningWireRegistry(
   primary: { model?: string; tuning?: Record<string, unknown> } = {},
 ): CanonicalModelRegistry {
+  const registry = structuredClone(fixture.registry) as CanonicalModelRegistry;
   return {
-    schemaVersion: 1,
-    models: [
-      {
-        id: 'primary',
-        rank: 100,
-        identity: { provider: 'openrouter', model: primary.model ?? 'z-ai/glm-5', source: { type: 'openrouter' } },
-        purposes: [{ purpose: 'chat', primary: true }],
-        capabilities: { maxOutputTokens: 16384, contextWindow: 128000 },
-        tuning: { maxOutputTokens: 16384, ...primary.tuning },
-      },
-      {
-        id: 'extraction',
-        rank: 80,
-        identity: { provider: 'openrouter', model: 'deepseek/deepseek-v3.2', source: { type: 'openrouter' } },
-        purposes: [
-          { purpose: 'background', primary: true },
-          { purpose: 'memory', primary: true },
-        ],
-        capabilities: { maxOutputTokens: 8192, contextWindow: 128000 },
-        tuning: { maxOutputTokens: 8192 },
-      },
-    ],
+    ...registry,
+    models: registry.models.map(model => (model.id === 'primary'
+      ? {
+        ...model,
+        identity: { ...model.identity, model: primary.model ?? model.identity.model },
+        tuning: { ...model.tuning, ...primary.tuning },
+      }
+      : model)),
   };
 }
 
@@ -47,25 +35,11 @@ export function reasoningWireRegistry(
 export function makeReasoningWireConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   const dataDir = mkdtempSync(join(tmpdir(), 'psfn-reasoning-wire-'));
   return {
-    primaryModel: 'z-ai/glm-5',
-    primaryProvider: 'openrouter',
-    openRouterApiBaseUrl: 'https://openrouter.ai/api/v1',
+    ...fixture.config,
     openRouterApiKeyRef: envCredential('OPENROUTER_API_KEY'),
     credentialVault: createEnvCredentialVault({ OPENROUTER_API_KEY: 'test-openrouter-key' }),
-    extractionModel: 'deepseek/deepseek-v3.2',
-    extractionProvider: 'openrouter',
-    primaryMaxTokens: 4096,
-    extractionMaxTokens: 2048,
-    discordToken: '',
-    discordBotId: '',
-    characterCardPath: '',
     dataDir,
     databasePath: join(dataDir, 'test.db'),
-    extractionInterval: 5,
-    maintenanceIntervalMs: 300_000,
-    defaultContextWindow: 128_000,
-    extractionThresholdPct: 30,
-    compactionThresholdPct: 70,
     modelRegistry: reasoningWireRegistry(),
     ...overrides,
   } as SubstrateConfig;

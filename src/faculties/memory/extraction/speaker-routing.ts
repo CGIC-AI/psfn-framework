@@ -62,6 +62,8 @@ export interface ExtractionFactRouting {
   sourceSpanEndMessageId?: number;
   /** Latest source-message instant (epoch ms) of the routed fact's conversation. */
   sourceConversationAt?: number;
+  /** Sole human of a private direct conversation (d5e0p.21); never persisted. */
+  directCounterpartyContactId?: string;
   /** Durable ICP relationship/activity lineage for the attributed source range. */
   icpDyadId?: string;
   sourceActivityIds?: string[];
@@ -102,6 +104,8 @@ export type FactRoutingDecision =
     sourceSpanEndMessageId?: number;
     /** Latest source-message instant (epoch ms) of this fact's conversation. */
     sourceConversationAt?: number;
+    /** Sole human of a private direct conversation (d5e0p.21). */
+    directCounterpartyContactId?: string;
     reason: ExtractionFactRoutingReason;
   }
   | {
@@ -198,6 +202,73 @@ export function resolveFactRouting(
   context: SpeakerRoutingContext,
   triggerContactId: string | undefined,
   options: FactRoutingOptions = {},
+): FactRoutingDecision {
+  const decision = resolveSpeakerFactRouting(fact, context, triggerContactId, options);
+  const counterparty = resolveDirectCounterpartyContactId(context, triggerContactId, options);
+  return decision.status === 'route' && counterparty
+    ? { ...decision, directCounterpartyContactId: counterparty }
+    : decision;
+}
+
+/**
+ * The sole human of a private direct conversation, when that human is the
+ * turn's trigger contact and a live, known human contact. Rooms, multi-speaker
+ * windows, companion peers and unattributed turns have no direct counterparty.
+ */
+function resolveDirectCounterpartyContactId(
+  context: SpeakerRoutingContext,
+  triggerContactId: string | undefined,
+  options: FactRoutingOptions,
+): string | undefined {
+  if (!options.directConversation || options.requireStructuredAddressing || !triggerContactId) {
+    return undefined;
+  }
+  const humans = context.speakers.filter(speaker => !speaker.companion);
+  if (humans.length !== 1) return undefined;
+  const contactId = humans[0]!.contactId ?? triggerContactId;
+  if (contactId !== triggerContactId) return undefined;
+  const contact = context.contacts?.find(candidate => candidate.id === contactId);
+  return contact && !contact.archivedAt && !contact.isMachineIntelligence ? contactId : undefined;
+}
+
+const DIRECT_COUNTERPARTY_SUBJECT_REASONS: ReadonlySet<ExtractionFactRoutingReason> = new Set([
+  'single_speaker_transcript',
+  'structured_source_metadata',
+]);
+
+/**
+ * Stamp the direct counterparty as the subject of a DM fact that names no
+ * other subject (psfn-framework-d5e0p.21). The subject classifier refuses a
+ * trigger or source contact as an implicit subject, so without this a DM
+ * fact about the sole human is `unattributed` and never recallable in that
+ * DM. Runs after mention-only third-party resolution, so a fact diverted to a
+ * named third party keeps that subject.
+ */
+export function stampDirectCounterpartySubject(
+  routing: ExtractionFactRouting,
+  factContactId: string | undefined,
+): ExtractionFactRouting {
+  const counterparty = routing.directCounterpartyContactId;
+  if (
+    !counterparty
+    || routing.subjectContactId
+    || routing.subjectName?.trim()
+    || !DIRECT_COUNTERPARTY_SUBJECT_REASONS.has(routing.routingReason)
+    || factContactId !== counterparty
+    || routing.routedContactId !== counterparty
+    || routing.triggerContactId !== counterparty
+    || (routing.sourceContactId !== undefined && routing.sourceContactId !== counterparty)
+  ) {
+    return routing;
+  }
+  return { ...routing, subjectContactId: counterparty };
+}
+
+function resolveSpeakerFactRouting(
+  fact: ExtractedFact,
+  context: SpeakerRoutingContext,
+  triggerContactId: string | undefined,
+  options: FactRoutingOptions,
 ): FactRoutingDecision {
   // A turn contact is proof for the sole user in a direct conversation only.
   // Group extraction must continue to resolve each source independently.

@@ -55,6 +55,9 @@ export function buildExtractionFactRoutingTelemetry(
     ...(routing.sourceConversationAt !== undefined
       ? { sourceConversationAt: routing.sourceConversationAt }
       : {}),
+    ...(routing.directCounterpartyContactId
+      ? { directCounterpartyContactId: routing.directCounterpartyContactId }
+      : {}),
     routingReason: routing.reason,
   };
 }

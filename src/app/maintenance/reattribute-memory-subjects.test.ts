@@ -3,6 +3,7 @@ import type { Pool } from 'pg';
 import {
   parseArgs,
   parseContactMapping,
+  resolveRepairMode,
 } from './reattribute-memory-subjects.js';
 import {
   normalizeMemorySubjectContactMappings,
@@ -51,5 +52,22 @@ describe('memory subject re-attribution maintenance CLI', () => {
       mappings: [{ fromContactId: 'old', toContactId: 'current' }],
       dryRun: undefined as never,
     })).rejects.toThrow(/dryRun must be explicitly true or false/u);
+  });
+
+  it('selects DM subject mode and binds apply to the reviewed dry-run count', () => {
+    expect(resolveRepairMode(parseArgs(['--dm-channel', 'dm-1', '--dm-contact', 'contact-a']))).toEqual({
+      kind: 'direct_message', channelId: 'dm-1', contactId: 'contact-a',
+    });
+    expect(resolveRepairMode(parseArgs([
+      '--dm-channel', 'dm-1', '--dm-contact', 'contact-a', '--apply', '--expect-count', '0',
+    ]))).toEqual({ kind: 'direct_message', channelId: 'dm-1', contactId: 'contact-a', expectCount: 0 });
+    expect(() => resolveRepairMode(parseArgs(['--dm-channel', 'dm-1', '--dm-contact', 'contact-a', '--apply'])))
+      .toThrow(/requires --expect-count/u);
+    expect(() => resolveRepairMode(parseArgs(['--dm-channel', 'dm-1']))).toThrow(/requires both/u);
+    expect(() => resolveRepairMode(parseArgs(['--dm-channel', 'dm-1', '--dm-contact', 'a', '--map', 'x=y'])))
+      .toThrow(/cannot be combined/u);
+    expect(() => parseArgs(['--dm-channel', 'dm-1', '--dm-contact', 'a', '--expect-count', '-1']))
+      .toThrow(/non-negative integer/u);
+    expect(() => resolveRepairMode(parseArgs([]))).toThrow(/At least one contact mapping/u);
   });
 });

@@ -500,6 +500,7 @@ export async function runExtractionOrchestration(
       ],
       companionAuthorIds: options.companionAuthorIds ?? [],
       requireStructuredAddressing: groupRoomExtraction,
+      directConversation: !groupRoomExtraction && channelVisibility === 'private',
       channelId: options.channelId,
       attemptRef,
       triggerReason: options.triggerReason,

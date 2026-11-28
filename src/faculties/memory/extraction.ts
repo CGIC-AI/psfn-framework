@@ -48,6 +48,7 @@ import {
 } from './extraction/types.js';
 import {
   isCompanionOwnedRouting,
+  stampDirectCounterpartySubject,
   type ExtractionFactRouting,
 } from './extraction/speaker-routing.js';
 import {
@@ -1079,6 +1080,9 @@ export class MemoryExtractor {
           subjectName: routing.subjectName ?? mentionOnlyContact.displayName,
         };
       }
+    }
+    if (resolvedRouting && !companionOwned) {
+      resolvedRouting = stampDirectCounterpartySubject(resolvedRouting, factContactId);
     }
 
     // Deliberate interlocutor progression path (psfn-framework-kada.1). When a

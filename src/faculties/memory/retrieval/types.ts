@@ -1,3 +1,4 @@
+import type { DecisionSiteTrace } from '../../../primitives/llm/decision/types.js';
 import type { BroadcastVisibilityScope } from '../../../system/trust/broadcast-safety.js';
 import type {
   SensitivityLevel,
@@ -134,6 +135,9 @@ export interface RetrievalTelemetry {
   compositionalCandidateCount?: number;
   compositionalEvaluationBatchCount?: number;
   compositionalFinalistCount?: number;
+  /** Decision-backend outcomes for this retrieval; content-free (d5e0p.25). */
+  queryIntentDecision?: DecisionSiteTrace;
+  rerankDecision?: DecisionSiteTrace;
   embeddingCalls: number;
   searchCalls: number;
   stageTimingsMs: Partial<Record<

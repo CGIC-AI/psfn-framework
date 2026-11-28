@@ -30,6 +30,7 @@ import { classifyMemorySubject } from './subject-classification.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { keysetActiveMemoryPages, recentlyAccessedMemories } from '../../test-support/active-memory-pages.js';
 import { externalMemorySessionId } from '../../shared/contracts/external-memory.js';
+import { logger } from '../../shared/logger.js';
 
 // ── Helpers ──
 
@@ -3689,6 +3690,73 @@ describe('MemoryRetriever retrieval trace telemetry', () => {
       high: 1,
     });
     expect(telemetry.returnedCount).toBe(1);
+  });
+});
+
+describe('MemoryRetriever decision outcomes (d5e0p.25)', () => {
+  afterEach(() => {
+    tokenTestUtils.resetTokenizerState();
+  });
+
+  it('records query-intent and rerank outcomes in telemetry and the INFO trace without content', async () => {
+    const memories = [
+      makeMemory({ id: 'tea', text: 'Morgan brews oolong tea on Sundays.', similarity: 0.95 }),
+      makeMemory({ id: 'hike', text: 'Morgan hiked the ridge trail in spring.', similarity: 0.9 }),
+      makeMemory({ id: 'book', text: 'Morgan is reading a novel about tea farms.', similarity: 0.85 }),
+    ];
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(makeMockStore(memories), makeMockEmbedding(), { retrievalLimit: 20 }, eventBus);
+    const sites = {
+      'memory.query_intent': { enabled: true, threshold: 0.7, latencyBudgetMs: 200 },
+      'memory.rerank': { enabled: true, topN: 3, latencyBudgetMs: 200, blendWeight: 0.5 },
+    } as const;
+    retriever.setDecisionRuntime({
+      siteSettings: siteId => sites[siteId as keyof typeof sites],
+      decide: vi.fn(async (request) => {
+        if (request.siteId === 'memory.query_intent') throw new Error('query intent offline');
+        return {
+          ok: true as const,
+          answers: { m0: { type: 'noul' as const, pYes: 0.05 }, m1: { type: 'noul' as const, pYes: 0.5 }, m2: { type: 'noul' as const, pYes: 0.99 } },
+          backend: 'local-fallback' as const,
+          probabilitySource: 'self_report_uncalibrated' as const,
+          latencyMs: 7,
+        };
+      }),
+    });
+    const written = vi.spyOn(logger, 'write');
+
+    await retriever.retrieve('tea plans', 'api:decision-trace', 'primary', { isDirectMessage: true, privacyLevel: 'private' });
+
+    const records = written.mock.calls.map(([info]) => info as Record<string, unknown>);
+    written.mockRestore();
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    const telemetry = calls.find(([event]) => event === 'memory.retrieval')?.[1] as Record<string, unknown>;
+    expect(telemetry.queryIntentDecision).toEqual({ outcome: 'error', failureReason: 'thrown', latencyMs: expect.any(Number) });
+    expect(telemetry.rerankDecision).toEqual({
+      outcome: 'applied', backend: 'local-fallback', latencyMs: expect.any(Number), changed: true,
+    });
+    const trace = records.find(info => info.message === 'Retrieval trace');
+    expect(trace).toMatchObject({
+      level: 'info',
+      queryIntentDecision: { outcome: 'error' },
+      rerankDecision: { outcome: 'applied', backend: 'local-fallback', changed: true },
+    });
+    const decisionFields = JSON.stringify([trace?.queryIntentDecision, trace?.rerankDecision]);
+    expect(decisionFields).not.toMatch(/oolong|ridge|novel|tea plans|offline/u);
+  });
+
+  it('reports both sites off when no decision runtime is wired', async () => {
+    const eventBus = makeMockEventBus();
+    await new MemoryRetriever(
+      makeMockStore([makeMemory({ id: 'solo', text: 'Morgan likes rain.', similarity: 0.9 })]),
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      eventBus,
+    ).retrieve('rain', 'api:decision-off', 'primary', { isDirectMessage: true, privacyLevel: 'private' });
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    const telemetry = calls.find(([event]) => event === 'memory.retrieval')?.[1] as Record<string, unknown>;
+    expect(telemetry.queryIntentDecision).toEqual({ outcome: 'off' });
+    expect(telemetry.rerankDecision).toEqual({ outcome: 'off' });
   });
 });
 

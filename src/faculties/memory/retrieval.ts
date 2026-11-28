@@ -1563,10 +1563,12 @@ export class MemoryRetriever implements MemoryProvider {
         }
         : null;
       // Synchronous site check first: with the site off, no extra await is taken.
-      const scoringRetrievalMode = decisionContext
+      const queryIntent = decisionContext
         && decisionContext.decisions.siteSettings('memory.query_intent')?.enabled === true
         ? await resolveQueryIntentRetrievalMode({ ...decisionContext, current: effectiveRetrievalMode })
-        : effectiveRetrievalMode;
+        : { mode: effectiveRetrievalMode, trace: { outcome: 'off' as const } };
+      const scoringRetrievalMode = queryIntent.mode;
+      telemetry.queryIntentDecision = queryIntent.trace;
       const allScored = policyAllowed
         .map(memory => ({
           memory,
@@ -1590,13 +1592,14 @@ export class MemoryRetriever implements MemoryProvider {
         llmProvider: this.llmProvider,
       });
       const lexicallyRanked = rerankDecision.ranked ?? allScored;
-      const decisionRanked = decisionContext
+      const decisionRerank = decisionContext
         && decisionContext.decisions.siteSettings('memory.rerank')?.enabled === true
         ? await applyDecisionRelevanceRerank({ ...decisionContext, candidates: lexicallyRanked })
-        : null;
+        : { ranked: null, trace: { outcome: 'off' as const } };
+      telemetry.rerankDecision = decisionRerank.trace;
       const scoredCandidates = await applySocialContextRankingAdjustments(
         this.contactStore,
-        decisionRanked ?? lexicallyRanked,
+        decisionRerank.ranked ?? lexicallyRanked,
         contextText,
         socialContext,
       );
@@ -1772,6 +1775,8 @@ export class MemoryRetriever implements MemoryProvider {
         compositionalCandidateCount: telemetry.compositionalCandidateCount,
         compositionalEvaluationBatchCount: telemetry.compositionalEvaluationBatchCount,
         compositionalFinalistCount: telemetry.compositionalFinalistCount,
+        queryIntentDecision: telemetry.queryIntentDecision,
+        rerankDecision: telemetry.rerankDecision,
       });
       log.debug('Retrieval decision rationale', {
         trustLevel: effectiveTrust,

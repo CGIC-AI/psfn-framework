@@ -120,3 +120,18 @@ interface DecisionFailure {
 
 /** A decide() result. Callers apply their own safe default on failure. */
 export type DecisionOutcome = DecisionSuccess | DecisionFailure;
+
+/**
+ * Content-free outcome of one decision-site call as a caller applied it
+ * (d5e0p.25): `off` (site not enabled), `skipped` (enabled but not asked, e.g.
+ * nothing to decide), `applied` (answered and used), `timeout` (caller budget
+ * won), `error` (thrown, failed or unusable answer). `changed` says whether the
+ * answer altered the caller's result. Never carries state, answers or text.
+ */
+export interface DecisionSiteTrace {
+  outcome: 'off' | 'skipped' | 'applied' | 'timeout' | 'error';
+  backend?: DecisionBackendId;
+  failureReason?: DecisionFailureReason | 'thrown' | 'unusable_answer';
+  latencyMs?: number;
+  changed?: boolean;
+}

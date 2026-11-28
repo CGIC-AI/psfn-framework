@@ -761,6 +761,20 @@
       "measuredBaselineMs": 1450,
       "baselineSource": "measured",
       "note": "psfn-framework-ik47b.4: beforeAll starts the real PostgreSQL harness and seeds a subject and a control database (memory migrations, episodes, arcs, semantic index backfill) for quarantine-preserving episodic recall. Focused full-file wall time measured 1.36-1.45s three times on 2026-11-28 with a warm harness slot; 90s matches the standard harness startup budget and leaves headroom for cold container startup and shared harness-slot contention."
+    },
+    {
+      "file": "src/app/startup/support/signal-shutdown.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 16000,
+      "baselineSource": "measured",
+      "note": "psfn-framework-69l9c: child agent-shaped process with the real Postgres background-work store, supervisor and signal handler, SIGTERM after the database refuses connections. Passing test measured 0.7s warm on 2026-11-28; the regression path (process lingers) waits the 15s linger observation and measured 15.5s, so 120s keeps the assertion, not the timeout, as the failure signal."
+    },
+    {
+      "file": "src/app/startup/support/signal-shutdown.integration.test.ts",
+      "timeoutMs": 90000,
+      "measuredBaselineMs": 32000,
+      "baselineSource": "measured",
+      "note": "beforeAll Postgres harness startup; a cold image start measured 32s on 2026-11-28, matching the established 90s harness hook budget of the background-work store suites."
     }
   ]
 }

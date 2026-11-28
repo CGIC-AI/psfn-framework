@@ -37,6 +37,13 @@ export interface PromptLayer {
   priority: number;        // within same type, lower = first
   channelType?: string;    // 'discord_text', 'discord_voice', 'api', 'internal'
   taskKind?: string;       // 'reflection', 'planning', 'maintenance', 'heartbeat'
+  /**
+   * Privacy class of an operator layer (psfn-framework-1oqg1). Present and
+   * true only when the operator declared the layer shareable with a remote
+   * participation-appraisal backend. Absent means companion-private: the
+   * layer never leaves the local runtime. Only operator layers carry it.
+   */
+  remoteAppraisalShareable?: true;
   updatedAt: string;       // ISO string
   updatedBy: string;       // 'system' | 'admin' | 'agent'
   checksum: string;        // SHA-256 prefix of content

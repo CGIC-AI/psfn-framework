@@ -12,7 +12,9 @@ import {
 } from '../../system/config/participation-config.js';
 import { parseParticipationAppraisal } from './appraisal-parser.js';
 import {
+  boundAppraiserOperatorGuidance,
   renderAppraiserOperatorGuidance,
+  selectRemoteShareableOperatorGuidance,
   type AppraiserOperatorGuidance,
 } from './operator-guidance.js';
 import type { DecisionRuntime } from '../../primitives/llm/decision/decide.js';
@@ -76,9 +78,9 @@ export interface ParticipationAppraiserOptions {
   /**
    * psfn-framework-9iooo: the companion's operator-authored prompt layers
    * (see selectAppraiserOperatorGuidance), read at each appraisal so an edit
-   * applies without a restart. Only the local appraisal sees them: prompt
-   * layers carry no privacy class, so they are treated as companion-private
-   * and never sent to a remote decision backend.
+   * applies without a restart. The local appraisal sees all of them; a remote
+   * decision backend sees only layers the operator declared shareable
+   * (psfn-framework-1oqg1), so an undeclared layer stays companion-private.
    */
   operatorGuidance?: () => readonly AppraiserOperatorGuidance[];
 }
@@ -125,6 +127,10 @@ export class ParticipationAppraiser {
   ): Promise<ParticipationAppraisalResult> {
     let local: ParticipationAppraisalResult | undefined;
     const surface = candidate.participationSurface ?? 'group_room';
+    const sharedOperatorGuidance = boundAppraiserOperatorGuidance(
+      selectRemoteShareableOperatorGuidance(this.operatorGuidance?.() ?? []),
+      this.settings.operatorGuidanceMaxChars,
+    );
     const outcome = await decisions.decide({
       siteId,
       state: buildAppraisalDecisionState({
@@ -133,8 +139,11 @@ export class ParticipationAppraiser {
         summons: describeSummons(candidate),
         triggerAuthor: sanitizeDisplayName(candidate.triggerAuthorName),
         transcript: this.transcriptEntries(candidate),
+        operatorGuidance: sharedOperatorGuidance,
       }),
-      questions: buildAppraisalDecisionQuestions(surface),
+      questions: buildAppraisalDecisionQuestions(surface, {
+        withOperatorGuidance: sharedOperatorGuidance.length > 0,
+      }),
       workSpec: buildLLMWorkSpec({
         purpose: 'decision',
         durable: false,

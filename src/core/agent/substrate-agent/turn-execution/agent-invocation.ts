@@ -61,6 +61,12 @@ import {
 } from './prompt-invocation-history.js';
 import type { TurnExecutionRuntime, TurnSessionIdentity } from './contracts.js';
 import { runCorrectivePromptLifecycle } from './corrective-prompt-lifecycle.js';
+import {
+  buildPseudoToolCallCorrectionNote,
+  detectPseudoToolCalls,
+  PSEUDO_TOOL_CALL_CORRECTION,
+} from '../../pseudo-tool-call-guard.js';
+import { CANONICAL_FIRST_PARTY_TOOL_SURFACES } from '../../tool-surface/registry.js';
 import type { CapturedSessionReads } from '../../../session/manager/captured-session-owner.js';
 import { isIntakeEnforcingMode } from '../../../../system/config/intake-policy-config.js';
 import {
@@ -98,6 +104,9 @@ export interface AgentInvocationResult {
   turnIntent: string | null;
   persistedUserMessageContent?: string;
 }
+
+/** Observability stage of the one corrective prompt after a pseudo tool call. */
+const PSEUDO_TOOL_CALL_CORRECTION_STAGE = 'agent.turn.pseudo_tool_call_correction';
 
 function buildPromptMessage(
   message: SubstrateMessage,
@@ -931,6 +940,73 @@ export async function invokeAgentForTurn(input: {
         timestamp: Date.now(),
       });
     }
+  }
+  // psfn-framework-mv4xr: a reply that writes a registered tool call as text
+  // gets one corrective prompt in the SAME turn (history is not reset, so
+  // calls that already ran are never replayed). Text is never executed; a
+  // second pseudo call is replaced by a non-fabricating runtime notice.
+  const registeredToolNames = [...new Set([
+    ...activeTools.map(tool => tool.name),
+    ...CANONICAL_FIRST_PARTY_TOOL_SURFACES.map(tool => tool.name),
+  ])];
+  const pseudoToolCalls = runtimeFallbackModel === null
+    ? detectPseudoToolCalls(responseText, registeredToolNames)
+    : [];
+  if (pseudoToolCalls.length > 0) {
+    log.warn('Assistant reply wrote a tool call as text; sending one corrective prompt', {
+      channelId: message.channelId,
+      turnId,
+      requestId,
+      toolNames: pseudoToolCalls,
+    });
+    const correctiveNote = buildPseudoToolCallCorrectionNote(pseudoToolCalls);
+    await runCorrectivePromptLifecycle({
+      bridge: runtime.bridge,
+      channelId: message.channelId,
+      turnId,
+      requestId: `${requestId}:pseudo-tool-call-correction`,
+      callType: turnCallType,
+      originStage: PSEUDO_TOOL_CALL_CORRECTION_STAGE,
+      timeoutStage: PSEUDO_TOOL_CALL_CORRECTION_STAGE,
+      deadlineAt: visionTurnDeadlineAt,
+      onTimeout: () => runtime.agent.abort(),
+      requestContext: {
+        ...runtime.withCorrelationPurpose(turnCorrelationBase, PSEUDO_TOOL_CALL_CORRECTION_STAGE),
+        ...viewerRequestContext,
+      },
+      visionToolRequestContext,
+      enterActiveTurn: () => runtime.setActiveTurnContext(
+        turnCorrelationBase,
+        taskKind ?? null,
+        toolTurnOutcome.intent,
+        turnSessionIdentity,
+      ),
+      exitActiveTurn: () => runtime.clearActiveTurnContext(),
+      invokePrompt: () => runtime.agent.prompt(correctiveNote),
+      runWithVisionTurnTimeout,
+    });
+    responseModel = runtime.agent.state.model.id;
+    responseText = runtime.extractResponseText();
+    const retryCleared = detectPseudoToolCalls(responseText, registeredToolNames).length === 0;
+    if (!retryCleared) {
+      appendRuntimeFallbackAssistantMessage(runtime, PSEUDO_TOOL_CALL_CORRECTION);
+      runtimeFallbackModel = RUNTIME_FALLBACK_MODEL;
+      runtimeFallbackProvenance = buildRuntimeFallbackProvenance('runtime_nonfabricating_notice');
+      responseModel = RUNTIME_FALLBACK_MODEL;
+      responseText = runtime.extractResponseText();
+    }
+    // The corrective prompt continued the turn's own message list, so one
+    // pass over it counts every provider call exactly once.
+    mutableState.turnMessages = runtime.agent.state.messages.slice(mutableState.turnStartMessageIndex);
+    turnUsage = runtime.accumulateTurnUsage(mutableState.turnMessages);
+    runtime.emitTelemetry('agent.pseudo_tool_call.corrected', {
+      channelId: message.channelId,
+      turnId,
+      requestId,
+      toolNames: pseudoToolCalls,
+      outcome: retryCleared ? 'retry_cleared' : 'runtime_notice',
+      ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.pseudo_tool_call.corrected'),
+    });
   }
   if (isVisionTurn && responseText.trim().length === 0) {
     const assistantMessage = runtime.getLatestAssistantMessage();

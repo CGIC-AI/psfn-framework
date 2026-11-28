@@ -5,15 +5,17 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { SessionEntry } from '../../../core/session/types.js';
-import { createPostgresPool } from '../../../persistence/postgres.js';
+import { createPostgresPool, ensurePostgresSchema } from '../../../persistence/postgres.js';
+import { POSTGRES_MEMORY_MIGRATIONS } from '../../../persistence/postgres/migrations.js';
 import { createDefaultPostgresSessionAdapters } from '../../../persistence/sessions/postgres-adapters.js';
 import {
-  DEFAULT_POSTGRES_TEST_IMAGE,
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../../test-support/postgres-test-harness.js';
 import type { EpisodeSynthesisLaneConfig } from '../../../system/config/scheduler-config.js';
 import { EpisodeSynthesisLane, type EpisodeSynthesisSessionFailureEvent } from './synthesis-lane.js';
+import { EpisodicSynthesizer, type EpisodeSegmentationEvent } from './synthesis.js';
+import { PostgresEpisodicStore } from './postgres-store.js';
 
 const INTEGRATION_TIMEOUT_MS = 120_000;
 const SESSION_ID = 'api:episode-restart';
@@ -23,7 +25,8 @@ const tempDirs: string[] = [];
 let harness: PostgresTestHarness | null = null;
 
 beforeAll(async () => {
-  harness = await startPostgresTestHarness({ image: DEFAULT_POSTGRES_TEST_IMAGE });
+  // pgvector image: the iu7v0 case runs the real synthesizer on the episodic store.
+  harness = await startPostgresTestHarness();
 }, INTEGRATION_TIMEOUT_MS);
 
 afterAll(async () => {
@@ -86,13 +89,14 @@ class TranscriptFixture {
 
   constructor(private readonly adapters: SessionAdapters) {}
 
-  async append(sessionId: string, content: string): Promise<void> {
+  async append(sessionId: string, content: string, overrides: Partial<SessionEntry> = {}): Promise<void> {
     const entry: SessionEntry = {
       id: this.nextId,
       channelId: sessionId,
       role: 'user',
       content,
       timestamp: this.nextId * 1_000,
+      ...overrides,
     };
     this.nextId += 1;
     this.adapters.transcriptProjection.upsertSessionEntry(entry);
@@ -337,6 +341,101 @@ describe('EpisodeSynthesisLane failure handling (real Postgres)', () => {
       expect(synthesizer.run).toHaveBeenCalledTimes(3);
       await expect(workset.enumerate('episodic_synthesis')).resolves.toEqual([]);
       await expect(workset.listQuarantined('episodic_synthesis')).resolves.toEqual([]);
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('recovers a session stuck on a defective topic-segmentation proposal on the next pass (iu7v0)', async () => {
+    await withDatabase(async ({ pool, adapters, transcript }) => {
+      await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
+      const stuck = 'api:episode-segmentation-stuck';
+      const startMs = Date.parse('2026-09-03T18:00:00.000Z');
+      const turns = [
+        'Please debug the atlas project scheduler tests.',
+        'I found the atlas scheduler failure and will patch the retry loop.',
+        'Does the atlas patch also cover the watchdog timer?',
+        'Yes, the atlas watchdog timer now resets after each retry.',
+        'Run the atlas scheduler suite again with the patch applied.',
+        'The atlas scheduler suite is green after the retry patch.',
+        'Different question: what should we cook for dinner tonight?',
+        'Maybe pasta with roasted tomatoes, do we have basil left?',
+      ];
+      for (const [index, content] of turns.entries()) {
+        const role = index % 2 === 0 ? 'user' : 'assistant';
+        await transcript.append(stuck, content, {
+          role,
+          timestamp: startMs + index * MINUTE_MS,
+          metadata: JSON.stringify({
+            turn: { schemaVersion: 1, turnId: `turn:stuck-${index}`, requestId: `request:stuck-${index}`, role },
+          }),
+        });
+      }
+      const workset = adapters.conversationalActivityWorkset;
+      const [item] = await workset.enumerate('episodic_synthesis');
+      // A claim held from before the fix, as the live drain left it.
+      await workset.claim({
+        purpose: 'episodic_synthesis',
+        logicalSessionId: stuck,
+        revision: item!.revision,
+        claimantId: 'episode-synthesis-drain',
+      });
+
+      // The model keeps returning the proposal that failed every pre-fix pass:
+      // the final entry is uncovered and a label runs past the 80-char cap.
+      const provider = {
+        complete: vi.fn(async () => ({
+          content: JSON.stringify({
+            segments: [
+              {
+                start_index: 0,
+                end_index: 5,
+                topic: `atlas scheduler debugging ${'with watchdog timer and retry patch review '.repeat(3)}`,
+                status: 'closed',
+              },
+              { start_index: 6, end_index: 6, topic: 'dinner planning', status: 'closed' },
+            ],
+          }),
+          toolCalls: [],
+          model: 'test-model',
+          inputTokens: 0,
+          outputTokens: 0,
+          stopReason: 'stop',
+        })),
+      };
+      const store = new PostgresEpisodicStore(pool, { now: () => new Date(startMs + 60 * MINUTE_MS) });
+      const segmentation: EpisodeSegmentationEvent[] = [];
+      const synthesizer = new EpisodicSynthesizer(store, transcript.sessionManager(), {
+        maxEntriesPerEpisode: 14,
+        topicSegmentation: {
+          enabled: true,
+          llmProvider: provider,
+          onEvent: event => segmentation.push(event),
+        },
+      });
+      const failures: EpisodeSynthesisSessionFailureEvent[] = [];
+      const lane = new EpisodeSynthesisLane({
+        sessionManager: transcript.sessionManager(),
+        synthesizer,
+        watermarkStore: store,
+        workset,
+        config: gateConfig(),
+        onSessionFailure: event => failures.push(event),
+        now: () => startMs + 60 * MINUTE_MS,
+      });
+
+      await expect(lane.execute(timerAction())).resolves.toEqual({ outcome: 'complete' });
+
+      expect(failures).toEqual([]);
+      expect(provider.complete).toHaveBeenCalledOnce();
+      expect(segmentation).toEqual([
+        expect.objectContaining({
+          outcome: 'segmented',
+          repairs: expect.arrayContaining(['topic_truncated', 'trailing_gap_extended']),
+        }),
+      ]);
+      await expect(workset.enumerate('episodic_synthesis')).resolves.toEqual([]);
+      await expect(workset.listQuarantined('episodic_synthesis')).resolves.toEqual([]);
+      const claims = await store.listEpisodeMessageClaims({ status: 'active' });
+      expect(claims).toHaveLength(turns.length);
     });
   }, INTEGRATION_TIMEOUT_MS);
 });

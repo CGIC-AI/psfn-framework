@@ -611,9 +611,9 @@
     {
       "file": "src/faculties/memory/episodic/synthesis-lane-postgres.integration.test.ts",
       "timeoutMs": 120000,
-      "measuredBaselineMs": 1400,
+      "measuredBaselineMs": 1200,
       "baselineSource": "measured",
-      "note": "y0bft.2 stable episode-claim restart regression against the real containerized Postgres workset. Baseline 1.35s full-file wall (one restart test, warm harness, this host, 2026-08-29); the repo-standard 120s cap preserves headroom for cold-start and shared harness-slot contention."
+      "note": "y0bft.2 / d5e0p.3 / iu7v0 episode-synthesis failure handling against the real containerized Postgres workset and episodic store (pgvector image): restart, quarantine with a healthy session draining, pre-fix held claim, and segmentation-repair recovery. Baseline 1.15s vitest duration (four tests, warm harness, this host, 2026-11-28); the repo-standard 120s cap preserves headroom for cold-start and shared harness-slot contention."
     },
     {
       "file": "src/faculties/automata/bus/worker-execution-restart.integration.test.ts",

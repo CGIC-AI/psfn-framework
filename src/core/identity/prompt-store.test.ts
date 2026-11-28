@@ -788,6 +788,17 @@ describe('PromptLayerStore remote appraisal privacy class (psfn-framework-1oqg1)
     expect(JSON.parse(readFileSync(filePath, 'utf8'))[0]).not.toHaveProperty('remoteAppraisalShareable');
   });
 
+  it('ignores the class when smuggled through create or a content/metadata update', () => {
+    const store = new PromptLayerStore(filePath, historyPath);
+    const layer = store.create(fromAny({
+      type: 'operator', name: 'Room policy', content: 'Let humans finish first.', remoteAppraisalShareable: true,
+    }));
+    expect(layer.remoteAppraisalShareable).toBeUndefined();
+    store.update(layer.id, fromAny({ content: 'Let humans finish.', remoteAppraisalShareable: true }), 'model:identity');
+    store.update(layer.id, 'Let humans finish, then wait.', 'model:identity', fromAny({ remoteAppraisalShareable: true }));
+    expect(new PromptLayerStore(filePath, historyPath).getById(layer.id)?.remoteAppraisalShareable).toBeUndefined();
+  });
+
   it('refuses the class on non-operator layers', () => {
     const store = new PromptLayerStore(filePath, historyPath);
     const runtime = store.create({ type: 'runtime', name: 'Runtime note', content: 'private runtime content' });

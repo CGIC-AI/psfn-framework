@@ -318,11 +318,13 @@ function parseBehavioralSummaryStage(stage: string | undefined): {
  *    (classifySessionEntryCompanionRelevance); async group traffic between
  *    other members does not count.
  *
- * Below the minimum the lane holds: because synthesis never ran, the
- * watermark does not advance, so unprocessed turns accumulate into the next
- * changed revision (9 relevant now => hold; 25 total after more conversation
- * => process the whole accumulated chunk). Every skip emits a typed gate event
- * with a reason.
+ * Below the minimum the lane holds: the claim is released without a
+ * checkpoint and the watermark does not advance, so the session stays eligible
+ * and its turns accumulate (9 relevant now => hold; 25 total after more
+ * conversation => process the whole accumulated chunk). A session that stops
+ * growing below the minimum gets a final pass once its newest turn is
+ * `finalPassIdleMinutes` old (d5e0p.2); one with no relevant turn at all is
+ * checkpointed. Every skip emits a typed gate event with a reason.
  */
 export class EpisodeSynthesisLane {
   private readonly sessionManager: SynthesisLaneSessionReader;
@@ -460,13 +462,17 @@ export class EpisodeSynthesisLane {
         });
       if (!claim) continue;
       try {
-        await this.executeSession(action, claim);
-        await this.workset.checkpoint({
-          purpose: 'episodic_synthesis',
+        const disposition = await this.executeSession(action, claim);
+        const claimInput = {
+          purpose: 'episodic_synthesis' as const,
           logicalSessionId: claim.logicalSessionId,
           revision: claim.revision,
           claimantId: claim.claimantId,
-        });
+        };
+        // d5e0p.2: a held session keeps its unprocessed revision eligible.
+        await (disposition === 'hold'
+          ? this.workset.releaseClaim(claimInput)
+          : this.workset.checkpoint(claimInput));
       } catch (error) {
         const bookkeepingFailure = await this.recordSessionFailure(action, claim, error);
         if (bookkeepingFailure) failures.push(bookkeepingFailure);
@@ -578,10 +584,15 @@ export class EpisodeSynthesisLane {
     return EPISODE_SYNTHESIS_FAILURE_STAGE;
   }
 
+  /**
+   * Runs one claimed session. 'checkpoint' means the claimed revision is done
+   * (processed, or skipped for a terminal reason); 'hold' means the session is
+   * below the relevance minimum but may still grow, so it stays eligible.
+   */
   private async executeSession(
     action: Pick<InferredPostTurnAction, 'id' | 'channelId' | 'sourceMessageId' | 'payload'>,
     workItem: ConversationalActivityWorkItem,
-  ): Promise<void> {
+  ): Promise<'checkpoint' | 'hold'> {
     const sessionId = workItem.logicalSessionId;
     const trigger = this.resolveActionTrigger(action);
 
@@ -600,7 +611,7 @@ export class EpisodeSynthesisLane {
         newEntryCount: 0,
         relevantTurnCount: 0,
       });
-      return;
+      return 'checkpoint';
     }
 
     if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) {
@@ -618,7 +629,7 @@ export class EpisodeSynthesisLane {
         newEntryCount: 0,
         relevantTurnCount: 0,
       });
-      return;
+      return 'checkpoint';
     }
 
     const entries = this.sessionManager
@@ -632,7 +643,7 @@ export class EpisodeSynthesisLane {
         actionId: action.id,
         trigger,
       });
-      return;
+      return 'checkpoint';
     }
 
     // Gate 1 (free, deterministic): any new messages since the durable
@@ -675,12 +686,16 @@ export class EpisodeSynthesisLane {
         newEntryCount: 0,
         relevantTurnCount: 0,
       });
-      return;
+      return 'checkpoint';
     }
 
     // Gate 2 (deterministic): minimum companion-relevant turn count. Below
-    // the minimum the lane holds; the watermark does not advance, so the
-    // unprocessed turns accumulate into the next period.
+    // the minimum the lane holds the session (claim released, revision still
+    // eligible, watermark untouched) so its turns accumulate into the next
+    // period. Many sessions never grow again once they end (each external
+    // conversation, a short DM), so once the session has been idle for
+    // finalPassIdleMinutes its remaining relevant turns get a final pass
+    // instead of being held forever (d5e0p.2).
     const scope = await this.resolveMemoryScope(
       channelId,
       this.resolveActionChannelType(action),
@@ -694,7 +709,14 @@ export class EpisodeSynthesisLane {
           companionAuthorIds: this.companionAuthorIds,
         }) !== 'not_relevant'
       )).length;
-    if (relevantTurnCount < this.config.minRelevantTurns) {
+    const idleMs = this.now() - Math.max(...newEntries.map(entry => entry.timestamp));
+    const finalPass = relevantTurnCount > 0
+      && relevantTurnCount < this.config.minRelevantTurns
+      && idleMs >= this.config.finalPassIdleMinutes * MINUTE_MS;
+    if (relevantTurnCount < this.config.minRelevantTurns && !finalPass) {
+      // No relevant turn at all is terminal for this revision (nothing to
+      // episodize); a relevant but short session is held, not checkpointed.
+      const disposition = relevantTurnCount === 0 ? 'checkpoint' : 'hold';
       log.warn('Episode synthesis skipped below the relevance minimum', {
         sessionId,
         actionId: action.id,
@@ -702,6 +724,8 @@ export class EpisodeSynthesisLane {
         newEntryCount: newEntries.length,
         relevantTurnCount,
         minRelevantTurns: this.config.minRelevantTurns,
+        disposition,
+        idleMinutes: Math.floor(idleMs / MINUTE_MS),
       });
       this.emitGateEvent({
         sessionId,
@@ -712,7 +736,7 @@ export class EpisodeSynthesisLane {
         newEntryCount: newEntries.length,
         relevantTurnCount,
       });
-      return;
+      return disposition;
     }
 
     const synthesis = await this.synthesizer.run({
@@ -751,6 +775,7 @@ export class EpisodeSynthesisLane {
       sessionId,
       actionId: action.id,
       trigger,
+      finalPass,
       newEntryCount: newEntries.length,
       relevantTurnCount,
       candidateEpisodes: synthesis.candidateEpisodeCount,
@@ -760,6 +785,7 @@ export class EpisodeSynthesisLane {
       heldBackEntries: synthesis.heldBackEntryCount,
       segmentationFailedChunks: synthesis.segmentationFailedChunkCount,
     });
+    return 'checkpoint';
   }
 
   private buildActionCandidate(

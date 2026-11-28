@@ -54,6 +54,7 @@ function gateConfig(overrides: Partial<EpisodeSynthesisLaneConfig> = {}): Episod
     minConversationalEntries: 2,
     minSingleEntryChars: 120,
     sessionFailure: { maxAttempts: 3, retryBaseDelayMinutes: 30 },
+    finalPassIdleMinutes: 180,
     ...overrides,
   };
 }
@@ -298,6 +299,7 @@ function makeHarness(options: {
     checkpointStage: vi.fn().mockResolvedValue(undefined),
     recordFailure: vi.fn().mockResolvedValue(undefined),
     checkpoint: vi.fn().mockResolvedValue(undefined),
+    releaseClaim: vi.fn().mockResolvedValue(undefined),
   };
   const gateEvents: EpisodeSynthesisGateEvent[] = [];
   const lane = new EpisodeSynthesisLane({
@@ -311,7 +313,9 @@ function makeHarness(options: {
     companionAuthorIds: [COMPANION_AUTHOR_ID],
     ...(options.memoryWriter ? { memoryWriter: options.memoryWriter } : {}),
     onGateEvent: (event) => { gateEvents.push(event); },
-    ...(options.now ? { now: options.now } : {}),
+    // An hour after the fixture conversation: recent enough that a short
+    // session is held, not given its idle final pass (d5e0p.2).
+    now: options.now ?? (() => WATERMARK_END_MS + 60 * 60_000),
   });
   return { lane, entriesRef, sessionManager, synthesizer, watermarkStore, workset, scopeClassifier, gateEvents };
 }
@@ -694,6 +698,9 @@ describe('EpisodeSynthesisLane', () => {
       minRelevantTurns: 10,
     });
     expect(getRecentDiagnosticLogRecords()[0]?.message).toContain('below the relevance minimum');
+    // d5e0p.2: held, not checkpointed away — the revision stays eligible.
+    expect(harness.workset.releaseClaim).toHaveBeenCalledOnce();
+    expect(harness.workset.checkpoint).not.toHaveBeenCalled();
 
     // Synthesis never ran, so the watermark did not advance; the next period
     // sees the full accumulated chunk (9 held + 16 new = 25 relevant turns).
@@ -712,10 +719,30 @@ describe('EpisodeSynthesisLane', () => {
     });
   });
 
+  it('gives a short session its final pass once it has been idle (d5e0p.2)', async () => {
+    const clock = { now: WATERMARK_END_MS + 60 * 60_000 };
+    const harness = makeHarness({ entries: mentionEntries(4), now: () => clock.now });
+
+    await harness.lane.execute(timerAction());
+    expect(harness.synthesizer.run).not.toHaveBeenCalled();
+    expect(harness.workset.releaseClaim).toHaveBeenCalledOnce();
+
+    // No new turns arrive; once the newest turn is finalPassIdleMinutes old the
+    // session is synthesized and checkpointed instead of held forever.
+    clock.now = WATERMARK_END_MS + 4 * 60_000 + 180 * 60_000;
+    await harness.lane.execute(timerAction());
+    expect(harness.synthesizer.run).toHaveBeenCalledOnce();
+    expect(harness.workset.checkpoint).toHaveBeenCalledOnce();
+    expect(harness.gateEvents.at(-1)).toMatchObject({ outcome: 'processed', relevantTurnCount: 4 });
+  });
+
   it('async group traffic around the companion produces no episode', async () => {
     const harness = makeHarness({ entries: bystanderEntries(20) });
 
     await harness.lane.execute(timerAction());
+    // Nothing relevant to episodize: terminal for this revision, never a final pass.
+    expect(harness.workset.checkpoint).toHaveBeenCalledOnce();
+    expect(harness.workset.releaseClaim).not.toHaveBeenCalled();
 
     expect(harness.synthesizer.run).not.toHaveBeenCalled();
     expect(harness.gateEvents[0]).toMatchObject({

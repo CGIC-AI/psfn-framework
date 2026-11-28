@@ -55,6 +55,7 @@ function gateConfig(maxAttempts = 5): EpisodeSynthesisLaneConfig {
     topicSegmentationEnabled: true,
     maxPriorCandidates: 4,
     sessionFailure: { maxAttempts, retryBaseDelayMinutes: BACKOFF_BASE_MINUTES },
+    finalPassIdleMinutes: 180,
   };
 }
 
@@ -436,6 +437,66 @@ describe('EpisodeSynthesisLane failure handling (real Postgres)', () => {
       await expect(workset.listQuarantined('episodic_synthesis')).resolves.toEqual([]);
       const claims = await store.listEpisodeMessageClaims({ status: 'active' });
       expect(claims).toHaveLength(turns.length);
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('episodizes a run of short separate sessions after they go idle instead of checkpointing them away (d5e0p.2)', async () => {
+    await withDatabase(async ({ pool, adapters, transcript }) => {
+      await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
+      const startMs = Date.parse('2026-11-20T09:00:00.000Z');
+      // Each external conversation is its own logical session that never grows
+      // after it ends; an ordinary short DM behaves the same way.
+      const sessions = [
+        'api:hermes:1f3a9c0e5b7d2a4c6e8f0a1b3c5d7e9f1a2b4c6d8e0f1a3b5c7d9e1f3a5b7c9d',
+        'api:hermes:9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d',
+        'api:hermes:0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9',
+        'discord:dm-short-session',
+      ];
+      let minute = 0;
+      for (const [sessionIndex, sessionId] of sessions.entries()) {
+        for (let turn = 0; turn < 3 + sessionIndex; turn += 1) {
+          const role = turn % 2 === 0 ? 'user' : 'assistant';
+          await transcript.append(sessionId, `short conversation ${sessionIndex} turn ${turn} about trip planning`, {
+            role,
+            timestamp: startMs + minute * MINUTE_MS,
+            metadata: JSON.stringify({
+              turn: { schemaVersion: 1, turnId: `turn:short-${sessionIndex}-${turn}`, role },
+            }),
+          });
+          minute += 1;
+        }
+      }
+      const lastTurnMs = startMs + (minute - 1) * MINUTE_MS;
+      const totalTurns = minute;
+      const workset = adapters.conversationalActivityWorkset;
+      const store = new PostgresEpisodicStore(pool, { now: () => new Date(lastTurnMs) });
+      const synthesizer = new EpisodicSynthesizer(store, transcript.sessionManager(), { maxEntriesPerEpisode: 14 });
+      const clock = { now: lastTurnMs + 30 * MINUTE_MS };
+      const lane = new EpisodeSynthesisLane({
+        sessionManager: transcript.sessionManager(),
+        synthesizer,
+        watermarkStore: store,
+        workset,
+        config: { ...gateConfig(), minRelevantTurns: 10, topicSegmentationEnabled: false },
+        scopeClassifier: { classifyChannelMemoryScope: async () => 'direct' as const },
+        now: () => clock.now,
+      });
+
+      // Recently active and below the minimum: held, every session still eligible.
+      await lane.execute(timerAction());
+      expect((await workset.enumerate('episodic_synthesis')).map(item => item.logicalSessionId).sort())
+        .toEqual([...sessions].sort());
+      expect(await store.listEpisodeMessageClaims({ status: 'active' })).toEqual([]);
+
+      // Idle past finalPassIdleMinutes with no new traffic: each gets its final pass.
+      clock.now = lastTurnMs + 181 * MINUTE_MS;
+      await lane.execute(timerAction());
+      await expect(workset.enumerate('episodic_synthesis')).resolves.toEqual([]);
+      await expect(workset.listQuarantined('episodic_synthesis')).resolves.toEqual([]);
+      const claims = await store.listEpisodeMessageClaims({ status: 'active' });
+      expect(claims).toHaveLength(totalTurns);
+      expect(new Set(claims.map(claim => claim.claimKey.split(':').slice(1, -1).join(':'))))
+        .toEqual(new Set(sessions));
     });
   }, INTEGRATION_TIMEOUT_MS);
 });

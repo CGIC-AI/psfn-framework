@@ -90,6 +90,13 @@ export interface EpisodeSynthesisLaneConfig {
   maxPriorCandidates: number;
   /** Bounded per-session failure handling for the changed-session drain. */
   sessionFailure: EpisodeSynthesisSessionFailureConfig;
+  /**
+   * psfn-framework-d5e0p.2: a session below `minRelevantTurns` is held (kept
+   * eligible) rather than checkpointed away; once its newest turn is this many
+   * minutes old it gets a final synthesis pass, because sessions such as one
+   * external conversation or a short DM never grow past the minimum.
+   */
+  finalPassIdleMinutes: number;
 }
 
 /**
@@ -292,5 +299,9 @@ export function validateEpisodeSynthesisConfig(
       ? 24
       : toPositiveInteger(raw.maxPriorCandidates, 'episodeSynthesis.maxPriorCandidates', 1),
     sessionFailure: validateEpisodeSynthesisSessionFailure(raw.sessionFailure),
+    // d5e0p.2: optional key, default mirrors config/scheduler.seed.json.
+    finalPassIdleMinutes: raw.finalPassIdleMinutes === undefined
+      ? 180
+      : toPositiveInteger(raw.finalPassIdleMinutes, 'episodeSynthesis.finalPassIdleMinutes', 1),
   };
 }

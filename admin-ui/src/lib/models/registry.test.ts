@@ -7,6 +7,25 @@ import {
 } from './registry';
 
 describe('model registry helpers', () => {
+  it('carries registry-wide policy blocks and entry price references through untouched (lomm1)', () => {
+    const pricing = { catalogRefresh: { enabled: true, intervalMinutes: 360, maxAgeMinutes: 2880 } };
+    const registry = parseModelRegistryJson(JSON.stringify({
+      schemaVersion: 1,
+      pricing,
+      promptCaching: { enabled: false },
+      models: [{
+        id: 'plan',
+        rank: 10,
+        identity: { provider: 'acme-plan', model: 'model-7', source: { type: 'generic_openai' } },
+        purposes: [{ purpose: 'chat', primary: true }],
+        pricing: { catalogModel: 'acme/model-7' },
+      }],
+    }));
+    expect(registry.pricing).toEqual(pricing);
+    expect(registry.promptCaching).toEqual({ enabled: false });
+    expect(registry.models[0]?.pricing).toEqual({ catalogModel: 'acme/model-7' });
+  });
+
   it('normalizes current canonical models.json owner-file payloads for the Garden roster', () => {
     const registry = parseModelRegistryJson(JSON.stringify({
       schemaVersion: 1,

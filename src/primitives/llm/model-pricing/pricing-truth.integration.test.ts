@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Pool } from 'pg';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import type { HealthEvent, HealthEventPublisher } from '../../../shared/contracts/health-event.js';
 import type { LLMContext } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import {
@@ -15,11 +14,16 @@ import {
   startScriptedOpenAIEndpoint,
 } from '../../../test-support/scripted-openai-endpoint.js';
 import { createPostgresPool } from '../../../persistence/postgres.js';
+import { PostgresHealthEventStore } from '../../../persistence/postgres/health-event-store.js';
+import { EventBus } from '../../../shared/event-bus.js';
+import { subscribeHealthEventStream } from '../../../shared/observability/health-event-stream.js';
+import { classifyIncidentStatement } from '../../../shared/observability/incident-alerts/contracts.js';
 import { PostgresModelUsageStore } from '../../../persistence/postgres/model-usage-store.js';
 import {
   consumeActiveGatewayCapturedProviderCostEvidence,
   withGatewayLLMCostCapture,
 } from '../../../boundary/gateway/llm-cost-capture.js';
+import { createGatewayPrivilegedServiceRegistry } from '../../../boundary/gateway/privileged-services.js';
 import { LLMClient } from '../client.js';
 import { PiProviderRuntime } from '../provider-runtime.js';
 import { ModelPriceBook } from './price-book.js';
@@ -80,11 +84,6 @@ function context(requestId: string): LLMContext {
   };
 }
 
-function healthSink(): HealthEventPublisher & { events: HealthEvent[] } {
-  const events: HealthEvent[] = [];
-  return { events, emit: async (_name, data) => { events.push(data.event); } };
-}
-
 let harness: PostgresTestHarness | null = null;
 const cleanups: Array<() => Promise<void> | void> = [];
 
@@ -101,7 +100,12 @@ afterEach(async () => {
   delete process.env[API_KEY_ENV];
 });
 
-async function setup(options: { ownerCost?: typeof STALE_OWNER_COST; catalog?: unknown } = {}) {
+async function setup(options: {
+  ownerCost?: typeof STALE_OWNER_COST;
+  catalog?: unknown;
+  /** Build the client the way the gateway does, from the live config. */
+  viaGatewayServices?: boolean;
+} = {}) {
   if (!harness) throw new Error('Postgres test harness is unavailable');
   process.env[API_KEY_ENV] = 'scripted-endpoint-key';
   const { databaseUrl } = await harness.createDatabase();
@@ -166,13 +170,25 @@ async function setup(options: { ownerCost?: typeof STALE_OWNER_COST; catalog?: u
   });
   config.modelPriceBook = priceBook;
   const store = new PostgresModelUsageStore(pool, { companionId: COMPANION_ID });
-  const client = new LLMClient(config, {
-    runtime: new PiProviderRuntime(undefined, config),
-    usageRecorder: store,
-    usageBudgetQuery: store,
-    // As the gateway wires it: the provider cost is what was captured on the wire.
-    providerCostResolver: consumeActiveGatewayCapturedProviderCostEvidence,
-  });
+  const client = options.viaGatewayServices
+    ? createGatewayPrivilegedServiceRegistry({
+        config: {
+          ...config,
+          embeddingProvider: 'api',
+          embeddingApiUrl: 'https://embedding.example.test',
+          embeddingApiModel: 'embed-model',
+          embeddingApiDims: 384,
+        } as SubstrateConfig,
+        providerEnv: { EMBEDDING_API_KEY: 'embedding-key' },
+        llmOptions: { usageRecorder: store, usageBudgetQuery: store },
+      }).llmClient
+    : new LLMClient(config, {
+        runtime: new PiProviderRuntime(undefined, config),
+        usageRecorder: store,
+        usageBudgetQuery: store,
+        // As the gateway wires it: the provider cost is what was captured on the wire.
+        providerCostResolver: consumeActiveGatewayCapturedProviderCostEvidence,
+      });
   const rows = async (): Promise<Row[]> => (await pool.query<Row>(`
     SELECT status, input_tokens, output_tokens, cache_read_tokens,
            estimated_cost_usd::text, provider_cost_usd::text, effective_cost_usd::text, cost_source,
@@ -183,7 +199,7 @@ async function setup(options: { ownerCost?: typeof STALE_OWNER_COST; catalog?: u
   const complete = async (requestId: string, signal?: AbortSignal) => (await withGatewayLLMCostCapture(
     async () => await client.complete(context(requestId), 'background', { disableRetry: true, ...(signal ? { signal } : {}) }),
   )).result;
-  return { config, priceBook, endpoint, rows, spend, complete, catalogRequests };
+  return { config, pool, priceBook, endpoint, rows, spend, complete, catalogRequests };
 }
 
 describe('pricing truth through the real usage store (lomm1)', () => {
@@ -211,6 +227,19 @@ describe('pricing truth through the real usage store (lomm1)', () => {
     expect(row).toMatchObject({ cost_source: 'estimate', provider_cost_usd: null });
     expect(row!.pricing).toMatchObject({ source: 'catalog', catalogModel: CATALOG_MODEL, endpointTag: 'acme/fp8' });
     expect((await spend()).dailyEstimatedCostUsd).toBeCloseTo(1.596, 6);
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('prices through the price book on the live config when the client is built by the gateway services', async () => {
+    const { priceBook, endpoint, rows, complete } = await setup({ ownerCost: STALE_OWNER_COST, viaGatewayServices: true });
+    await priceBook.refresh();
+    endpoint.enqueue('complete', {
+      usage: { prompt_tokens: 100_000, prompt_tokens_details: { cached_tokens: 50_000 }, completion_tokens: 10_000, total_tokens: 110_000 },
+    });
+    await complete('gateway-composed');
+    const [row] = await rows();
+    // 0.05M x $1.40 + 0.05M x $0.26 + 0.01M x $4.40 = $0.127 (the stale price: $0.45).
+    expect(Number(row!.estimated_cost_usd)).toBeCloseTo(0.127, 6);
+    expect(row!.pricing).toMatchObject({ source: 'catalog', endpointTag: 'acme/fp8' });
   }, INTEGRATION_TIMEOUT_MS);
 
   it('books the cost the provider reported on the wire over any estimate, in the ledger and the budget', async () => {
@@ -251,13 +280,23 @@ describe('pricing truth through the real usage store (lomm1)', () => {
     expect(booked).toBeLessThan(0.0014);
   }, INTEGRATION_TIMEOUT_MS);
 
-  it('marks a slot without any usable price unknown, reports it, and refuses it under an enforced budget', async () => {
-    const health = healthSink();
-    const { priceBook, endpoint, rows, complete } = await setup({
+  it('marks a slot without any usable price unknown, persists the incident, and refuses it under an enforced budget', async () => {
+    const { pool, priceBook, endpoint, rows, complete } = await setup({
       catalog: { data: { id: CATALOG_MODEL, endpoints: [VENDOR_ENDPOINTS.data.endpoints[0]] } },
     });
-    expect(await priceBook.refresh(health)).toMatchObject({ attempted: 1, failed: 1, unknown: 1 });
-    expect(health.events.map(event => event.code)).toEqual(['model_price_refresh_failed', 'model_price_unknown']);
+    // The gateway's health plane: event bus -> stream subscriber -> Postgres ring.
+    const healthStore = await PostgresHealthEventStore.fromPool(pool, 1_000);
+    const eventBus = new EventBus();
+    const detach = subscribeHealthEventStream({ eventBus, store: healthStore });
+    cleanups.push(() => detach());
+    expect(await priceBook.refresh(eventBus)).toMatchObject({ attempted: 1, failed: 1, unknown: 1 });
+    const persisted = await healthStore.listRecent({ limit: 10 });
+    expect(persisted.map(event => event.code).sort()).toEqual(['model_price_refresh_failed', 'model_price_unknown']);
+    const unknown = persisted.find(event => event.code === 'model_price_unknown')!;
+    expect(unknown).toMatchObject({ severity: 'degraded', evidence: { priceStale: false } });
+    expect(unknown.provenance).toMatchObject({ component: 'model_pricing', process: 'gateway' });
+    // An operator incident on its own: one per slot.
+    expect(classifyIncidentStatement(unknown)).toMatchObject({ phase: 'opened', family: null });
     expect(priceBook.status()[0]).toMatchObject({ slotKey: 'scripted', source: 'unknown', lastFailure: 'upstream_not_listed' });
 
     await expect(complete('unpriced')).rejects.toThrow(/missing_cost_metadata/u);

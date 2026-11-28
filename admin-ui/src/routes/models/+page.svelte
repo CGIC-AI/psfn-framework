@@ -95,6 +95,8 @@
   let discoveredModels = $state<DiscoveredModel[]>([]);
   let discoverySearch = $state('');
   let providerRegistry = $state<CanonicalProviderRegistry>({ schemaVersion: 1, providers: [] });
+  /** Registry-wide blocks this page does not edit, saved back unchanged (lomm1). */
+  let registryBlocks: Omit<Partial<CanonicalModelRegistry>, 'schemaVersion' | 'models' | 'budgetPolicy'> = {};
   let providerRegistryInitialJson = $state('{"schemaVersion":1,"providers":[]}');
   let providerValidationErrors = $state<string[]>([]);
   let expandedModelIds = $state<Set<string>>(new Set());
@@ -765,6 +767,7 @@
 
   function serializeForSave(entries: ModelRegistryEntry[], policy: ModelRegistryBudgetPolicy): CanonicalModelRegistry {
     return {
+      ...registryBlocks,
       schemaVersion: 1,
       budgetPolicy: serializeBudgetPolicyForSave(policy),
       models: resequenceRanks(entries).map((entry) => {
@@ -831,6 +834,8 @@
       discoveryError = toErrorMessage(discoveryLoadError, 'Model discovery unavailable');
     }
     const registry = parseModelRegistryJson(modelsRaw);
+    const { schemaVersion: _schemaVersion, models: _models, budgetPolicy: _budgetPolicy, ...blocks } = registry;
+    registryBlocks = blocks;
     models = registry.models;
     budgetPolicy = registry.budgetPolicy ?? { ...DEFAULT_BUDGET_POLICY };
     discoveredModels = discovered;

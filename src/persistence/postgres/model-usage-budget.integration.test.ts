@@ -165,7 +165,7 @@ describe('Postgres model-usage budget projection', () => {
     }
   }, INTEGRATION_TIMEOUT_MS);
 
-  it('charges an aborted Jev decision its worst case and keeps later chat admitted', async () => {
+  it('charges an aborted Jev decision the request it sent and keeps later chat admitted', async () => {
     if (!harness) throw new Error('Postgres test harness is unavailable');
     const { databaseUrl } = await harness.createDatabase();
     const pool = createPostgresPool(databaseUrl, {
@@ -207,7 +207,10 @@ describe('Postgres model-usage budget projection', () => {
       const nowMs = Date.now();
       const spend = await store.getModelBudgetSpend(nowMs, undefined, []);
       expect(spend.dailyUnknownCostAttempts).toBe(0);
-      expect(spend.dailyEstimatedCostUsd).toBeGreaterThan((400 / 1_000_000) * 2);
+      // Known cost: the request bytes at $0.5/M, never the 400-token output
+      // bound ($0.0008 at $2/M) for a reply that was never received (lomm1).
+      expect(spend.dailyEstimatedCostUsd).toBeGreaterThan(0);
+      expect(spend.dailyEstimatedCostUsd).toBeLessThan((400 / 1_000_000) * 2);
 
       const preflight = await new ModelBudgetController(config, store).evaluatePreflight({
         candidate: {

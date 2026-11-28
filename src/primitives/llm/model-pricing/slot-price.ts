@@ -1,6 +1,9 @@
 // ── Slot price resolution (lomm1) ──
-// The single answer to "what does this slot cost right now, and why": every
-// ledger estimate, budget admission and historical repricing reads it.
+// The single answer to "what does this slot cost right now, and why" for a
+// models.json slot: LLM-client booking and admission, intake screener rows,
+// historical budget repricing and the ICP cost breaker read it through
+// model-budget.ts. Embedding rates read it once when the embedding provider is
+// built. Jev decisions are priced by their own decision-backend setting.
 //
 // Order: a fresh catalogue price of the slot's upstream provider, then the
 // owner's published-price `cost` from models.json, else unknown. The catalogue

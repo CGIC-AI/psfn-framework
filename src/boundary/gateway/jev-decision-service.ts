@@ -16,7 +16,7 @@
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_CONNECTIVITY_COOLDOWN_MS, DEFAULT_RATE_LIMIT_COOLDOWN_MS } from '../../primitives/llm/fallback.js';
 import { resolveConfiguredProviderCredential } from '../../primitives/llm/provider-runtime.js';
-import { jevDecisionRowCost, jevWorstCaseCostUsd } from './jev-decision-pricing.js';
+import { jevDecisionRowCost, jevRequestCostBoundsUsd } from './jev-decision-pricing.js';
 import {
   buildJevDecisionsRequestBody,
   requestJevDecision,
@@ -176,10 +176,11 @@ export function createGatewayJevDecisionService(
       const apiBaseUrl = options.config.openRouterApiBaseUrl?.trim();
       if (!apiKey || !apiBaseUrl) throw new JevDecisionRefusedError('openrouter_credentials_unavailable');
 
-      // Priced before dispatch: an abort or timeout is charged this worst case.
+      // Priced before dispatch: admission reserves the worst case; an abort or
+      // timeout books the request it sent (lomm1).
       const pricing = settings.jev.pricing;
-      const worstCaseUsd = pricing
-        ? jevWorstCaseCostUsd(
+      const bounds = pricing
+        ? jevRequestCostBoundsUsd(
           pricing,
           buildJevDecisionsRequestBody(settings.jev.model, input.state, input.questions),
         )
@@ -223,7 +224,7 @@ export function createGatewayJevDecisionService(
         settings.jev.model,
         startedAtMs,
         result,
-        jevDecisionRowCost({ pricing, worstCaseUsd, result }),
+        jevDecisionRowCost({ pricing, bounds, result }),
       );
       return result.outcome;
     },

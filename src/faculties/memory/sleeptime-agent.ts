@@ -938,6 +938,7 @@ export class SleeptimeMemoryAgent {
       snapshot.map(item => [item.logicalSessionId, item.revision]),
     );
     const entriesBySession = new Map<string, SessionEntry[]>();
+    const reviewOwners = this.resolveJournalReviewOwners(snapshot.map(item => item.logicalSessionId));
     const runner = new SleeptimeWorksetRunner({
       workset: this.conversationalActivityWorkset,
       claimantId: SLEEPTIME_WORKSET_CLAIMANT_ID,
@@ -951,15 +952,34 @@ export class SleeptimeMemoryAgent {
         input,
         action,
         entriesBySession,
+        reviewOwners,
       ),
     });
     return runner.run(snapshot);
+  }
+
+  /**
+   * d5e0p.8: a channel whose L0 history spans several journal chains is
+   * indexed as `<channel>` plus `<channel>#<file>` sessions — one conversation.
+   * Each conversation is reviewed once per run: by the channel session when it
+   * is pending (it receives the channel's appends and reads its newest chain),
+   * otherwise by the first pending journal session of that channel.
+   */
+  private resolveJournalReviewOwners(sessionIds: readonly string[]): ReadonlyMap<string, string> {
+    const pending = new Set(sessionIds);
+    const owners = new Map<string, string>();
+    for (const sessionId of sessionIds) {
+      const { channelId } = this.sessionManager.getJournalSessionGroup(sessionId);
+      if (!owners.has(channelId)) owners.set(channelId, pending.has(channelId) ? channelId : sessionId);
+    }
+    return owners;
   }
 
   private async runWorksetStage(
     input: SleeptimeWorksetStageInput,
     action: Pick<InferredPostTurnAction, 'id' | 'sourceMessageId'>,
     entriesBySession: Map<string, SessionEntry[]>,
+    reviewOwners: ReadonlyMap<string, string>,
   ): Promise<void> {
     const sessionId = input.logicalSessionId;
     if (isTestingSessionId(sessionId)) {
@@ -968,15 +988,14 @@ export class SleeptimeMemoryAgent {
     if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) {
       throw new Error('Retired or quarantined sessions are not eligible for sleeptime');
     }
-    // d5e0p.8: a channel whose L0 history spans several journal chains is
-    // indexed as `<channel>` plus `<channel>#<file>` sessions. They are one
-    // conversation: the channel session reads its primary chain, receives its
-    // appends, and reviews the episodes of every chain. A suffixed alias is a
+    // d5e0p.8: one review per journal-split conversation; the others are a
     // logged no-op so the same day is never reviewed twice.
     const journalGroup = this.sessionManager.getJournalSessionGroup(sessionId);
-    if (journalGroup.channelId !== sessionId) {
-      log.info('Sleeptime stage skipped for a journal alias session; its conversation is reviewed under the channel session', {
+    const reviewOwner = reviewOwners.get(journalGroup.channelId) ?? sessionId;
+    if (reviewOwner !== sessionId) {
+      log.info('Sleeptime stage skipped for a journal session; its conversation is reviewed under another session of the channel', {
         sessionId,
+        reviewedUnder: reviewOwner,
         channelId: journalGroup.channelId,
         stage: input.stage,
         journalSessionCount: journalGroup.sessionIds.length,

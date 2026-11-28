@@ -1325,14 +1325,23 @@ describe('SleeptimeMemoryAgent', () => {
       const transcript = [{
         id: 1, channelId, role: 'user' as const, content: 'We planned a morning walk and swapped a recipe.', timestamp: Date.now(),
       }];
-      const run = async (logicalSessionId: string) => {
+      const run = async (pendingSessionIds: readonly string[]) => {
         const reviewAgent = makeReviewAgent(JSON.stringify({
           orient: { persona: 'Rested.', human: 'Planned a morning walk.', goals: 'Keep the walk going.' },
           memory_writes: [],
         }));
         const sleepConsolidator = { run: vi.fn().mockResolvedValue({ reviewedEpisodes: 0 }) };
         const getRecentMessagesAtOrBefore = vi.fn().mockReturnValue(transcript);
-        const workset = makeConversationalWorkset(logicalSessionId);
+        const items = new Map(pendingSessionIds.map(id => [id, makeConversationalWorkset(id)]));
+        const forItem = (input: { logicalSessionId: string }) => items.get(input.logicalSessionId)!;
+        const workset: ConversationalActivityWorksetPort = {
+          enumerate: async purpose => (await Promise.all([...items.values()].map(item => item.enumerate(purpose)))).flat(),
+          claim: async input => forItem(input).claim(input),
+          resumeClaim: async input => forItem(input).resumeClaim(input),
+          checkpointStage: async input => forItem(input).checkpointStage(input),
+          recordFailure: async input => forItem(input).recordFailure(input),
+          checkpoint: async input => forItem(input).checkpoint(input),
+        };
         await new SleeptimeMemoryAgent(makeAgentOptions({
           agent: reviewAgent,
           episodicStore: { searchByTime },
@@ -1342,26 +1351,33 @@ describe('SleeptimeMemoryAgent', () => {
             getJournalSessionGroup: sessionId => sessions.getJournalSessionGroup(sessionId),
             getRecentMessagesAtOrBefore,
           },
-        })).execute(makeSleeptimeAction({ payload: { sessionId: logicalSessionId } }));
-        return { reviewAgent, sleepConsolidator, getRecentMessagesAtOrBefore, workset };
+        })).execute(makeSleeptimeAction({ payload: { sessionId: channelId } }));
+        return { reviewAgent, sleepConsolidator, getRecentMessagesAtOrBefore, items };
       };
+      const reviewPrompt = (agent: ReturnType<typeof makeReviewAgent>) => (
+        (agent.handleMessage.mock.calls[0] as unknown as [{ content: string }] | undefined)?.[0].content ?? ''
+      );
 
-      const alias = await run(aliasId);
-      expect(alias.reviewAgent.handleMessage).not.toHaveBeenCalled();
-      expect(alias.sleepConsolidator.run).not.toHaveBeenCalled();
-      expect(alias.getRecentMessagesAtOrBefore).not.toHaveBeenCalled();
-      expect(alias.workset.checkpoint).toHaveBeenCalled();
-
-      searchByTime.mockClear();
-      const canonical = await run(channelId);
-      expect(canonical.sleepConsolidator.run).toHaveBeenCalledWith(expect.objectContaining({ sessionId: channelId }));
+      // Both journal sessions pending: one review, under the channel session.
+      const both = await run([aliasId, channelId]);
+      expect(both.reviewAgent.handleMessage).toHaveBeenCalledTimes(1);
+      expect(both.sleepConsolidator.run).toHaveBeenCalledTimes(1);
+      expect(both.sleepConsolidator.run).toHaveBeenCalledWith(expect.objectContaining({ sessionId: channelId }));
+      expect(both.getRecentMessagesAtOrBefore.mock.calls.map(([sessionId]) => sessionId)).toEqual([channelId]);
+      expect(both.items.get(aliasId)!.checkpoint).toHaveBeenCalled();
+      expect(both.items.get(channelId)!.checkpoint).toHaveBeenCalled();
       expect(searchByTime).toHaveBeenCalledWith(expect.objectContaining({
         spanSessionIds: expect.arrayContaining([channelId, aliasId]),
       }));
-      const prompt = (canonical.reviewAgent.handleMessage.mock.calls[0]?.[0] as { content: string }).content;
-      expect(prompt).toContain('Morning walk plan');
-      expect(prompt).toContain('Evening recipe swap');
-      expect(prompt).not.toContain('Unrelated room budget');
+      expect(reviewPrompt(both.reviewAgent)).toContain('Morning walk plan');
+      expect(reviewPrompt(both.reviewAgent)).toContain('Evening recipe swap');
+      expect(reviewPrompt(both.reviewAgent)).not.toContain('Unrelated room budget');
+
+      // Only the suffixed session pending: it reviews the conversation itself.
+      const aliasOnly = await run([aliasId]);
+      expect(aliasOnly.sleepConsolidator.run).toHaveBeenCalledWith(expect.objectContaining({ sessionId: aliasId }));
+      expect(reviewPrompt(aliasOnly.reviewAgent)).toContain('Morning walk plan');
+      expect(reviewPrompt(aliasOnly.reviewAgent)).toContain('Evening recipe swap');
     } finally {
       rmSync(sessionsDir, { recursive: true, force: true });
     }

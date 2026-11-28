@@ -366,8 +366,12 @@ describe('external companion memory service', () => {
     await h.run();
     expect(h.write).toHaveBeenCalledWith(expect.objectContaining({ text: 'The garden gate needs repair.',
       intakeEnvelopes: [expect.objectContaining({ sourceClass: 'companion_self' })],
+      // 1meuc: the bound contact is the note's subject, so it is classified
+      // single_contact for that contact instead of unattributed.
+      contactId: binding.contactId,
       provenance: expect.objectContaining({ actor: 'companion', companionId: binding.companionId,
-        sessionId: externalMemorySessionId(binding, 'session'), toolName: 'psfn_memory_remember' }) }));
+        sessionId: externalMemorySessionId(binding, 'session'), toolName: 'psfn_memory_remember',
+        triggerContactId: binding.contactId, subjectContactId: binding.contactId }) }));
     expect(h.sessions.listChannels()).toEqual([]);
   });
 

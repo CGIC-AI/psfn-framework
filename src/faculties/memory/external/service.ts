@@ -414,11 +414,19 @@ export class ExternalMemoryService {
         const entry = record.entries[0]!;
         const screening = parseIntakeScreeningMetadata(entry.metadata);
         if (!screening || screening.withheld) throw new Error('External memory note was withheld by intake policy');
+        // The note is written for the credential's bound contact, exactly as an
+        // in-turn tool write is stamped with its viewer (stampWriteSubject):
+        // the durable binding is the trusted subject, never request content.
+        // `contactId` also keeps the writer's dedupe and supersession scan on
+        // this contact's rows, so a note never absorbs or replaces another
+        // contact's memory.
+        const subjectContactId = record.binding.contactId;
         await this.options.writer.write({ text: entry.content, type: 'semantic',
           sourceRef: `external:hermes:${receiptId}`, sourceType: 'tool_write',
+          contactId: subjectContactId,
           provenance: { channelId, sessionId: channelId, companionId: record.binding.companionId,
             actor: 'companion', toolName: 'psfn_memory_remember', toolCallId: record.eventId,
-            triggerContactId: record.binding.contactId, sourceConversationAt: entry.timestamp },
+            triggerContactId: subjectContactId, subjectContactId, sourceConversationAt: entry.timestamp },
           intakeEnvelopes: screening.envelopes });
       }
       record.completed = true;

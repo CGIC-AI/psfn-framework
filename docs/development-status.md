@@ -10,8 +10,8 @@ sources:
     resource: repo://admin-ui/src/lib/nav.ts
   - id: openwiki-source-ca6cb4b1a14fd7969dfae3ec
     resource: repo://CHANGELOG.md
-  - id: openwiki-source-7678fad136f19a333bb7e4a8
-    resource: repo://docs/memory.md
+  - id: openwiki-source-49618c686568d13b7d80269d
+    resource: repo://docs/memory/overview.md
   - id: openwiki-source-d1a506dbe5374546142e2cfd
     resource: repo://docs/operations.md
   - id: openwiki-source-d91ae0f29835aa84dbc04713

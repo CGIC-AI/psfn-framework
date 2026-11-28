@@ -7,8 +7,6 @@ verified:
   - by: openwiki/0.4.3
     at: 2026-08-28T13:30:04.287Z
 sources:
-  - id: openwiki-source-192ba61eb1fa9c73dd992ba5
-    resource: repo://docs/fleet-auth-authority-model.md
   - id: openwiki-source-e673326696c14f629f0d4ce3
     resource: repo://src/app/gateway/fleet-auth-persistence.ts
   - id: openwiki-source-4e95b02473ca953b228f1c49

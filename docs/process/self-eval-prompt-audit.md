@@ -7,8 +7,6 @@ verified:
   - by: openwiki/0.4.3
     at: 2026-08-28T13:30:04.287Z
 sources:
-  - id: openwiki-source-61c0888eb680345f361c8522
-    resource: repo://docs/self-eval-prompt-audit.md
   - id: openwiki-source-5b54a58d1b51cd490b0e7162
     resource: repo://package.json
   - id: openwiki-source-b78fb75ffb22b847683fa254

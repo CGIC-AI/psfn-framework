@@ -37,8 +37,8 @@ sources:
     resource: repo://src/faculties/automata/session-classification.test.ts
   - id: openwiki-source-0f15997321b305f3f85ad0a4
     resource: repo://src/faculties/automata/session-classification.ts
-  - id: openwiki-source-43dd0e36242f567d8b122647
-    resource: repo://src/faculties/subagents/automata-lifecycle.ts
+  - id: openwiki-source-8752937a213b6ef53208a79d
+    resource: repo://src/faculties/automata/terminal-lifecycle.ts
   - id: openwiki-source-d8c76b7251b632de61e39e60
     resource: repo://src/faculties/subagents/capability-access.ts
   - id: openwiki-source-3220d91548e48dba92a09e75
@@ -433,14 +433,16 @@ page; the automata page records the ownership contract that feeds it:
 
 ## Durable terminal handoff
 
-The automata lifecycle port (`src/faculties/subagents/automata-lifecycle.ts`)
-is the narrow seam between the bounded faculty and the durable Bus/run adapter.
-`recordTerminalHandoff` receives only lineage (run/task/worker/parent/source
+The automata terminal lifecycle port (`AutomataTerminalLifecyclePort` in
+`src/faculties/automata/terminal-lifecycle.ts`) is the narrow seam between the
+bounded faculty and the durable Bus/run adapter. `recordTerminalHandoff`
+receives only lineage (run/task/worker/parent/source
 runs, session IDs), lifecycle state, outcome, usage accounting, and references
 to separately governed work products. **Deliberately absent: worker output,
 transcript entries, prompts, tool calls, and reasoning.** Each terminal outcome
 is keyed by a stable SHA-256 idempotency key
-(`buildSubagentTerminalHandoffKey(runId)`), so retries and replays record once
+(`buildAutomataTerminalHandoffKey`, bound to automaton class, run id and
+attempt), so retries and replays record once
 (`inserted: false` on exact replay). `inspectRun` returns the durable view
 (finding/evidence/artifact/handoff refs) that `SubagentFaculty.inspect` folds
 into its `SubagentDurableTaskInspection`.

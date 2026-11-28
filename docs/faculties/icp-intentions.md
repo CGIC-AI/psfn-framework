@@ -79,8 +79,6 @@ sources:
     resource: repo://src/core/intention/proactive-time-gate.ts
   - id: openwiki-source-74e2cf2c636fdfd52a85a64a
     resource: repo://src/core/intention/runtime-wiring.ts
-  - id: openwiki-source-119daa5a9c1276d092bd3e70
-    resource: repo://src/core/intention/social-desire-consent-evaluator.ts
   - id: openwiki-source-0b8e8cffa790c875330bcbfd
     resource: repo://src/core/intention/social-desire-felt-signal.ts
   - id: openwiki-source-681e0b4e1813a21543fe0c24

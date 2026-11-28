@@ -9,6 +9,12 @@ export interface FactRoutingOptions {
   companionAuthorIds?: readonly string[];
   /** Group-room facts may claim direct address only when journal metadata proves it. */
   requireStructuredAddressing?: boolean;
+  /**
+   * The extraction source is a private direct conversation, not a room
+   * (psfn-framework-d5e0p.21). Only then may the sole human counterparty be
+   * stamped as the subject of a fact that names no other subject.
+   */
+  directConversation?: boolean;
 }
 
 type SessionEntryCompanionRelevance =

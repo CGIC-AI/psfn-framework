@@ -774,25 +774,28 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort, Bac
             candidate_job.created_at_ms,
             candidate_job.updated_at_ms,
             candidate_job.kind,
-            -- via_welfare = NOT admissible-by-the-normal-path. The normal path
-            -- requires the job to be available (backoff elapsed) AND, for the
-            -- foreground-exclusive kind only, free of turn contention; anything
-            -- else that still reaches this CTE got here through the welfare
-            -- branch below.
-            NOT (
-              candidate_job.available_at_ms <= $1
+            -- via_welfare = the job crossed the welfare threshold and a reserve
+            -- slot is free, whether or not its backoff has elapsed (22ovy). An
+            -- aged job claimed through the normal path ran unprotected, so the
+            -- gate preempted it again and the welfare reserve never broke the
+            -- loop it exists for. A job that reaches this CTE without being
+            -- normally admissible got here through this same predicate.
+            (
+              $6 > 0
+              AND candidate_job.kind <> '${FOREGROUND_EXCLUSIVE_KIND}'
               AND (
-                candidate_job.kind <> '${FOREGROUND_EXCLUSIVE_KIND}'
+                candidate_job.defer_count >= $4
                 OR (
-                  NOT (candidate_job.logical_session_id = ANY($3::text[]))
-                  AND NOT EXISTS (
-                    SELECT 1
-                    FROM agent_background_work_foreground_leases foreground
-                    WHERE foreground.logical_session_id = candidate_job.logical_session_id
-                      AND foreground.expires_at_ms > $1
-                  )
+                  candidate_job.first_deferred_at_ms IS NOT NULL
+                  AND $1 - candidate_job.first_deferred_at_ms >= $5
                 )
               )
+              AND (
+                SELECT COUNT(*)
+                FROM agent_background_work_jobs welfare_running
+                WHERE welfare_running.state = 'running'
+                  AND welfare_running.welfare_claimed = true
+              ) < $6
             ) AS via_welfare
           FROM agent_background_work_jobs candidate_job
           WHERE candidate_job.state IN ('queued', 'deferred', 'retry_wait')

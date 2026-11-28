@@ -553,7 +553,7 @@ describe('CompanionAvailabilityRuntime', () => {
       shutdownTimeoutMs: 5_000,
       terminalRetentionMs: 604_800_000,
       cleanupIntervalMs: 3_600_000,
-      welfare: { deferThreshold: 8, ageThresholdMs: 300_000, reserveSlots: 1 },
+      welfare: { deferThreshold: 8, ageThresholdMs: 300_000, reserveSlots: 1, maxDefers: 16 },
     });
     const execution = supervisor as unknown as {
       executeClaim: (...args: unknown[]) => Promise<void>;

@@ -7,13 +7,14 @@ import {
   emitHealthEvent,
   hashHealthEventSubject,
   processObserverId,
+  type HealthEventEvidence,
   type HealthEventOwner,
 } from '../../../shared/contracts/health-event.js';
 import type { TurnPerformanceDeferReason } from '../../../shared/telemetry/turn-performance.js';
 import type {
   BackgroundWorkEnqueueResult,
   BackgroundWorkStorePort,
-  BackgroundWorkWelfarePolicy,
+  BackgroundWorkSupervisorWelfarePolicy,
 } from './store-port.js';
 import type { BackgroundWorkSupervisorTuning } from './config.js';
 import {
@@ -100,9 +101,10 @@ export interface BackgroundWorkSupervisorOptions extends BackgroundWorkSuperviso
   /**
    * Required anti-starvation welfare policy (mmo9.7.4), resolved from the
    * scheduler.json owner contract. `reserveSlots: 0` disables welfare admission
-   * entirely (fail-closed to pre-welfare FIFO behavior).
+   * entirely (fail-closed to pre-welfare FIFO behavior); `maxDefers` bounds
+   * preemption re-dispatch either way (22ovy).
    */
-  welfare: BackgroundWorkWelfarePolicy;
+  welfare: BackgroundWorkSupervisorWelfarePolicy;
   /** Canonical automata lifecycle for eligible durable background workers. */
   automataLifecycle?: BackgroundWorkAutomataLifecyclePort;
   /**
@@ -243,7 +245,7 @@ export class BackgroundWorkSupervisor {
   private readonly shutdownTimeoutMs: number;
   private readonly terminalRetentionMs: number;
   private readonly cleanupIntervalMs: number;
-  private readonly welfare: BackgroundWorkWelfarePolicy;
+  private readonly welfare: BackgroundWorkSupervisorWelfarePolicy;
   private readonly automataLifecycle: BackgroundWorkAutomataLifecyclePort | undefined;
   private readonly onTerminalFailure: BackgroundWorkSupervisorOptions['onTerminalFailure'];
   private readonly healthEventOwner: HealthEventOwner | undefined;
@@ -317,7 +319,11 @@ export class BackgroundWorkSupervisor {
         'welfare.ageThresholdMs',
       ),
       reserveSlots,
+      maxDefers: requirePositiveInteger(options.welfare.maxDefers, 'welfare.maxDefers'),
     };
+    if (this.welfare.maxDefers <= this.welfare.deferThreshold) {
+      throw new Error('welfare.maxDefers must be greater than welfare.deferThreshold');
+    }
     this.automataLifecycle = options.automataLifecycle;
     this.onTerminalFailure = options.onTerminalFailure;
   }
@@ -657,9 +663,12 @@ export class BackgroundWorkSupervisor {
         return;
       }
       if (error instanceof BackgroundWorkDeferredError) {
+        let requeueDelayMs = error.delayMs;
         if (error.reasonCode === 'foreground_active') {
-          await this.transitionClaimToDeferred(job, error.reasonCode, error.delayMs);
-          return;
+          const yielded = await this.yieldToForeground(job, payload, error.delayMs);
+          if (yielded.deferred) return;
+          // Past the preemption bound: the yield consumes an attempt below.
+          requeueDelayMs = yielded.backoffMs;
         }
 
         if (error.reasonCode === 'source_not_ready') {
@@ -682,16 +691,16 @@ export class BackgroundWorkSupervisor {
           return;
         }
 
-        // Handler-drain requeues crossed no effect boundary, but they still
-        // need a durable budget. Route them through the ordinary attempt
-        // ceiling while preserving their actual reason.
+        // Handler-drain requeues, and foreground yields past their bound,
+        // crossed no effect boundary, but they still need a durable budget.
+        // Route them through the ordinary attempt ceiling.
         const nowMs = this.now();
         const settled = await this.store.failOrRetry({
           jobId: job.jobId,
           leaseOwner: this.leaseOwner,
           expectedRevision: job.revision,
           nowMs,
-          retryAtMs: nowMs + Math.max(0, error.delayMs),
+          retryAtMs: nowMs + Math.max(0, requeueDelayMs),
           retryReasonCode: 'handler_failed',
           terminalReasonCode: 'handler_failed',
         });
@@ -772,6 +781,43 @@ export class BackgroundWorkSupervisor {
       nowMs,
     });
     this.emitJobTelemetry(deferred, undefined, this.executionDurationMs(job));
+  }
+
+  /**
+   * 22ovy: a handler that yielded to foreground work (a model-call preemption
+   * or a foreground effect fence) is deferred with an exponential backoff on
+   * its durable defer count, so a job that keeps losing its model call to
+   * foreground traffic re-dispatches less and less often instead of every few
+   * seconds. Welfare admission bypasses that backoff once the job is aged, so
+   * the backoff never delays a protected completion. Past `maxDefers` the
+   * yield is no longer free: it is reported and the caller routes it through
+   * the ordinary attempt ceiling, so the loop ends in a terminal failure.
+   */
+  private async yieldToForeground(
+    job: ClaimedBackgroundWorkJob,
+    payload: BackgroundWorkPayload,
+    baseDelayMs: number,
+  ): Promise<{ deferred: boolean; backoffMs: number }> {
+    const backoffMs = Math.min(
+      this.retryMaxDelayMs,
+      Math.max(0, baseDelayMs) * (2 ** job.deferCount),
+    );
+    if (job.deferCount < this.welfare.maxDefers) {
+      await this.transitionClaimToDeferred(job, 'foreground_active', backoffMs);
+      return { deferred: true, backoffMs };
+    }
+    log.warn('Background job exceeded its foreground preemption bound', {
+      jobId: job.jobId,
+      kind: job.kind,
+      deferCount: job.deferCount,
+      maxDefers: this.welfare.maxDefers,
+      attemptCount: job.attemptCount,
+    });
+    this.emitBackgroundHealthEvent('background_work_preemption_bounded', payload.kind, {
+      deferCount: job.deferCount,
+      attemptCount: job.attemptCount,
+    });
+    return { deferred: false, backoffMs };
   }
 
   private retryDelayMs(attempt: number): number {
@@ -1117,29 +1163,38 @@ export class BackgroundWorkSupervisor {
     settled: StoredBackgroundWorkJob,
     durationMs: number,
   ): void {
+    this.emitBackgroundHealthEvent('background_work_job_failed', kind, {
+      attemptCount: settled.attemptCount,
+      durationMs,
+      jobAgeMs: Math.max(0, this.now() - settled.createdAtMs),
+      terminal: true,
+    });
+  }
+
+  /** One degraded background-work observation, grouped by a digest of the job KIND. */
+  private emitBackgroundHealthEvent(
+    code: 'background_work_job_failed' | 'background_work_preemption_bounded',
+    kind: BackgroundWorkKind,
+    evidence: HealthEventEvidence,
+  ): void {
     const owner = this.healthEventOwner;
     if (!owner) return;
-    const nowMs = this.now();
     void emitHealthEvent(this.eventBus, {
       owner,
       severity: 'degraded',
-      code: 'background_work_job_failed',
+      code,
       provenance: {
         process: 'agent',
         component: 'background_work',
         observerId: processObserverId(),
         subjectHash: hashHealthEventSubject(kind),
       },
-      observedAtMs: nowMs,
-      evidence: {
-        attemptCount: settled.attemptCount,
-        durationMs,
-        jobAgeMs: Math.max(0, nowMs - settled.createdAtMs),
-        terminal: true,
-      },
+      observedAtMs: this.now(),
+      evidence,
     }).catch((error: unknown) => {
-      log.error('Background terminal-failure health event emission failed', {
-        jobId: settled.jobId,
+      log.error('Background health event emission failed', {
+        code,
+        kind,
         errorName: error instanceof Error ? error.name : 'UnknownError',
       });
     });

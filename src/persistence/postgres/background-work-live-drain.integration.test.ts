@@ -39,6 +39,7 @@ const WELFARE_POLICY: BackgroundWorkSupervisorOptions['welfare'] = {
   deferThreshold: 100,
   ageThresholdMs: 60_000,
   reserveSlots: 0,
+  maxDefers: 200,
 };
 
 type LiveKind = 'memory_extraction' | 'intention_post_turn_hooks' | 'emotion_appraisal';

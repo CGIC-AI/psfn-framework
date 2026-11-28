@@ -29,7 +29,7 @@ import {
   resolveEmptyToolArgumentUsageMetadata,
   stripProviderResponseTerminatorArtifact,
 } from './client-response-helpers.js';
-import { countMessageTokens } from './tokens.js';
+import { estimatePartialAttemptUsage } from './unreported-attempt-charge.js';
 import { monotonicEpochNowMs } from '../../shared/telemetry/turn-performance.js';
 import { markErrorAsNonRetryable } from './retry.js';
 import { logEmptyToolArgumentProvenance } from './empty-tool-argument-retry.js';
@@ -310,11 +310,7 @@ export async function runLLMStreamAttempt(
     }
     const partialOutput = `${content}${reasoning}`;
     const partialUsage = emittedData && !providerCompleted
-      ? normalizeLLMUsageDetails(
-          undefined,
-          input.accountingInputTokens,
-          Math.max(1, countMessageTokens([{ role: 'assistant', content: partialOutput }])),
-        )
+      ? estimatePartialAttemptUsage(partialOutput, input.accountingInputTokens)
       : undefined;
     await input.recordUsage({
       inputTokens: partialUsage?.input ?? 0,
@@ -414,11 +410,7 @@ export async function runLLMStreamAttempt(
     model: String(input.model.id),
     hasContent: !!content,
   });
-  const incompleteUsage = normalizeLLMUsageDetails(
-    undefined,
-    input.accountingInputTokens,
-    Math.max(1, countMessageTokens([{ role: 'assistant', content: `${content}${reasoning}` }])),
-  );
+  const incompleteUsage = estimatePartialAttemptUsage(`${content}${reasoning}`, input.accountingInputTokens);
   const incompleteResponse: LLMResponse = {
     content,
     ...(reasoning ? { reasoning } : {}),

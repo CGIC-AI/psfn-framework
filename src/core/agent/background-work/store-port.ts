@@ -46,6 +46,18 @@ export interface BackgroundWorkWelfarePolicy {
   reserveSlots: number;
 }
 
+/**
+ * The supervisor's half of the welfare policy (22ovy). Past `maxDefers`
+ * preemption defers a job stops yielding for free: each further preemption is
+ * settled through the ordinary attempt ceiling and reported as a health event,
+ * so a preemption loop the welfare reserve could not break still terminates.
+ * It sits above `deferThreshold`, so welfare admission always gets its chance
+ * first.
+ */
+export interface BackgroundWorkSupervisorWelfarePolicy extends BackgroundWorkWelfarePolicy {
+  maxDefers: number;
+}
+
 export interface BackgroundWorkExpiredLeaseRecovery {
   /** Rows moved out of `running` by this sweep. */
   recoveredCount: number;

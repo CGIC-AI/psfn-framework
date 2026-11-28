@@ -63,7 +63,10 @@ import type {
   ModelUsageRecorder,
 } from '../../shared/telemetry/model-usage.js';
 import { resolveModelUsageChargeLane } from '../../shared/telemetry/model-usage-attribution.js';
-import { reconcileModelUsageAccounting } from '../../shared/telemetry/model-usage-accounting.js';
+import {
+  estimateConservativeModelUsageCostUsd,
+  reconcileModelUsageAccounting,
+} from '../../shared/telemetry/model-usage-accounting.js';
 import { getRunChargeSnapshot } from '../../shared/telemetry/run-charge.js';
 import {
   type CircuitBreakerTransition,
@@ -71,10 +74,16 @@ import {
 } from '../../shared/resilience/circuit-breaker.js';
 import { classifyLLMError } from './error-classify.js';
 import {
+  completionPartialOutput,
+  estimatePartialAttemptUsage,
+  resolveUnreportedAttemptCharge,
+  trackAttemptDispatch,
+  type UnreportedAttemptOutcome,
+} from './unreported-attempt-charge.js';
+import {
   assertProviderCompletionStopReason,
   assertUsableProviderResponse,
   capInputTokensToContextWindow,
-  resolveAbortedAttemptWorstCaseUsd,
   extractCompletionToolCalls,
   normalizeContent,
   normalizeLLMUsageDetails,
@@ -612,6 +621,8 @@ export class LLMClient {
       metadata?: Record<string, unknown>;
       /** Request bound charged when an aborted/timed-out attempt reports no usage. */
       worstCaseTokens?: { input: number; output: number };
+      /** Dispatch and cancellation evidence that settles an unreported attempt's charge (ge9w7). */
+      attemptOutcome?: UnreportedAttemptOutcome;
     },
   ): Promise<void> {
     const companionPrivate = correlation?.telemetryVisibility === 'companion_private';
@@ -680,7 +691,7 @@ export class LLMClient {
       usageDetails?.costEvidenceConflict,
     );
     const providerCost = providerCostReconciliation.providerCost;
-    const abortedWorstCaseUsd = resolveAbortedAttemptWorstCaseUsd({
+    const unreportedCharge = resolveUnreportedAttemptCharge({
       status: options.status,
       error: options.error,
       reportedTokens: (usageDetails?.input ?? inputTokens) + (usageDetails?.output ?? outputTokens)
@@ -691,8 +702,20 @@ export class LLMClient {
           output: options.worstCaseTokens.output,
         }
         : undefined,
-      rates: accountingRates,
+      outcome: options.attemptOutcome,
     });
+    // A never-dispatched attempt is a known $0 even on an unpriced model; any
+    // other unreported charge needs rates, and stays unknown (fail closed) without.
+    const unreportedChargeUsd = unreportedCharge?.basis === 'not_dispatched'
+      ? 0
+      : unreportedCharge
+        ? estimateConservativeModelUsageCostUsd({
+          inputTokens: unreportedCharge.inputTokens,
+          outputTokens: unreportedCharge.outputTokens,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        }, accountingRates)
+        : undefined;
     const accounting = reconcileModelUsageAccounting({
       usage: {
         inputTokens: usageDetails?.input ?? inputTokens,
@@ -704,8 +727,8 @@ export class LLMClient {
           : {}),
       },
       ...(providerCost ? { providerCost } : {}),
-      ...(abortedWorstCaseUsd !== undefined
-        ? { estimatedCost: { total: abortedWorstCaseUsd, currency: 'USD' } }
+      ...(unreportedChargeUsd !== undefined
+        ? { estimatedCost: { total: unreportedChargeUsd, currency: 'USD' } }
         : (accountingRates ? { estimatedRates: accountingRates } : {})),
     });
     const metadata = {
@@ -734,6 +757,7 @@ export class LLMClient {
         : {}),
       ...(providerCost ? { providerCost } : {}),
       ...(syntheticRoutedEndpointCost ? { syntheticRoutedEndpointCostIgnored: true } : {}),
+      ...(unreportedCharge ? { unreportedAttemptCharge: unreportedCharge.basis } : {}),
       ...(correlation?.icpCorrelation
         ? {
             icpCost: {
@@ -954,6 +978,7 @@ export class LLMClient {
             providerObservability,
             model,
           );
+          const dispatchTracker = trackAttemptDispatch(requestOptions, transportSignal);
 
           const retried = await retryCompletionOnMissingRequiredToolCall({
             candidate: candidateTarget,
@@ -974,6 +999,7 @@ export class LLMClient {
               attempt: (attemptIndex) => withRetry(async () => {
                 physicalAttempt += 1;
                 const usageAttempt = physicalAttempt;
+                const dispatch = dispatchTracker.begin();
                 const buffered = requestOptions.requiredToolName
                   ? createBufferedStreamCallbacks(callbacks)
                   : { callbacks, flush: () => undefined };
@@ -1016,6 +1042,7 @@ export class LLMClient {
                     {
                       ...record.options,
                       worstCaseTokens: { input: accountingInputTokens, output: candidateTarget.maxTokens },
+                      attemptOutcome: { ownerCancelled: transportSignal.aborted, dispatch },
                     },
                   ),
                   throwIfAborted: () => throwIfTransportAborted(transportSignal),
@@ -1189,12 +1216,14 @@ export class LLMClient {
           providerObservability,
           model,
         );
+        const dispatchTracker = trackAttemptDispatch(requestOptions, transportSignal);
 
         const request = async (emptyArgsRetries: number) => {
           // A new physical attempt cannot inherit the previous response's evidence.
           delete providerObservability.providerResponse;
           physicalAttempt += 1;
           const attempt = physicalAttempt;
+          const dispatch = dispatchTracker.begin();
           const attemptStartedAtMs = Date.now();
           await this.reserveIcpConversationCost(
             routingPurpose,
@@ -1234,6 +1263,7 @@ export class LLMClient {
                 error: err,
                 providerObservability,
                 worstCaseTokens: { input: worstCaseInputTokens, output: candidateTarget.maxTokens },
+                attemptOutcome: { ownerCancelled: transportSignal.aborted, dispatch },
                 metadata: { completionPurpose: purpose, routingPurpose, emptyArgsRetries },
               },
             );
@@ -1316,14 +1346,23 @@ export class LLMClient {
           } catch (error) {
             const err = error instanceof Error ? error : new Error(String(error));
             markErrorAsNonRetryable(err);
+            // An aborted or failed completion can carry the output streamed
+            // before it stopped without the provider's usage report (ge9w7).
+            const stoppedEarly = response.stopReason === 'aborted' || response.stopReason === 'error';
+            const partialOutput = stoppedEarly && usageDetails.totalTokens === 0
+              ? completionPartialOutput(response.content)
+              : '';
+            const settledUsage = partialOutput
+              ? estimatePartialAttemptUsage(partialOutput, worstCaseInputTokens)
+              : usageDetails;
             await this.recordUsage(
               routingPurpose,
               'completion',
               candidateTarget,
-              usageDetails.input,
-              usageDetails.output,
+              settledUsage.input,
+              settledUsage.output,
               correlation,
-              usageDetails,
+              settledUsage,
               {
                 startedAtMs: attemptStartedAtMs,
                 completedAtMs: Date.now(),
@@ -1332,16 +1371,18 @@ export class LLMClient {
                 requestedProvider: requestedProvider ?? candidateTarget.provider,
                 requestedModel: requestedModel ?? candidateTarget.model,
                 status: 'failure',
-                settlement: 'complete',
+                settlement: partialOutput ? 'partial' : 'complete',
                 stopReason: response.stopReason,
                 error: err,
                 providerObservability,
                 worstCaseTokens: { input: worstCaseInputTokens, output: candidateTarget.maxTokens },
+                attemptOutcome: { ownerCancelled: transportSignal.aborted, dispatch },
                 metadata: {
                   completionPurpose: purpose,
                   routingPurpose,
                   emptyArgsRetries,
                   ...emptyToolArgumentUsageMetadata,
+                  ...(partialOutput ? { partialOutputChars: partialOutput.length } : {}),
                 },
               },
             );

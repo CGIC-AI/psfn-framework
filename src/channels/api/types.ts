@@ -9,6 +9,7 @@ import type {
   HubVirtualSpaceAdmission,
 } from '../../shared/contracts/hub-device-ingress.js';
 import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
+import type { CompanionUiThreadHistoryMessage } from './companion-ui-thread-history.js';
 import type {
   RequestCapabilityAuthorityVersions,
   RequestCapabilityParentBinding,
@@ -266,9 +267,11 @@ export interface ApiCompanionUiShardActionRpcParams {
 }
 
 /**
- * Operator-key Companion UI shard frame (psfn-framework-m1is8). The gateway
- * authenticated the key session and compiled the frame under its ceiling; the
- * agent re-parses the exact raw body for its own companion.
+ * Operator-key Companion UI agent-owned frame: a `shards.*` frame
+ * (psfn-framework-m1is8) or the `conversation.history` read
+ * (psfn-framework-jtr6e). The gateway authenticated the key session and
+ * compiled the frame under its ceiling; the agent re-parses the exact raw body
+ * for its own companion.
  */
 export interface ApiCompanionUiKeyShardActionRpcParams {
   requestId: string;
@@ -281,6 +284,7 @@ export interface ApiCompanionUiShardActionRpcSuccess {
   response:
     | readonly ShardDirectoryEntry[]
     | readonly ShardChatMessage[]
+    | readonly CompanionUiThreadHistoryMessage[]
     | ShardChatResponse
     | Readonly<{
       interrupted: boolean;

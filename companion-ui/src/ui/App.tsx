@@ -420,6 +420,8 @@ export function App() {
       }
       if (displayStateBindingRef.current !== null && !await verifyAccount()) return false;
       reconnectAttemptRef.current = 0;
+      // The gateway grants the durable thread read only to a human session.
+      store.readThreadHistory();
       if (store.snapshot().session?.canListShards) {
         store.refreshShards();
       }

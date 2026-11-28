@@ -61,6 +61,16 @@ export function smokeScenario(body) {
   }
   if (current.includes('SMOKE_PROVIDER_FAILURE')) return { kind: 'failure', status: 400 };
   if (current.includes('SMOKE_PROVIDER_HOLD')) return { kind: 'hold', delayMs: 60_000 };
+  // A slow streamed reply: each chunk is visibly separate in the browser and
+  // the reply text is unique to the probe so its rendering is unambiguous.
+  const streamed = /SMOKE_PROVIDER_STREAM ([a-z0-9-]+)/u.exec(current);
+  if (streamed) {
+    return {
+      kind: 'stream',
+      chunks: [`Streamed reply ${streamed[1]} begins,`, ' continues after a pause,', ' and ends here.'],
+      chunkDelayMs: 1_500,
+    };
+  }
   const recall = /What is the launch phrase for my project ([a-z0-9]+)\?/u.exec(current);
   if (recall) {
     // The oracle only consumes the production retrieval section. History,

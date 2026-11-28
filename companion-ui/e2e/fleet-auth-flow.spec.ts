@@ -220,7 +220,11 @@ test('fake OAuth, enrolled Hub, and shared-display lifecycle remain separated an
       };
       if (decoded.type === 'session.configure') {
         expect(configured).toBe(false);
-        expect(decoded).toEqual({ schemaVersion: 1, type: 'session.configure', eventCapabilities: ['approvals.v2'] });
+        expect(decoded).toEqual({
+          schemaVersion: 1,
+          type: 'session.configure',
+          eventCapabilities: ['approvals.v2', 'reply.deltas.v1', 'thread.history.v1'],
+        });
         configured = true;
         configureFrames.push(frame);
         socket.send(JSON.stringify({

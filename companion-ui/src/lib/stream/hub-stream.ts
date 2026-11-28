@@ -6,6 +6,7 @@ import type {
   SatelliteHubSession,
   SatelliteHubSnapshot,
   SatelliteHubStateEvent,
+  SatelliteHubThreadHistoryEvent,
 } from '../api/client.js';
 import type { PcmAudioStreamPort } from '../api/pcm-audio.js';
 import type { BrowserEmbodimentPort } from '../api/primary-embodiment.js';
@@ -33,6 +34,7 @@ import {
   type VoicePlaybackState,
 } from '../audio/frame-reassembly.js';
 import type { DeviceLocationSample } from '../geolocation.js';
+import { hydrateThreadHistory } from './thread-history.js';
 
 export type { VoicePlaybackState, CompletedUtterance } from '../audio/frame-reassembly.js';
 
@@ -189,6 +191,7 @@ export type HubStreamReducerEvent =
   | { type: 'client.state'; event: SatelliteHubStateEvent; at: string }
   | { type: 'client.session'; session: SatelliteHubSession; at: string }
   | { type: 'client.error'; event: SatelliteHubErrorEvent; at: string }
+  | { type: 'client.history'; event: SatelliteHubThreadHistoryEvent; at: string }
   | { type: 'hub.inbound'; event: SatelliteHubInboundEvent; at: string }
   | { type: 'artifact.preview.request'; requestId: string; artifactId: string; at: string }
   | { type: 'artifact.preview.timeout'; requestId: string; artifactId: string; at: string }
@@ -213,6 +216,9 @@ export interface HubStreamClientLike {
   supportsDeviceLocation?(): boolean;
   refreshShards?(): void;
   selectShard?(shardId: string | null): void;
+  /** Gateway transport only: whether the server granted the history read. */
+  canReadThreadHistory?(): boolean;
+  readThreadHistory?(): void;
   snapshot(): SatelliteHubSnapshot;
 }
 
@@ -312,6 +318,8 @@ export function reduceHubStreamState(
         },
         updatedAt: event.at,
       };
+    case 'client.history':
+      return { ...hydrateThreadHistory(state, event.event.messages), updatedAt: event.at };
     case 'hub.inbound':
       return applyInboundMessage(state, event.event.message, event.at);
     case 'artifact.preview.request':
@@ -382,6 +390,7 @@ export class HubStreamStore {
       client.on('state', (event) => this.dispatch({ type: 'client.state', event, at: this.now() })),
       client.on('session', (session) => this.dispatch({ type: 'client.session', session, at: this.now() })),
       client.on('error', (event) => this.dispatch({ type: 'client.error', event, at: this.now() })),
+      client.on('history', (event) => this.dispatch({ type: 'client.history', event, at: this.now() })),
       client.on('inbound', (event) => this.handleInbound(event.message)),
     ];
   }
@@ -489,6 +498,13 @@ export class HubStreamStore {
 
   refreshShards(): void {
     this.client.refreshShards?.();
+  }
+
+  /** Hydrate the main thread when the transport was granted its history read. */
+  readThreadHistory(): boolean {
+    if (!this.client.canReadThreadHistory?.() || !this.client.readThreadHistory) return false;
+    this.client.readThreadHistory();
+    return true;
   }
 
   selectShard(shardId: string | null): void {

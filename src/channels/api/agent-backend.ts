@@ -111,6 +111,7 @@ import {
 import type { ShardDirectoryPort } from '../../shared/contracts/shard-directory.js';
 import { classifyCompanionUiShardActionFailure } from './companion-ui-shard-action-error.js';
 import { dispatchCompanionUiShardFrame } from './companion-ui-shard-dispatch.js';
+import { readCompanionUiThreadHistory } from './companion-ui-thread-history.js';
 import {
   type ActiveApiTurnRequest,
   type ApiTurnCancellationReason,
@@ -198,7 +199,11 @@ export interface AgentApiBackendConfig {
   eventBus: EventBus;
   sessionManager: Pick<
     SessionManager,
-    'getMessageCount' | 'recordUserMessage' | 'recordAssistantMessage' | 'resolveConversationScope'
+    | 'getMessageCount'
+    | 'recordUserMessage'
+    | 'recordAssistantMessage'
+    | 'resolveConversationScope'
+    | 'getSourceTurnRecordsInHistoryWindow'
   >;
   /** Required for direct (raw) model completions that bypass the companion turn pipeline. */
   llmProvider?: LLMProviderPort;
@@ -225,7 +230,11 @@ export class AgentApiBackend {
   private readonly eventBus: EventBus;
   private readonly sessionManager: Pick<
     SessionManager,
-    'getMessageCount' | 'recordUserMessage' | 'recordAssistantMessage' | 'resolveConversationScope'
+    | 'getMessageCount'
+    | 'recordUserMessage'
+    | 'recordAssistantMessage'
+    | 'resolveConversationScope'
+    | 'getSourceTurnRecordsInHistoryWindow'
   >;
   private readonly llmProvider: LLMProviderPort | null;
   private readonly contactStore: ContactStorePort | null;
@@ -442,7 +451,7 @@ export class AgentApiBackend {
   ): Promise<ApiCompanionUiShardActionRpcResult> {
     let resource = 'unknown';
     try {
-      if (!this.shardDirectory || !this.companionId
+      if (!this.companionId
         || params.principal.mode !== 'api_key'
         || params.principal.scope !== undefined) {
         throw new Error('operator key shard action denied');
@@ -459,6 +468,17 @@ export class AgentApiBackend {
         COMPANION_UI_OPERATOR_KEY_CEILING,
       );
       resource = frame.resource;
+      if (frame.resource === 'conversation.history') {
+        // The same derivation the key principal's chat turns are written to.
+        return {
+          ok: true,
+          response: readCompanionUiThreadHistory(
+            this.sessionManager,
+            this.deriveChannelId({}, params.principal),
+          ),
+        };
+      }
+      if (!this.shardDirectory) throw new Error('operator key shard action denied');
       return await dispatchCompanionUiShardFrame({
         directory: this.shardDirectory,
         parentCompanionId: this.companionId as CompanionId,

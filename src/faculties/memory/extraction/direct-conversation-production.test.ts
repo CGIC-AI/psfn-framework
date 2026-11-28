@@ -122,4 +122,14 @@ describe('direct extraction through the production writer', () => {
     expect(memories[0]?.provenance?.subjectContactId).toBeUndefined();
     expect(classifyMemorySubject(memories[0]!, { memoryRevision: 1 }).subjectClass).toBe('unattributed');
   });
+
+  it('does not claim a companion peer as the subject of its own direct conversation', async () => {
+    const peer: Contact = { ...robin, id: alex.id, displayName: 'Alex' };
+    const { memories } = await extract(
+      'Alex enjoys sailing in the summer.', undefined, undefined, [], [peer, robin],
+    );
+    expect(memories).toHaveLength(1);
+    expect(memories[0]?.provenance?.subjectContactId).toBeUndefined();
+    expect(classifyMemorySubject(memories[0]!, { memoryRevision: 1 }).subjectClass).toBe('unattributed');
+  });
 });

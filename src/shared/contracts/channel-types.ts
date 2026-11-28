@@ -43,9 +43,11 @@ const CHANNEL_BEHAVIOR: Readonly<Record<ChannelType, ChannelPolicy>> = Object.fr
   // text only as an appraised, egress-leased room reply (channel.sendRoomReply
   // onto the adapter queue the bridge drains with channel_pull_outbound).
   // Wake notes go through the approved-primary-channel Discord sender, and a
-  // long-horizon follow-up becomes a scheduled prompt delivered by that same
-  // sender, so neither lane may target a bridge conversation until it has its
-  // own channel-routed, per-contact-authorized delivery (psfn-framework-bjlvo).
+  // long-horizon follow-up becomes a scheduled prompt whose turn runs on the
+  // conversation with no sender that can reach a bridge, so its reply would
+  // be recorded but never delivered. Neither lane may target a bridge
+  // conversation until it has channel-routed, per-contact-authorized
+  // delivery (psfn-framework-bjlvo).
   external: { scheduledContinuity: false, liveWakeup: false, groupCapable: true },
 });
 

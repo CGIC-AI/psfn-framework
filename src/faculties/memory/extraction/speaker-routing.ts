@@ -212,8 +212,8 @@ export function resolveFactRouting(
 
 /**
  * The sole human of a private direct conversation, when that human is the
- * turn's trigger contact. Rooms, multi-human windows and unattributed turns
- * have no direct counterparty.
+ * turn's trigger contact and a live, known human contact. Rooms, multi-speaker
+ * windows, companion peers and unattributed turns have no direct counterparty.
  */
 function resolveDirectCounterpartyContactId(
   context: SpeakerRoutingContext,
@@ -226,7 +226,9 @@ function resolveDirectCounterpartyContactId(
   const humans = context.speakers.filter(speaker => !speaker.companion);
   if (humans.length !== 1) return undefined;
   const contactId = humans[0]!.contactId ?? triggerContactId;
-  return contactId === triggerContactId ? contactId : undefined;
+  if (contactId !== triggerContactId) return undefined;
+  const contact = context.contacts?.find(candidate => candidate.id === contactId);
+  return contact && !contact.archivedAt && !contact.isMachineIntelligence ? contactId : undefined;
 }
 
 const DIRECT_COUNTERPARTY_SUBJECT_REASONS: ReadonlySet<ExtractionFactRoutingReason> = new Set([

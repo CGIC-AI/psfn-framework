@@ -251,9 +251,9 @@ describe('schedule tool', () => {
   });
 
   // psfn-framework-mgsaf: an external bridge conversation is not a continuity
-  // destination. A long-horizon follow-up becomes a scheduled prompt whose
-  // reply is sent through the Discord gateway sender, so admitting external
-  // here would deliver that conversation's continuity out of its channel.
+  // destination. A long-horizon follow-up becomes a scheduled prompt turn on
+  // that conversation, and no scheduled-prompt sender reaches a bridge, so its
+  // reply would be recorded but never delivered.
   it.each(['create_follow_up', 'create_reminder'])(
     'refuses an external bridge conversation as a %s destination',
     async (action) => {

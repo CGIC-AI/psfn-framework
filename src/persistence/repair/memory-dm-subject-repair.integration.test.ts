@@ -50,7 +50,7 @@ async function withDatabase(handler: (pool: Pool, store: MemoryStorePort) => Pro
     await ensurePostgresSchema(pool, [...POSTGRES_CONTACT_MIGRATIONS, ...POSTGRES_TRANSCRIPT_MIGRATIONS]);
     const store = await createPostgresMemoryStoreFromPool(pool, EMBEDDING.length);
     await seedConversations(pool);
-    await seedMemories(store);
+    await seedMemories(pool, store);
     await handler(pool, store);
   } finally {
     await pool.end();
@@ -127,7 +127,7 @@ function memory(id: string, overrides: Partial<PurrMemory> = {}): PurrMemory {
 
 const TARGETS = ['dm-single-speaker', 'dm-structured-source'] as const;
 
-async function seedMemories(store: MemoryStorePort): Promise<void> {
+async function seedMemories(pool: Pool, store: MemoryStorePort): Promise<void> {
   const rows: PurrMemory[] = [
     memory('dm-single-speaker'),
     memory('dm-structured-source', {
@@ -149,6 +149,7 @@ async function seedMemories(store: MemoryStorePort): Promise<void> {
     memory('dm-not-private', { sourceRef: turnSource(DM, 'invite_only') }),
     memory('dm-superseded', { supersededBy: 'dm-single-speaker' }),
     memory('dm-deleted'),
+    memory('dm-malformed'),
     memory('dm-sleeptime', { sourceRef: `sleeptime:${DM}:journal`, provenance: dmProvenance() }),
     memory('room-single-speaker', {
       sourceRef: turnSource(ROOM, 'invite_only'),
@@ -157,6 +158,11 @@ async function seedMemories(store: MemoryStorePort): Promise<void> {
   ];
   for (const row of rows) await store.insertMemory(row, EMBEDDING);
   await store.softDeleteMemory('dm-deleted', { deleteId: 'delete-dm', deletedBy: 'tester' });
+  // Stored evidence the normalized projection would drop must never be overwritten.
+  await pool.query(`
+    UPDATE l2_memories SET provenance_json = provenance_json || '{"subjectContactId": 7}'::jsonb
+    WHERE id = 'dm-malformed'
+  `);
 }
 
 async function visibleIds(store: MemoryStorePort, viewerContactId: string): Promise<string[]> {
@@ -191,12 +197,12 @@ describe('DM subject repair over a real Postgres corpus (d5e0p.21)', () => {
       expect(dryRun).toMatchObject({
         dryRun: true,
         evidence: { transcriptMessages: 3, humanAuthors: 1, activityContacts: 1 },
-        scannedTurnMemories: 11,
+        scannedTurnMemories: 12,
         plannedRepairs: 2,
         repaired: 0,
         memoryIds: [...TARGETS],
         skipped: {
-          deleted: 1, superseded: 1, channel_mismatch: 0, not_private_source: 1, contact_mismatch: 1,
+          undecodable: 0, malformed_provenance: 1, deleted: 1, superseded: 1, channel_mismatch: 0, not_private_source: 1, contact_mismatch: 1,
           has_subject: 2, companion_owned: 1, unsupported_routing_reason: 1, room_scoped: 1,
           not_unattributed: 0,
         },

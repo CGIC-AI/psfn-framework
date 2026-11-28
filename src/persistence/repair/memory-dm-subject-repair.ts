@@ -42,6 +42,8 @@ const COMPANION_ROUTING_REASONS: ReadonlySet<string> = new Set([
 const ROOM_SCOPE_TAGS: ReadonlySet<string> = new Set(['group_memory', 'room_context']);
 
 const DM_SUBJECT_REPAIR_SKIP_REASONS = [
+  'undecodable',
+  'malformed_provenance',
   'deleted',
   'superseded',
   'channel_mismatch',
@@ -111,10 +113,12 @@ function emptySkipCounts(): Record<DirectMessageSubjectRepairSkipReason, number>
   ) as Record<DirectMessageSubjectRepairSkipReason, number>;
 }
 
+class MalformedProvenanceField extends Error {}
+
 function textField(provenance: Record<string, unknown>, field: string): string | undefined {
   const value = provenance[field];
   if (value === undefined || value === null) return undefined;
-  if (typeof value !== 'string') throw new Error(`provenance_json.${field} must be a string`);
+  if (typeof value !== 'string') throw new MalformedProvenanceField(field);
   return value.trim() || undefined;
 }
 
@@ -125,6 +129,22 @@ function textField(provenance: Record<string, unknown>, field: string): string |
  * guard is the reported reason.
  */
 function classifyDirectMessageSubjectRepair(
+  memory: PurrMemory,
+  provenance: Record<string, unknown>,
+  currentSubjectClass: string | null,
+  channelId: string,
+  contactId: string,
+): DirectMessageSubjectRepairSkipReason | undefined {
+  try {
+    return classifyWellFormedRow(memory, provenance, currentSubjectClass, channelId, contactId);
+  } catch (error) {
+    // A non-string evidence field is unknown evidence: never stamp over it.
+    if (error instanceof MalformedProvenanceField) return 'malformed_provenance';
+    throw error;
+  }
+}
+
+function classifyWellFormedRow(
   memory: PurrMemory,
   provenance: Record<string, unknown>,
   currentSubjectClass: string | null,
@@ -265,10 +285,15 @@ async function loadTurnMemories(client: PoolClient, channelId: string): Promise<
   return rows.rows;
 }
 
-function decodeRow(row: TurnMemoryRow): { memory: PurrMemory; storedProvenance: Record<string, unknown> } {
+type DecodedRow =
+  | { memory: PurrMemory; storedProvenance: Record<string, unknown> }
+  | { skip: 'undecodable' | 'malformed_provenance' };
+
+/** Rows that cannot be decoded are reported and left untouched, never stamped. */
+function decodeRow(row: TurnMemoryRow): DecodedRow {
   const memory = tryFromMemoryRow(row);
-  if (!memory) throw new Error(`Memory ${row.id} could not be decoded`);
-  if (!isRecord(row.provenance_json)) throw new Error(`Memory ${row.id} provenance_json must be an object`);
+  if (!memory) return { skip: 'undecodable' };
+  if (!isRecord(row.provenance_json)) return { skip: 'malformed_provenance' };
   return { memory, storedProvenance: row.provenance_json };
 }
 
@@ -354,7 +379,12 @@ export async function repairDirectMessageMemorySubjects(
     const skipped = emptySkipCounts();
     const planned: PlannedRepair[] = [];
     for (const row of rows) {
-      const { memory, storedProvenance } = decodeRow(row);
+      const decoded = decodeRow(row);
+      if ('skip' in decoded) {
+        skipped[decoded.skip] += 1;
+        continue;
+      }
+      const { memory, storedProvenance } = decoded;
       const reason = classifyDirectMessageSubjectRepair(
         memory, storedProvenance, currentClass(row), channelId, contactId,
       );

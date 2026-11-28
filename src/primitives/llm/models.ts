@@ -106,6 +106,23 @@ export function resolveRegisteredModel(
 }
 
 /**
+ * The catalogue's reasoning metadata for a provider/model, without handing out
+ * a transport-capable Model: whether it reasons and its provider level names.
+ */
+export function resolveRegisteredReasoningMetadata(
+  runtime: ModelLookupRuntime,
+  provider: string,
+  modelId: string,
+): { reasoning: boolean; thinkingLevelMap?: ThinkingLevelMap } | null {
+  const model = resolveRegisteredModel(runtime, provider, modelId);
+  if (!model) return null;
+  return {
+    reasoning: model.reasoning === true,
+    ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
+  };
+}
+
+/**
  * Create a pi-ai Model that routes through an OpenAI-compatible endpoint.
  */
 export function createOpenAICompatibleEndpointModel(

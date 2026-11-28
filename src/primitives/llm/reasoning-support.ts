@@ -9,7 +9,7 @@ import {
   MODEL_THINKING_EFFORT_VALUES,
   type ModelThinkingEffort,
 } from '../../shared/contracts/runtime-base.js';
-import { resolveRegisteredModel, type ModelLookupRuntime } from './models.js';
+import { resolveRegisteredReasoningMetadata, type ModelLookupRuntime } from './models.js';
 import type { RoutingCandidate } from './routing.js';
 
 export type ReasoningSupportSource =
@@ -55,7 +55,7 @@ export function resolveCandidateReasoningSupport(
   if (candidate.thinkingEnabled === false) {
     return { reasoning: false, levels: [], source: 'tuning_disabled' };
   }
-  const catalogueModel = resolveRegisteredModel(catalogue, candidate.provider, candidate.model);
+  const catalogueModel = resolveRegisteredReasoningMetadata(catalogue, candidate.provider, candidate.model);
   const thinkingLevelMap = catalogueModel?.thinkingLevelMap;
   const supported = (source: ReasoningSupportSource): CandidateReasoningSupport => ({
     reasoning: true,

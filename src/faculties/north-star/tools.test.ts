@@ -4,7 +4,14 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { TextContent } from '@earendil-works/pi-ai';
+import type { AssistantMessage, ToolResultMessage } from '@earendil-works/pi-ai';
+import { fromAny } from '@total-typescript/shoehorn';
 import { NorthStarStore } from './store.js';
+import {
+  createToolCallExecutionGuard,
+  executeToolCallsWithScheduler,
+} from '../../core/agent/tool-call-scheduler.js';
+import { DUPLICATE_TOOL_CALL_SKIP_RESULT } from '../../shared/contracts/tool-call-outcome.js';
 import {
   createNorthStarTool,
 } from './tools.js';
@@ -76,6 +83,64 @@ describe('north star tools', () => {
     })));
     expect(deleted.action).toBe('deleted');
     expect(store.list()).toHaveLength(1);
+  });
+});
+
+describe('north star repeated calls in one turn (psfn-framework-mv4xr)', () => {
+  let tempDir: string;
+  let store: NorthStarStore;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'north-star-repeat-'));
+    store = new NorthStarStore(join(tempDir, 'north-star.json'));
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  function assistantCalls(calls: Array<Record<string, unknown>>): AssistantMessage {
+    return fromAny({
+      role: 'assistant',
+      content: calls.map((args, index) => ({
+        type: 'toolCall',
+        id: `north-star-call-${index + 1}`,
+        name: 'north_star',
+        arguments: args,
+      })),
+      stopReason: 'toolUse',
+    });
+  }
+
+  it('skips an identical repeated list after it succeeded, with a typed duplicate_skip result', async () => {
+    store.create({ title: 'Keep the garden tidy', content: 'Weekly pass.', scope: 'shared' });
+    const result = await executeToolCallsWithScheduler(
+      [createNorthStarTool(store)],
+      assistantCalls([{ action: 'list' }, { action: 'list' }]),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 1, guard: createToolCallExecutionGuard() },
+    );
+
+    const [first, second] = result.toolResults as Array<ToolResultMessage & { outcome?: string }>;
+    expect(first?.outcome).toBe('success');
+    expect(second?.outcome).toBe('duplicate_skip');
+    expect(second?.content).toEqual([{ type: 'text', text: DUPLICATE_TOOL_CALL_SKIP_RESULT }]);
+  });
+
+  it('still executes an identical repeated create, so a write is never silently dropped', async () => {
+    const create = { action: 'create', title: 'Learn the cello', content: 'Practice daily.', scope: 'shared' };
+    const result = await executeToolCallsWithScheduler(
+      [createNorthStarTool(store)],
+      assistantCalls([create, create]),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 1, guard: createToolCallExecutionGuard() },
+    );
+
+    const outcomes = (result.toolResults as Array<ToolResultMessage & { outcome?: string }>).map(entry => entry.outcome);
+    expect(outcomes).toEqual(['success', 'success']);
+    expect(store.list().filter(item => item.title === 'Learn the cello')).toHaveLength(2);
   });
 });
 

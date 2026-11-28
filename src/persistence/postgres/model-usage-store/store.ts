@@ -224,6 +224,21 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
   }
 }
 
+/**
+ * Whether this process's role may open the fleet ledger as its migration
+ * authority, and so book model usage: the canonical first companion's role
+ * (or a deployment without a declared role). A follower holds exactly ledger
+ * SELECT (see `assertExactModelUsageFollowerAccess`); its usage is booked by
+ * the gateway.
+ */
+export function isModelUsageLedgerAuthority(
+  config: Pick<SubstrateConfig, 'companionFleet' | 'postgresRole'>,
+): boolean {
+  const primaryRole = config.companionFleet?.companions.at(0)?.postgresRole.trim();
+  const currentRole = config.postgresRole?.trim();
+  return !primaryRole || !currentRole || currentRole === primaryRole; // ubs:ignore — compares topology role identifiers, not secrets
+}
+
 export function createPostgresModelUsageStoreFromConfig(
   config: Pick<
     SubstrateConfig,
@@ -252,8 +267,7 @@ export function createPostgresModelUsageStoreFromConfig(
   if (config.multiCompanion === true && (!primarySchema || !primaryRole)) {
     throw new Error('Multi-companion model usage persistence requires canonical fleet topology');
   }
-  if (access === 'migration_authority' && primaryRole
-    && currentRole && currentRole !== primaryRole) { // ubs:ignore — compares topology role identifiers, not secrets
+  if (access === 'migration_authority' && !isModelUsageLedgerAuthority(config)) {
     throw new Error(
       'Model usage migration authority must be the primary/canonical companion role',
     );

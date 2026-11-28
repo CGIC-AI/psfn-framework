@@ -8,13 +8,13 @@
 import '../../shared/utils/load-dotenv.js';
 import { migratePostgresMemoryEmbeddings } from '../../faculties/memory/migration.js';
 import type { ReembedMigrationProgress } from '../../faculties/memory/migration.js';
-import { createProviderRuntimeServices } from '../../system/config/provider-runtime-factory.js';
 import {
   bootstrapMaintenanceRuntime,
   isMaintenanceCliEntrypoint,
   parseCommonMaintenanceArgs,
   runMaintenanceCli,
 } from './cli-harness.js';
+import { createMaintenanceEmbeddingProvider } from './maintenance-embedding-provider.js';
 
 interface CliOptions {
   batchSize?: number;
@@ -73,7 +73,7 @@ function runCli(): Promise<unknown> {
     parseArgs,
     printUsage,
     run: async options => {
-      const { config } = await bootstrapMaintenanceRuntime();
+      const { config } = await bootstrapMaintenanceRuntime({ hydrateOwnerFiles: true });
       if (config.persistenceBackend !== 'postgres') {
         throw new Error('Embedding migration requires config.persistenceBackend=postgres');
       }
@@ -84,11 +84,13 @@ function runCli(): Promise<unknown> {
 
       console.log(`Persistence backend: ${config.persistenceBackend}`);
 
-      const { embeddingProvider } = createProviderRuntimeServices({ config });
+      const embeddingProvider = createMaintenanceEmbeddingProvider(config, 'embed');
       console.log(`Embedding provider: ${embeddingProvider.kind} (dims=${embeddingProvider.dims})`);
       console.log('');
 
+      const schema = config.postgresSchema?.trim();
       const result = await migratePostgresMemoryEmbeddings(databaseUrl, embeddingProvider, {
+        ...(schema ? { schema } : {}),
         batchSize: options.batchSize,
         parallelism: options.parallelism,
         includeDeleted: options.includeDeleted,

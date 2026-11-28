@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { loadConfig } from '../../system/config/load-gateway-config.js';
+import { hydrateJsonBackedRuntimeConfig } from '../../system/config/runtime-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { hydrateSecretBearingConfig } from '../startup/support/secret-hydration.js';
 
@@ -98,6 +99,7 @@ interface MaintenanceRuntimeDependencies {
     config: SubstrateConfig,
     options: { env: NodeJS.ProcessEnv },
   ) => Promise<unknown>;
+  hydrateOwnerFileConfig: (config: SubstrateConfig) => SubstrateConfig;
   loadConfig: (env?: NodeJS.ProcessEnv) => SubstrateConfig;
   now: () => Date;
 }
@@ -109,6 +111,14 @@ export interface BootstrapMaintenanceRuntimeOptions {
   dependencies?: Partial<MaintenanceRuntimeDependencies>;
   env?: NodeJS.ProcessEnv;
   hydrateSecrets?: boolean;
+  /**
+   * Apply the deployment's owner files (settings.json, models.json,
+   * providers.json) to the env-loaded config, as the operator process does.
+   * `loadConfig` alone leaves every owner-file setting unset, so a command
+   * that builds runtime services from settings (the embedding provider) must
+   * opt in.
+   */
+  hydrateOwnerFiles?: boolean;
 }
 
 export interface MaintenanceRuntime {
@@ -120,6 +130,7 @@ export interface MaintenanceRuntime {
 const defaultRuntimeDependencies: MaintenanceRuntimeDependencies = {
   applyGatewayTlsConfig,
   hydrateSecretBearingConfig,
+  hydrateOwnerFileConfig: config => hydrateJsonBackedRuntimeConfig(config),
   loadConfig,
   now: () => new Date(),
 };
@@ -138,7 +149,8 @@ export async function bootstrapMaintenanceRuntime(
     ...options.dependencies,
   };
   const env = options.env ?? process.env;
-  const config = dependencies.loadConfig(env);
+  const loaded = dependencies.loadConfig(env);
+  const config = options.hydrateOwnerFiles ? dependencies.hydrateOwnerFileConfig(loaded) : loaded;
 
   if (options.hydrateSecrets !== false) {
     dependencies.applyGatewayTlsConfig({

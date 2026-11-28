@@ -61,6 +61,8 @@ export interface AdminGroupMemoryDataServiceOptions {
   watermarkStore: GroupMemoryWatermarkStorePort;
   memoryExtractor?: GroupMemoryBackfillExtractorPort | null;
   eventBus?: Pick<EventBus, 'on'> | null;
+  /** This companion's id; a companion-DM backfill attributes facts to its peer. */
+  localCompanionId?: string;
   companionNames?: readonly string[];
   companionAuthorIds?: readonly string[];
 }
@@ -77,6 +79,7 @@ export class AdminGroupMemoryDataService implements AdminGroupMemoryService {
       watermarkStore: deps.watermarkStore,
       ...(deps.memoryExtractor ? { memoryExtractor: deps.memoryExtractor } : {}),
       ...(deps.contactStore ? { contactStore: deps.contactStore } : {}),
+      ...(deps.localCompanionId ? { localCompanionId: deps.localCompanionId } : {}),
       companionNames: deps.companionNames ?? [],
       companionAuthorIds: deps.companionAuthorIds ?? [],
     });

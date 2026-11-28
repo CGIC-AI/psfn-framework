@@ -754,6 +754,13 @@
       "measuredBaselineMs": 1910,
       "baselineSource": "measured",
       "note": "psfn-framework-znqh6: external group appraisal through the real PostgreSQL speaking-arbiter store, social pot, reservation and egress-lease phases into channel_pull_outbound. Focused full-file wall time measured 1.91s twice on 2026-09-25 with a warm harness slot; 120s matches the repo integration cap and leaves headroom for cold container startup and shared harness-slot contention."
+    },
+    {
+      "file": "src/app/maintenance/backfill-memory-embeddings-fleet.integration.test.ts",
+      "timeoutMs": 120000,
+      "measuredBaselineMs": 11120,
+      "baselineSource": "measured",
+      "note": "psfn-framework-uhc6b: memory:repair:embeddings run as its own process under a fleet follower's role against the real pgvector harness (two provisioned tenants, primary-owned ledger, real follower grants). Focused full-file wall time measured 10.82s and 11.12s on 2026-11-28 with a warm image; about 8s of it is the beforeAll harness start and provisioning, each CLI spawn about 1s. 120s matches the repo integration cap and keeps over 10x headroom for a cold image pull."
     }
   ]
 }

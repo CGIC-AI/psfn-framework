@@ -41,6 +41,9 @@ const MEMORY_LANE_BLOCKS = {
     maxPriorCandidates: 24,
     sessionFailure: { maxAttempts: 5, retryBaseDelayMinutes: 60 },
   },
+  groupMemoryExtraction: {
+    failureRetry: { maxAttempts: 6, baseDelayMinutes: 15, sweepIntervalMinutes: 5 },
+  },
   sleepConsolidation: {
     reviewWindowDays: 60,
     refinementWindowHours: 36,

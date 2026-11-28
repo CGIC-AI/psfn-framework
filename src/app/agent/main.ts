@@ -99,6 +99,7 @@ import {
   subscribeRefreshFailureHealthEvents,
 } from '../../shared/observability/refresh-failure-emitter.js';
 import { subscribeMemoryPipelineFailureHealthEvents } from '../../shared/observability/memory-pipeline-failure-emitter.js';
+import { registerGroupMemoryFailureRetrySweep } from './observed-group-memory-lane.js';
 import {
   emitHealthEvent,
   processObserverId,
@@ -2005,6 +2006,11 @@ async function main(): Promise<void> {
   });
   if (registeredGatewayMessageHandlers.observedGroupMemory) {
     shutdownTargets.observedGroupMemory = registeredGatewayMessageHandlers.observedGroupMemory;
+    registerGroupMemoryFailureRetrySweep(
+      scheduler,
+      registeredGatewayMessageHandlers.observedGroupMemory,
+      schedulerConfig.groupMemoryExtraction.failureRetry,
+    );
   }
   const unregisterIcpTargetChannelInitiationCommand = registerIcpTargetChannelInitiationCommand(
     registeredGatewayMessageHandlers.icpTargetChannelInitiator,

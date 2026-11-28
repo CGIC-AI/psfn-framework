@@ -1460,6 +1460,9 @@ async function composeCompanionRuntime(
       `${pathSnapshot.companionDataDir}/group-memory-watermarks.json`,
     ),
     memoryExtractor,
+    // This runtime uses the scheduler only to classify channel memory scope;
+    // observed extraction and its timed retry run in the agent process.
+    failureRetry: schedulerConfig.groupMemoryExtraction.failureRetry,
     contactStore,
     companionNames: [card.data.name],
     companionAuthorIds: config.discordBotId ? [config.discordBotId] : [],

@@ -59,6 +59,7 @@ export function resolveRuntimeSchedulerConfig(
       group: { ...persisted.nearTurnMemory.group },
     },
     episodeSynthesis: { ...persisted.episodeSynthesis },
+    groupMemoryExtraction: { failureRetry: { ...persisted.groupMemoryExtraction.failureRetry } },
     sleepConsolidation: { ...persisted.sleepConsolidation },
     orientationRewrite: { ...persisted.orientationRewrite },
     reflectionNovelty: { ...persisted.reflectionNovelty },

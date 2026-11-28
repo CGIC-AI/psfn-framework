@@ -81,6 +81,9 @@ function buildValidSchedulerConfig(): Record<string, unknown> {
       maxPriorCandidates: 24,
       sessionFailure: { maxAttempts: 5, retryBaseDelayMinutes: 60 },
     },
+    groupMemoryExtraction: {
+      failureRetry: { maxAttempts: 6, baseDelayMinutes: 15, sweepIntervalMinutes: 5 },
+    },
     sleepConsolidation: {
       reviewWindowDays: 60,
       refinementWindowHours: 36,
@@ -901,6 +904,25 @@ describe('scheduler config seed defaults', () => {
       config.episodeSynthesis = { ...episodeSynthesis, sessionFailure: { maxAttempts: 0, retryBaseDelayMinutes: 15 } };
       writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
       expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(/sessionFailure\.maxAttempts/u);
+    });
+  });
+
+  it('defaults the d5e0p.15 group-memory failure retry for owners written before it and fails closed', () => {
+    withSeedDir((seedDir) => {
+      const config = buildValidSchedulerConfig();
+      delete config.groupMemoryExtraction;
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+      expect(loadSchedulerSeedDefaults({ seedDir }).groupMemoryExtraction)
+        .toEqual({ failureRetry: { maxAttempts: 6, baseDelayMinutes: 15, sweepIntervalMinutes: 5 } });
+
+      config.groupMemoryExtraction = { failureRetry: { maxAttempts: 2 } };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+      expect(loadSchedulerSeedDefaults({ seedDir }).groupMemoryExtraction.failureRetry)
+        .toEqual({ maxAttempts: 2, baseDelayMinutes: 15, sweepIntervalMinutes: 5 });
+
+      config.groupMemoryExtraction = { failureRetry: { sweepIntervalMinutes: 0 } };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(/failureRetry\.sweepIntervalMinutes/u);
     });
   });
 

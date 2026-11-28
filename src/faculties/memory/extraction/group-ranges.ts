@@ -41,6 +41,18 @@ export interface GroupMemoryWatermarkRecord {
   lastProcessedSpan?: GroupMemorySpanRecord;
   lastSkippedSpan?: GroupMemorySpanRecord;
   lastFailure?: GroupMemoryFailureRecord;
+  /**
+   * Bounded failure retry (d5e0p.15), reset by any processed/skipped span.
+   * `consecutiveFailureCount` counts failures since the watermark last moved,
+   * independent of how the failing range grew with new traffic;
+   * `nextFailureRetryAt` is when the range may be retried; and
+   * `failureRetryExhaustedAt` marks the attempt cap, after which timed retries
+   * stop. A failed record written before these fields existed carries none of
+   * them and is due for a fresh-budget retry immediately.
+   */
+  consecutiveFailureCount?: number;
+  nextFailureRetryAt?: number;
+  failureRetryExhaustedAt?: number;
 }
 
 export interface GroupMemoryWatermarkStorePort {
@@ -48,6 +60,11 @@ export interface GroupMemoryWatermarkStorePort {
   markProcessed(input: GroupMemoryWatermarkMutationInput): GroupMemoryWatermarkRecord;
   markSkipped(input: GroupMemoryWatermarkMutationInput & { reason: string }): GroupMemoryWatermarkRecord;
   markFailed(input: GroupMemoryFailureInput): GroupMemoryWatermarkRecord;
+}
+
+/** Enumerates failed watermarks for the timed retry sweep (d5e0p.15). */
+export interface GroupMemoryFailedWatermarkSource {
+  listFailed(policyVersion?: string): GroupMemoryWatermarkRecord[];
 }
 
 export interface GroupMemoryWatermarkMutationInput {
@@ -60,7 +77,24 @@ export interface GroupMemoryWatermarkMutationInput {
 }
 
 export interface GroupMemoryFailureInput extends GroupMemoryWatermarkMutationInput {
+  /** Root-cause chain of the failure (see formatErrorCauseChain). */
   error: string;
+  /**
+   * Bounded retry schedule decided by the online scheduler. Omitted by callers
+   * outside that policy (operator backfill), which leave the schedule as-is.
+   */
+  retry?: {
+    consecutiveFailureCount: number;
+    nextRetryAt: number;
+    exhausted: boolean;
+  };
+}
+
+/** True when a failed watermark's bounded timed retry is due (d5e0p.15). */
+export function isGroupMemoryFailureRetryDue(record: GroupMemoryWatermarkRecord, nowMs: number): boolean {
+  return record.status === 'failed'
+    && record.failureRetryExhaustedAt === undefined
+    && (record.nextFailureRetryAt ?? 0) <= nowMs;
 }
 
 export interface GroupMemoryRangeSessionReader {
@@ -109,7 +143,8 @@ interface GroupMemoryWatermarkFile {
   records: Record<string, GroupMemoryWatermarkRecord>;
 }
 
-export class JsonGroupMemoryWatermarkStore implements GroupMemoryWatermarkStorePort {
+export class JsonGroupMemoryWatermarkStore
+implements GroupMemoryWatermarkStorePort, GroupMemoryFailedWatermarkSource {
   private readonly filePath: string;
 
   constructor(filePath: string) {
@@ -122,11 +157,16 @@ export class JsonGroupMemoryWatermarkStore implements GroupMemoryWatermarkStoreP
       ?? createEmptyWatermark(channelId, policyVersion);
   }
 
+  listFailed(policyVersion = GROUP_MEMORY_POLICY_VERSION): GroupMemoryWatermarkRecord[] {
+    return Object.values(this.loadRecords())
+      .filter(record => record.policyVersion === policyVersion && record.status === 'failed');
+  }
+
   markProcessed(input: GroupMemoryWatermarkMutationInput): GroupMemoryWatermarkRecord {
     const policyVersion = input.policyVersion ?? GROUP_MEMORY_POLICY_VERSION;
     const records = this.loadRecords();
-    const current = records[this.key(input.channelId, policyVersion)]
-      ?? createEmptyWatermark(input.channelId, policyVersion);
+    const current = withoutFailureRetry(records[this.key(input.channelId, policyVersion)]
+      ?? createEmptyWatermark(input.channelId, policyVersion));
     const span = normalizeSpanRecord(input, input.recordedAt ?? Date.now());
     const next: GroupMemoryWatermarkRecord = {
       ...current,
@@ -143,8 +183,8 @@ export class JsonGroupMemoryWatermarkStore implements GroupMemoryWatermarkStoreP
   markSkipped(input: GroupMemoryWatermarkMutationInput & { reason: string }): GroupMemoryWatermarkRecord {
     const policyVersion = input.policyVersion ?? GROUP_MEMORY_POLICY_VERSION;
     const records = this.loadRecords();
-    const current = records[this.key(input.channelId, policyVersion)]
-      ?? createEmptyWatermark(input.channelId, policyVersion);
+    const current = withoutFailureRetry(records[this.key(input.channelId, policyVersion)]
+      ?? createEmptyWatermark(input.channelId, policyVersion));
     const span = normalizeSpanRecord(input, input.recordedAt ?? Date.now(), input.reason);
     const next: GroupMemoryWatermarkRecord = {
       ...current,
@@ -170,7 +210,7 @@ export class JsonGroupMemoryWatermarkStore implements GroupMemoryWatermarkStoreP
         : 0;
     const span = normalizeSpanRecord(input, input.recordedAt ?? Date.now());
     const next: GroupMemoryWatermarkRecord = {
-      ...current,
+      ...(input.retry ? withoutFailureRetry(current) : current),
       updatedAt: span.recordedAt,
       status: 'failed',
       failureCount: current.failureCount + 1,
@@ -179,6 +219,18 @@ export class JsonGroupMemoryWatermarkStore implements GroupMemoryWatermarkStoreP
         error: input.error,
         retryCount: previousRetryCount + 1,
       },
+      ...(input.retry
+        ? {
+          consecutiveFailureCount: normalizeNonNegativeInteger(
+            input.retry.consecutiveFailureCount,
+            'consecutiveFailureCount',
+          ),
+          nextFailureRetryAt: normalizeNonNegativeInteger(input.retry.nextRetryAt, 'nextFailureRetryAt'),
+          ...(input.retry.exhausted
+            ? { failureRetryExhaustedAt: current.failureRetryExhaustedAt ?? span.recordedAt }
+            : {}),
+        }
+        : {}),
     };
     this.saveRecord(next);
     return next;
@@ -211,6 +263,16 @@ export class JsonGroupMemoryWatermarkStore implements GroupMemoryWatermarkStoreP
   private key(channelId: string, policyVersion: string): string {
     return `${policyVersion}:${channelId}`;
   }
+}
+
+function withoutFailureRetry(record: GroupMemoryWatermarkRecord): GroupMemoryWatermarkRecord {
+  const {
+    consecutiveFailureCount: _consecutiveFailureCount,
+    nextFailureRetryAt: _nextFailureRetryAt,
+    failureRetryExhaustedAt: _failureRetryExhaustedAt,
+    ...rest
+  } = record;
+  return rest;
 }
 
 export function createEmptyWatermark(
@@ -432,6 +494,21 @@ function normalizeWatermarkRecord(value: unknown): GroupMemoryWatermarkRecord | 
   if (lastSkippedSpan) record.lastSkippedSpan = lastSkippedSpan;
   const lastFailure = normalizeOptionalFailureRecord(value.lastFailure);
   if (lastFailure) record.lastFailure = lastFailure;
+  if (value.consecutiveFailureCount !== undefined) {
+    record.consecutiveFailureCount = normalizeNonNegativeInteger(
+      value.consecutiveFailureCount,
+      'consecutiveFailureCount',
+    );
+  }
+  if (value.nextFailureRetryAt !== undefined) {
+    record.nextFailureRetryAt = normalizeNonNegativeInteger(value.nextFailureRetryAt, 'nextFailureRetryAt');
+  }
+  if (value.failureRetryExhaustedAt !== undefined) {
+    record.failureRetryExhaustedAt = normalizeNonNegativeInteger(
+      value.failureRetryExhaustedAt,
+      'failureRetryExhaustedAt',
+    );
+  }
   return record;
 }
 

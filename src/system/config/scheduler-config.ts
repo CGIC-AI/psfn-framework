@@ -42,9 +42,11 @@ import {
 import {
   validateEpisodicProcessingConfig,
   validateEpisodeSynthesisConfig,
+  validateGroupMemoryExtractionConfig,
   validateNearTurnMemoryConfig,
   type EpisodicProcessingRestWindowConfig,
   type EpisodeSynthesisLaneConfig,
+  type GroupMemoryExtractionSchedulerConfig,
   type NearTurnMemoryCadenceConfig,
 } from './scheduler-config/memory-cadence.js';
 import {
@@ -130,6 +132,8 @@ export {
 export {
   type EpisodicProcessingRestWindowConfig,
   type EpisodeSynthesisLaneConfig,
+  type GroupMemoryExtractionFailureRetryConfig,
+  type GroupMemoryExtractionSchedulerConfig,
   type NearTurnMemoryCadenceConfig,
   type NearTurnMemoryDirectCadenceConfig,
   type NearTurnMemoryGroupCadenceConfig,
@@ -216,6 +220,8 @@ export interface SchedulerRuntimeConfig {
   episodicProcessing: EpisodicProcessingRestWindowConfig;
   nearTurnMemory: NearTurnMemoryCadenceConfig;
   episodeSynthesis: EpisodeSynthesisLaneConfig;
+  /** Timed retry of failed observed group-memory ranges (d5e0p.15). */
+  groupMemoryExtraction: GroupMemoryExtractionSchedulerConfig;
   sleepConsolidation: SleepConsolidationConfig;
   orientationRewrite: OrientationRewriteGateConfig;
   reflectionNovelty: ReflectionNoveltyGateConfig;
@@ -339,6 +345,7 @@ export function validateSchedulerConfig(
     episodicProcessing,
     nearTurnMemory: validateNearTurnMemoryConfig(raw.nearTurnMemory, sourcePath),
     episodeSynthesis: validateEpisodeSynthesisConfig(raw.episodeSynthesis, sourcePath),
+    groupMemoryExtraction: validateGroupMemoryExtractionConfig(raw.groupMemoryExtraction, sourcePath),
     sleepConsolidation: validateSleepConsolidationConfig(raw.sleepConsolidation, sourcePath),
     orientationRewrite: validateOrientationRewriteGateConfig(raw.orientationRewrite, sourcePath),
     reflectionNovelty: validateReflectionNoveltyGateConfig(raw.reflectionNovelty, sourcePath),

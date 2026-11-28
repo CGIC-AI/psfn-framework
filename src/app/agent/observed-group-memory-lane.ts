@@ -1,5 +1,7 @@
+import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { ObservedGroupMemoryScheduleDecision } from '../../faculties/memory/extraction/group-observed-scheduler.js';
+import type { GroupMemoryExtractionFailureRetryConfig } from '../../system/config/scheduler-config.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
 /**
@@ -23,10 +25,16 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
  * accepted. A span whose scheduling never ran (crash, drain timeout, stopped
  * lane) stays unprocessed backlog and is re-planned by the next observation
  * of the channel (the scheduler's `backlog_lag` trigger).
+ *
+ * Timed failure retry (d5e0p.15): a failed range is also re-attempted without
+ * new traffic. The retry sweep enqueues each due channel on the same
+ * per-channel queue, so a retry never races a live observation of that room.
  */
 
 export interface ObservedGroupMemoryLaneScheduler {
   observeMessage(message: SubstrateMessage): Promise<ObservedGroupMemoryScheduleDecision>;
+  listDueFailureRetries(): string[];
+  retryFailedRange(channelId: string): Promise<ObservedGroupMemoryScheduleDecision>;
 }
 
 export interface ObservedGroupMemoryLaneAudit {
@@ -63,13 +71,39 @@ export class ObservedGroupMemoryLane {
       });
       return Promise.resolve();
     }
-    const previous = this.tails.get(message.channelId) ?? Promise.resolve();
-    const run = previous.then(() => this.schedule(message));
-    this.tails.set(message.channelId, run);
+    return this.enqueueChannelTask(message.channelId, () => this.schedule(message));
+  }
+
+  /**
+   * Enqueue a timed retry for every channel whose failed range is due, behind
+   * that channel's queued observations. Returns the number enqueued; resolves
+   * when they have all run (never rejects).
+   */
+  async retryDueFailedRanges(): Promise<number> {
+    if (!this.accepting) return 0;
+    let channelIds: string[];
+    try {
+      channelIds = this.deps.scheduler.listDueFailureRetries();
+    } catch (error) {
+      const errorText = toErrorMessage(error);
+      this.deps.log.warn('Observed group memory retry sweep failed', { error: errorText });
+      this.deps.audit.append('memory.group_observed.error', { reason: 'failure_retry_sweep', error: errorText });
+      return 0;
+    }
+    await Promise.all(channelIds.map(channelId => (
+      this.enqueueChannelTask(channelId, () => this.retry(channelId))
+    )));
+    return channelIds.length;
+  }
+
+  private enqueueChannelTask(channelId: string, task: () => Promise<void>): Promise<void> {
+    const previous = this.tails.get(channelId) ?? Promise.resolve();
+    const run = previous.then(task);
+    this.tails.set(channelId, run);
     this.pending.add(run);
     void run.finally(() => {
       this.pending.delete(run);
-      if (this.tails.get(message.channelId) === run) this.tails.delete(message.channelId);
+      if (this.tails.get(channelId) === run) this.tails.delete(channelId);
     });
     return run;
   }
@@ -100,34 +134,21 @@ export class ObservedGroupMemoryLane {
     }
   }
 
+  private async retry(channelId: string): Promise<void> {
+    try {
+      const decision = await this.deps.scheduler.retryFailedRange(channelId);
+      this.recordDecision(decision, { retry: true });
+    } catch (schedulerError) {
+      const errorText = toErrorMessage(schedulerError);
+      this.deps.log.warn('Observed group memory failure retry failed', { channelId, error: errorText });
+      this.deps.audit.append('memory.group_observed.error', { channelId, retry: true, error: errorText });
+    }
+  }
+
   private async schedule(message: SubstrateMessage): Promise<void> {
     try {
       const decision = await this.deps.scheduler.observeMessage(message);
-      if (decision.status === 'scheduled') {
-        this.deps.audit.append('memory.group_observed.scheduled', {
-          channelId: decision.channelId,
-          messageId: message.id,
-          triggerReason: decision.triggerReason,
-          spanStartMessageId: decision.spanStartMessageId,
-          spanEndMessageId: decision.spanEndMessageId,
-          newEntryCount: decision.newEntryCount,
-          watermarkLagMessageIds: decision.watermarkLagMessageIds,
-          hasDeferredBacklog: decision.hasDeferredBacklog,
-        });
-      } else if (decision.reason === 'extraction_failed') {
-        this.deps.log.warn('Observed group memory extraction failed', {
-          channelId: decision.channelId,
-          messageId: message.id,
-          watermarkLagMessageIds: decision.watermarkLagMessageIds,
-          error: decision.error,
-        });
-        this.deps.audit.append('memory.group_observed.error', {
-          channelId: decision.channelId,
-          messageId: message.id,
-          reason: decision.reason,
-          error: decision.error,
-        });
-      }
+      this.recordDecision(decision, { messageId: message.id });
     } catch (schedulerError) {
       const errorText = toErrorMessage(schedulerError);
       this.deps.log.warn('Observed group memory scheduling failed', {
@@ -142,4 +163,60 @@ export class ObservedGroupMemoryLane {
       });
     }
   }
+
+  private recordDecision(
+    decision: ObservedGroupMemoryScheduleDecision,
+    origin: { messageId: string } | { retry: true },
+  ): void {
+    if (decision.status === 'scheduled') {
+      this.deps.audit.append('memory.group_observed.scheduled', {
+        channelId: decision.channelId,
+        ...origin,
+        triggerReason: decision.triggerReason,
+        spanStartMessageId: decision.spanStartMessageId,
+        spanEndMessageId: decision.spanEndMessageId,
+        newEntryCount: decision.newEntryCount,
+        watermarkLagMessageIds: decision.watermarkLagMessageIds,
+        hasDeferredBacklog: decision.hasDeferredBacklog,
+      });
+    } else if (decision.reason === 'extraction_failed') {
+      this.deps.log.warn('Observed group memory extraction failed', {
+        channelId: decision.channelId,
+        ...origin,
+        watermarkLagMessageIds: decision.watermarkLagMessageIds,
+        error: decision.error,
+      });
+      this.deps.audit.append('memory.group_observed.error', {
+        channelId: decision.channelId,
+        ...origin,
+        reason: decision.reason,
+        error: decision.error,
+      });
+    }
+  }
+}
+
+/**
+ * Register the timed failure-retry sweep (d5e0p.15) with the runtime scheduler.
+ * One sweep per agent process: the watermark file is per companion data dir.
+ */
+export function registerGroupMemoryFailureRetrySweep(
+  scheduler: Pick<Scheduler, 'getTask' | 'register'>,
+  lane: Pick<ObservedGroupMemoryLane, 'retryDueFailedRanges'>,
+  failureRetry: GroupMemoryExtractionFailureRetryConfig,
+): void {
+  const taskId = 'memory.group-extraction-failure-retry';
+  if (scheduler.getTask(taskId)) return;
+  scheduler.register({
+    id: taskId,
+    name: 'Group-memory failure retry',
+    description: 'Retry failed observed group-memory ranges on their bounded backoff without new traffic.',
+    scheduleSource: 'scheduler.json groupMemoryExtraction.failureRetry.sweepIntervalMinutes',
+    type: 'every',
+    intervalMs: failureRetry.sweepIntervalMinutes * 60_000,
+    state: 'idle',
+    handler: async () => {
+      await lane.retryDueFailedRanges();
+    },
+  });
 }

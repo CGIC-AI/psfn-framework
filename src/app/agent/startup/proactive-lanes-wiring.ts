@@ -271,6 +271,22 @@ export function wireProactiveOutreachLanes(
       join(companionDataDir, 'group-memory-watermarks.json'),
     ),
     memoryExtractor,
+    failureRetry: schedulerConfig.groupMemoryExtraction.failureRetry,
+    onRangeFailure: (event) => {
+      eventBus.emit('memory.pipeline.failure', {
+        pipeline: 'group_extraction',
+        subjectId: event.channelId,
+        attemptCount: event.attemptCount,
+        maxAttempts: event.maxAttempts,
+        terminal: event.terminal,
+        timestamp: event.timestamp,
+      }).catch((error: unknown) => {
+        log.warn('Group-memory failure telemetry emit failed', {
+          channelId: event.channelId,
+          error: String(error),
+        });
+      });
+    },
     contactStore,
     companionNames: [companionName],
     companionAuthorIds: config.discordBotId ? [config.discordBotId] : [],

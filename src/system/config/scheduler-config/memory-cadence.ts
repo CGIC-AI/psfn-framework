@@ -104,6 +104,62 @@ export interface EpisodeSynthesisSessionFailureConfig {
   retryBaseDelayMinutes: number;
 }
 
+/**
+ * psfn-framework-d5e0p.15: observed group-memory extraction is otherwise only
+ * re-attempted when new traffic arrives, so a quiet room's failed range stayed
+ * failed forever. A failed range is retried by a timed sweep (every
+ * `sweepIntervalMinutes`) once `baseDelayMinutes * 2^(attempt-1)` has elapsed;
+ * after `maxAttempts` consecutive failures the timed retries stop and the
+ * range raises a standing incident until it succeeds or an operator backfills.
+ */
+export interface GroupMemoryExtractionFailureRetryConfig {
+  maxAttempts: number;
+  baseDelayMinutes: number;
+  sweepIntervalMinutes: number;
+}
+
+export interface GroupMemoryExtractionSchedulerConfig {
+  failureRetry: GroupMemoryExtractionFailureRetryConfig;
+}
+
+/**
+ * Optional block (d5e0p.15): owner files written before timed group-memory
+ * retries carry no `groupMemoryExtraction`, so an absent block or key takes the
+ * canonical default. Defaults mirror config/scheduler.seed.json — keep in lockstep.
+ */
+export function validateGroupMemoryExtractionConfig(
+  raw: unknown,
+  sourcePath: string,
+): GroupMemoryExtractionSchedulerConfig {
+  const block = raw === undefined ? {} : raw;
+  if (!isRecord(block)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: groupMemoryExtraction must be an object`);
+  }
+  const retry = block.failureRetry === undefined ? {} : block.failureRetry;
+  if (!isRecord(retry)) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: groupMemoryExtraction.failureRetry must be an object`,
+    );
+  }
+  return {
+    failureRetry: {
+      maxAttempts: retry.maxAttempts === undefined
+        ? 6
+        : toPositiveInteger(retry.maxAttempts, 'groupMemoryExtraction.failureRetry.maxAttempts', 1),
+      baseDelayMinutes: retry.baseDelayMinutes === undefined
+        ? 15
+        : toPositiveInteger(retry.baseDelayMinutes, 'groupMemoryExtraction.failureRetry.baseDelayMinutes', 1),
+      sweepIntervalMinutes: retry.sweepIntervalMinutes === undefined
+        ? 5
+        : toPositiveInteger(
+          retry.sweepIntervalMinutes,
+          'groupMemoryExtraction.failureRetry.sweepIntervalMinutes',
+          1,
+        ),
+    },
+  };
+}
+
 export function validateEpisodicProcessingConfig(
   raw: unknown,
   sourcePath: string,

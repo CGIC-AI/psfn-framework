@@ -1,7 +1,7 @@
 import type { IcpActivityEndReasonCode } from '../../shared/contracts/icp-autonomy.js';
 import { isAgentProcessingPromptError } from '../../system/lifecycle/turn-contention.js';
 import type { AgentResponse, Attachment, SubstrateMessage } from '../../shared/contracts/runtime.js';
-import { ObservedGroupMemoryLane } from './observed-group-memory-lane.js';
+import { ObservedGroupMemoryLane, type ObservedGroupMemoryLaneScheduler } from './observed-group-memory-lane.js';
 import {
   loadIcpAppraisalPrecedingContext,
   type IcpAppraisalContextSource,
@@ -11,7 +11,6 @@ import type { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import type { SatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
-import type { ObservedGroupMemoryScheduleDecision } from '../../faculties/memory/extraction/group-observed-scheduler.js';
 import type {
   ParticipationAction,
   ParticipationAppraisalResult,
@@ -302,9 +301,8 @@ export interface GatewayMessageAuditTrail {
   append(event: string, details?: Record<string, unknown>): unknown;
 }
 
-export interface ObservedGroupMemorySchedulerPort {
-  observeMessage(message: SubstrateMessage): Promise<ObservedGroupMemoryScheduleDecision>;
-}
+/** Observation plus timed failure retry (d5e0p.15); see ObservedGroupMemoryLane. */
+export type ObservedGroupMemorySchedulerPort = ObservedGroupMemoryLaneScheduler;
 
 export interface PassiveNameCandidatePort {
   build(message: SubstrateMessage): Promise<PassiveNameCandidateDecision>;
@@ -478,7 +476,7 @@ export interface RegisteredGatewayMessageHandlers {
    * (psfn-framework-qvwem); undefined when no scheduler is wired. Shutdown
    * stops and drains it before the memory extractor drains.
    */
-  observedGroupMemory: Pick<ObservedGroupMemoryLane, 'stop' | 'pendingCount'> | undefined;
+  observedGroupMemory: Pick<ObservedGroupMemoryLane, 'stop' | 'pendingCount' | 'retryDueFailedRanges'> | undefined;
 }
 
 export function registerGatewayMessageHandlers(

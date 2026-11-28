@@ -31,7 +31,7 @@ import {
 /** The packed bundle must stay under this many PNG bytes (bead 7ang.9 budget). */
 export const SPRITE_PNG_BUDGET_BYTES = 1_500_000;
 
-export interface SquareCrop {
+interface SquareCrop {
   readonly x: number;
   readonly y: number;
   readonly size: number;

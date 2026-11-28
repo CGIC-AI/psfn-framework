@@ -270,8 +270,7 @@ pixel size against the grid, round-trips each placed frame, confirms that only
 the avatar sheet is lazy, and enforces the 1.5MB budget.
 
 The output directory is a complete local sprite pack: select its five files
-under Settings → Appearance. Keep a specific companion's artwork out of this
-public repository. `npm run sprites:generate` refuses to overwrite a manifest
+under Settings → Appearance. `npm run sprites:generate` refuses to overwrite a manifest
 that lists real-art entries. If packed art is ever committed under
 `public/sprites/`, the committed-atlas tests in
 `src/lib/sprites/render-sprites.test.ts` check its dimensions, budget, and

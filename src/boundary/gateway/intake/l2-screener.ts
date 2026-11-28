@@ -36,8 +36,17 @@
 // `l3Screener.mandatoryTiers` returns an `escalate_l3` outcome instead of
 // `classified`. The decision layer then runs the L3 heavy screener
 // (l3-screener.ts); this module only routes, it never decides the L3 verdict.
+//
+// Remote verdict (vc7vh): when the intake.l2 decision site runs in `jev`
+// mode, the Jev answer is the L2 verdict and `screenL2` runs only as the
+// fallback when Jev fails; both failing is an ordinary L2 failure and takes
+// the tier's fail-closed action (l2-decision-signal.ts).
 
-import type { L2DecisionSignal } from './l2-decision-signal.js';
+import {
+  JEV_L2_VERDICT_SUMMARY,
+  type L2DecisionSignal,
+  type RemoteL2Verdict,
+} from './l2-decision-signal.js';
 import type { IntakeScreenerUsageLedger } from './screener-usage.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
@@ -335,9 +344,10 @@ export interface EvaluateL2Input {
    */
   onProviderRejected?: (event: L2ScreenerProviderRejectedEvent) => void;
   /**
-   * Optional remote second opinion (epic 4lf3r, site intake.l2). Additive
-   * only: it may raise a `classified` verdict to `escalate_l3`, never lower an
-   * escalation, skip L3, or replace a fail-closed outcome.
+   * Remote intake.l2 decision site (epic 4lf3r, design vc7vh). In `jev` mode
+   * the Jev answer is the L2 verdict and `screenL2` runs only when Jev fails;
+   * in `shadow` mode `screenL2` stays the verdict and the remote answer is
+   * only recorded (l2-decision-signal.ts).
    */
   decisionSignal?: L2DecisionSignal;
   /** Usage ledger for each L2 provider dispatch (1fyyi). */
@@ -379,6 +389,39 @@ export type L2ScreeningOutcome =
 type L2ScreenerFailureCause = 'timeout' | 'provider_rejected' | 'failed';
 
 /**
+ * The L2 outcome for a Jev verdict (vc7vh). The verdict carries no taxonomy
+ * labels and the fixed content-free summary; the tier's own L3 routing
+ * (mandatory tier, L3 confidence threshold) applies to Jev's probability as to
+ * a local confidence, and the site threshold adds its own L3 hand-off.
+ */
+function routeRemoteVerdict(
+  config: IntakePolicyConfig,
+  context: L2ScreenerContext,
+  verdict: RemoteL2Verdict,
+): L2ScreeningOutcome {
+  const tier = context.sourceRiskTier;
+  const classification: L2Classification = {
+    labels: [],
+    injectionConfidence: verdict.pInjection,
+    summary: JEV_L2_VERDICT_SUMMARY,
+    model: verdict.model,
+    latencyMs: verdict.latencyMs,
+  };
+  log.info(
+    `L2 screen ${context.sourceClass}/${tier} answered by the remote intake.l2 site `
+    + `model=${verdict.model} confidence=${verdict.pInjection.toFixed(3)} `
+    + `latencyMs=${verdict.latencyMs.toFixed(1)}`,
+  );
+  const trigger = shouldEscalateToL3(config, tier, classification);
+  const reason = trigger.escalate ? trigger.reason : verdict.escalationReason;
+  if (reason !== undefined) {
+    log.warn(`Remote L2 verdict escalates to L3 for ${context.sourceClass}/${tier}: ${reason}`);
+    return { kind: 'escalate_l3', classification, reason };
+  }
+  return { kind: 'classified', classification };
+}
+
+/**
  * Routing + fail-closed wrapper. Skips L2 for below-threshold, non-mandatory
  * items (trusted-tier fast path, no API latency), otherwise runs `screenL2`.
  * On any L2 failure it returns a fail-closed outcome whose action is the
@@ -401,11 +444,20 @@ export async function evaluateL2(input: EvaluateL2Input): Promise<L2ScreeningOut
     };
   }
 
-  const remoteOpinion = input.decisionSignal?.({
+  const remote = input.decisionSignal?.({
     text: input.text,
     context,
     maxContentChars: config.l2Screener.maxContentChars,
   }) ?? null;
+  if (remote?.kind === 'verdict') {
+    const verdict = await remote.verdict;
+    if (verdict) return routeRemoteVerdict(config, context, verdict);
+    log.warn(
+      `Remote intake.l2 verdict unavailable for ${context.sourceClass}/${tier}; `
+      + 'falling back to the local L2 screener',
+    );
+  }
+  const remoteFailed = remote?.kind === 'verdict';
   try {
     const classification = await screenL2(input.text, context, {
       backend: input.backend,
@@ -422,23 +474,22 @@ export async function evaluateL2(input: EvaluateL2Input): Promise<L2ScreeningOut
       labels: classification.labels,
       injectionConfidence: classification.injectionConfidence,
     });
-    remoteOpinion?.settle(trigger.escalate);
+    if (remote?.kind === 'shadow') remote.settle(trigger.escalate);
     if (trigger.escalate) {
       log.warn(
         `L2 verdict escalates to L3 for ${context.sourceClass}/${tier}: ${trigger.reason}`,
       );
       return { kind: 'escalate_l3', classification, reason: trigger.reason };
     }
-    // Epic 4lf3r: the remote signal can only RAISE a clean L2 verdict to L3.
-    const raised = remoteOpinion?.acts ? await remoteOpinion.opinion : null;
-    if (raised?.escalate) {
-      log.warn(`Remote decision signal escalates to L3 for ${context.sourceClass}/${tier}: ${raised.reason}`);
-      return { kind: 'escalate_l3', classification, reason: `decision-signal:${raised.reason}` };
-    }
     return { kind: 'classified', classification };
   } catch (error) {
     const action = l2FailClosedActionForTier(config, tier);
-    const message = error instanceof Error ? error.message : String(error);
+    const localMessage = error instanceof Error ? error.message : String(error);
+    // vc7vh: in jev mode this is the second failure (Jev, then local), so the
+    // item fails closed exactly as a local-only failure would.
+    const message = remoteFailed
+      ? `remote intake.l2 verdict unavailable; ${localMessage}`
+      : localMessage;
     // psfn-framework-mlhn3: a provider that refused the request PARAMETERS
     // will refuse every envelope. Fail closed as before — an unscreenable item
     // is still held — but say so once on the health plane as a standing

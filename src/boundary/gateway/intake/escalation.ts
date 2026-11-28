@@ -28,7 +28,7 @@
 //   that and quarantines (an unauditable L3 result is never delivered).
 
 import type { IntakeScreenerUsageLedger } from './screener-usage.js';
-import type { L2DecisionSignal } from './l2-decision-signal.js';
+import { DECISION_SIGNAL_REASON_PREFIX, type L2DecisionSignal } from './l2-decision-signal.js';
 import { performance } from 'node:perf_hooks';
 
 import type {
@@ -90,7 +90,7 @@ export interface GatewayIntakeEscalationDeps {
    * fail-closed handling above is unaffected.
    */
   onScreenerProviderRejected?: (event: L2ScreenerProviderRejectedEvent) => void;
-  /** Additive remote L2 signal (epic 4lf3r); may only raise escalation. */
+  /** Remote intake.l2 decision site (epic 4lf3r): the L2 verdict in jev mode (vc7vh). */
   decisionSignal?: L2DecisionSignal;
   /** Usage ledger for L2/L3 provider dispatches (1fyyi). */
   usageLedger?: IntakeScreenerUsageLedger;
@@ -119,9 +119,10 @@ function l2Trace(
     case 'classified':
       return { status: 'clear', reason: 'L2 ran and did not trigger L3' };
     case 'escalate_l3': {
-      const verdictFlagged = outcome.classification.labels.some(
-        label => INTAKE_QUARANTINE_RISK_LABELS.includes(label),
-      ) || outcome.classification.injectionConfidence
+      const verdictFlagged = outcome.reason.startsWith(DECISION_SIGNAL_REASON_PREFIX)
+        || outcome.classification.labels.some(
+          label => INTAKE_QUARANTINE_RISK_LABELS.includes(label),
+        ) || outcome.classification.injectionConfidence
         >= l3EscalationConfidenceThresholdForTier(policy, tier);
       return {
         status: verdictFlagged ? 'flagged' : 'clear',
@@ -195,6 +196,9 @@ export function createGatewayIntakeEscalationPort(
     }
 
     let l2ForL3: { labels: readonly IntakeRiskLabel[]; injectionConfidence: number } | undefined;
+    // An `escalate_l3` outcome is binding: L3 runs on L2's reason, including
+    // the intake.l2 decision-site threshold that the L3 tier policy cannot see.
+    const l2EscalationReason = l2Outcome.kind === 'escalate_l3' ? l2Outcome.reason : undefined;
     let l2Contribution: IntakeEscalationContribution | undefined;
     if (l2Outcome.kind === 'failed_closed') {
       if (l2Outcome.action === 'quarantine') {
@@ -246,6 +250,7 @@ export function createGatewayIntakeEscalationPort(
         text: request.text,
         context,
         ...(l2ForL3 ? { l2: l2ForL3 } : {}),
+        ...(l2EscalationReason !== undefined ? { l2EscalationReason } : {}),
         config: deps.policy,
         models: deps.models().l3,
         backend: deps.backend,

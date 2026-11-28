@@ -4,6 +4,7 @@ import {
   TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE,
   type GatewayRequestCapabilitySigner,
   type RequestCapabilityAuthorityVersions,
+  type RequestCapabilityParentAudience,
   type RequestCapabilityParentBinding,
   type RequestCapabilityVerifier,
   type RequestCapabilityVerifyInput,
@@ -84,21 +85,36 @@ function authorityVersionsMatch(
     && left.policyVersion === right.policyVersion;
 }
 
-function scopeTestingHarnessChildExchangeReplay(
+interface ReplayScope {
+  readonly domain: string;
+  readonly jtiPrefix: string;
+}
+
+// The gateway already consumed the parent while minting/proxying it. A scope
+// gives one specific use of that parent its own durable single-use fence
+// while preserving the exact signed consumption material and parent expiry.
+const TESTING_HARNESS_CHILD_REPLAY_SCOPE: ReplayScope = Object.freeze({
+  domain: 'testing-harness-child-assertion-exchange-v1',
+  jtiPrefix: 'testing-harness-child-',
+});
+const GATEWAY_EFFECT_REPLAY_SCOPE: ReplayScope = Object.freeze({
+  domain: 'gateway-operator-effect-v1',
+  jtiPrefix: 'gateway-effect-',
+});
+
+function scopeReplayConsumption(
   consumption: ReturnType<typeof compileRequestCapabilityReplayConsumption>,
+  scope: ReplayScope,
 ): ReturnType<typeof compileRequestCapabilityReplayConsumption> {
-  // The gateway already consumed the parent while minting/proxying it. Give the
-  // harness child exchange its own durable single-use fence while preserving
-  // the exact signed consumption material and parent expiry.
   const jti = createHash('sha256')
-    .update('testing-harness-child-assertion-exchange-v1\0')
+    .update(`${scope.domain}\0`)
     .update(consumption.issuer)
     .update('\0')
     .update(consumption.jti)
     .digest('hex');
   return Object.freeze({
     ...consumption,
-    jti: `testing-harness-child-${jti}`,
+    jti: `${scope.jtiPrefix}${jti}`,
   });
 }
 
@@ -111,13 +127,28 @@ export class GatewayChildAssertionDeniedError extends Error {
   }
 }
 
+export interface GatewayOperatorEffectInput {
+  readonly operator: AuthenticatedChildAssertionControlIdentity;
+  readonly parent: RequestCapabilityVerifyInput;
+}
+
+interface AuthorizedGatewayOperatorEffect {
+  readonly verified: VerifiedRequestCapability;
+  /** The verified parent audience, narrowed to the parent (never agent) form. */
+  readonly parentAudience: RequestCapabilityParentAudience;
+  readonly decisionId: string;
+  readonly versions: RequestCapabilityAuthorityVersions;
+}
+
 /**
  * The authenticated operator control plane may exchange, but never forward,
  * an operator capability. The gateway verifies and consumes the parent,
- * reauthorizes exact current SSO authority, then signs a linked agent-only
- * child. A short-lived admin-token parent is already bound to the boot-frozen
- * shared credential at the canonical gateway admission seam, so it carries
- * its signed decision and versions forward without a nonexistent SSO session.
+ * reauthorizes exact current SSO authority, then either signs a linked
+ * agent-only child or authorizes one gateway-executed effect for the parent's
+ * exact target. A short-lived admin-token parent is already bound to the
+ * boot-frozen shared credential at the canonical gateway admission seam, so it
+ * carries its signed decision and versions forward without a nonexistent SSO
+ * session.
  */
 export class GatewayFleetAuthChildAssertionBroker {
   constructor(private readonly options: {
@@ -131,9 +162,65 @@ export class GatewayFleetAuthChildAssertionBroker {
   async exchange(
     input: GatewayChildAssertionExchangeInput,
   ): Promise<GatewayChildAssertionExchangeResult> {
+    const { verified, parentAudience, decisionId, versions } = await this.authorizeParent({
+      operator: input.operator,
+      parent: input.parent,
+      effectiveTarget: input.child.target,
+      replayScope: input.operator.kind === 'testing_harness_provider'
+        ? TESTING_HARNESS_CHILD_REPLAY_SCOPE
+        : undefined,
+    });
+    const parent = Object.freeze({
+      audience: parentAudience,
+      requestId: verified.requestId,
+      decisionId: verified.decisionId,
+      jti: verified.jti,
+      targetDigest: verified.targetDigest,
+    });
+    const token = this.options.signer.signAgent({
+      target: input.child.target,
+      requestId: input.child.requestId,
+      decisionId,
+      authContext: verified.authContext,
+      versions,
+      parent,
+    });
+    return Object.freeze({
+      token,
+      target: input.child.target,
+      requestId: input.child.requestId,
+      decisionId,
+      versions: Object.freeze({ ...versions }),
+      parent,
+    });
+  }
+
+  /**
+   * Authorizes the gateway itself to perform the parent's exact target, for
+   * gateway-owned state an agent child cannot reach (for example the
+   * gateway approval queue). Each parent authorizes at most one such effect.
+   */
+  async authorizeGatewayEffect(
+    input: GatewayOperatorEffectInput,
+  ): Promise<AuthorizedGatewayOperatorEffect> {
+    return await this.authorizeParent({
+      operator: input.operator,
+      parent: input.parent,
+      effectiveTarget: input.parent.target,
+      replayScope: GATEWAY_EFFECT_REPLAY_SCOPE,
+    });
+  }
+
+  private async authorizeParent(input: {
+    readonly operator: AuthenticatedChildAssertionControlIdentity;
+    readonly parent: RequestCapabilityVerifyInput;
+    readonly effectiveTarget: CompiledGardenRequestTarget;
+    /** Present: this use is single-use under its own fence. */
+    readonly replayScope: ReplayScope | undefined;
+  }): Promise<AuthorizedGatewayOperatorEffect> {
     const expectedOperatorId: `operator:${string}` = `operator:${input.operator.companionId}`;
     if (input.parent.target.companionId !== input.operator.companionId
-      || input.child.target.companionId !== input.operator.companionId) {
+      || input.effectiveTarget.companionId !== input.operator.companionId) {
       throw new GatewayChildAssertionDeniedError();
     }
 
@@ -157,7 +244,8 @@ export class GatewayFleetAuthChildAssertionBroker {
     } catch {
       throw new GatewayChildAssertionDeniedError();
     }
-    const expectedParentAudience = input.operator.kind === 'testing_harness_provider'
+    const expectedParentAudience: RequestCapabilityParentAudience =
+      input.operator.kind === 'testing_harness_provider'
       ? TESTING_HARNESS_REQUEST_CAPABILITY_AUDIENCE
       : expectedOperatorId;
     if (verified.audience !== expectedParentAudience) {
@@ -171,8 +259,8 @@ export class GatewayFleetAuthChildAssertionBroker {
         || verified.authContext.operatorGrantId !== testingHarness.operatorGrantId
         || verified.authContext.role !== testingHarness.role
         || !testingHarness.allowedActions.includes(verified.action)
-        || !testingHarness.allowedActions.includes(input.child.target.action)
-        || input.child.target.action !== verified.action)) {
+        || !testingHarness.allowedActions.includes(input.effectiveTarget.action)
+        || input.effectiveTarget.action !== verified.action)) {
       throw new GatewayChildAssertionDeniedError();
     }
 
@@ -182,13 +270,12 @@ export class GatewayFleetAuthChildAssertionBroker {
       target: input.parent.target,
     });
     const replay = await this.options.replay.consume(
-      input.operator.kind === 'testing_harness_provider'
-        ? scopeTestingHarnessChildExchangeReplay(replayConsumption)
+      input.replayScope
+        ? scopeReplayConsumption(replayConsumption, input.replayScope)
         : replayConsumption,
     );
     if (replay.outcome === 'mismatch'
-      || (input.operator.kind === 'testing_harness_provider'
-        && replay.outcome !== 'consumed')) {
+      || (input.replayScope && replay.outcome !== 'consumed')) {
       throw new GatewayChildAssertionDeniedError();
     }
 
@@ -203,7 +290,7 @@ export class GatewayFleetAuthChildAssertionBroker {
           operator: input.operator,
           parent: verified,
           parentTarget: input.parent.target,
-          childTarget: input.child.target,
+          childTarget: input.effectiveTarget,
         })
       : {
           decision: 'allow' as const,
@@ -214,32 +301,15 @@ export class GatewayFleetAuthChildAssertionBroker {
     if (!authorityVersionsMatch(authority.versions, verified.versions)) {
       // Reauthorization observed a fence/version transition. The gateway must
       // issue a fresh operator decision and actor snapshot; carrying the old
-      // subject into a child would make revocation races authorization wins.
+      // subject into a child or effect would make revocation races
+      // authorization wins.
       throw new GatewayChildAssertionDeniedError();
     }
-
-    const parent = Object.freeze({
-      audience: verified.audience,
-      requestId: verified.requestId,
-      decisionId: verified.decisionId,
-      jti: verified.jti,
-      targetDigest: verified.targetDigest,
-    });
-    const token = this.options.signer.signAgent({
-      target: input.child.target,
-      requestId: input.child.requestId,
-      decisionId: authority.decisionId,
-      authContext: verified.authContext,
-      versions: authority.versions,
-      parent,
-    });
     return Object.freeze({
-      token,
-      target: input.child.target,
-      requestId: input.child.requestId,
+      verified,
+      parentAudience: expectedParentAudience,
       decisionId: authority.decisionId,
-      versions: Object.freeze({ ...authority.versions }),
-      parent,
+      versions: authority.versions,
     });
   }
 }

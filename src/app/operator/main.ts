@@ -17,8 +17,6 @@ import {
 } from '../../operator/garden/transport-paths.js';
 import { GardenOperatorSurface } from '../../operator/garden/operator-surface.js';
 import { assertFleetAuthStandaloneSurfacesUnavailable } from '../../system/config/fleet-auth-standalone-surface-guard.js';
-import { createGatewayOperatorConfirmationClient } from '../startup/support/gateway-operator-confirmation-client.js';
-import { createGardenFleetChildAssertionClient } from '../../operator/garden/fleet-child-assertion-client.js';
 import { resolveFleetSsoGardenTls } from '../../boundary/fleet-auth/fleet-sso-transport.js';
 import { requireLifecycleKubernetesSettings } from '../../system/lifecycle/lifecycle-kubernetes-settings.js';
 import {
@@ -34,7 +32,7 @@ import {
 import { FleetGardenAdminTransportProxy } from '../../operator/garden/fleet-transport-client.js';
 import { FleetModelUsageService } from '../../operator/garden/services/fleet-model-usage-service.js';
 import { sealPostgresStoreReadinessBeforeReady } from '../../persistence/postgres/runtime-readiness.js';
-import { resolveGatewayAuthPlan } from './gateway-auth-plan.js';
+import { createOperatorGatewayClients, resolveGatewayAuthPlan } from './gateway-auth-plan.js';
 
 const log = createComponentLogger('OperatorSurface');
 const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
@@ -120,22 +118,9 @@ async function main(): Promise<void> {
         }
       : { transportEndpoint: resolveAdminTransportClientEndpoint(process.env) }),
     ...(fleetSsoTls ? { fleetSsoTls } : {}),
-    ...(gatewayAuthPlan.tokenConfirmation
-      ? {
-          operatorConfirmationResolver:
-            createGatewayOperatorConfirmationClient(gatewayAuthPlan.tokenConfirmation.baseUrl, {
-              operatorToken: gatewayAuthPlan.tokenConfirmation.token,
-              requestTimeoutMs: lifecycleKubernetes.operatorConfirmationRequestTimeoutMs,
-            }),
-        }
-      : {}),
-    ...(gatewayAuthPlan.fleetChildAssertionsBaseUrl
-      ? {
-          fleetChildAssertions: createGardenFleetChildAssertionClient(
-            gatewayAuthPlan.fleetChildAssertionsBaseUrl,
-          ),
-        }
-      : {}),
+    ...createOperatorGatewayClients(gatewayAuthPlan, {
+      confirmationRequestTimeoutMs: lifecycleKubernetes.operatorConfirmationRequestTimeoutMs,
+    }),
   });
   await surface.init();
   const postgresReadiness = await sealPostgresStoreReadinessBeforeReady();

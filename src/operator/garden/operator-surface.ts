@@ -74,11 +74,11 @@ export interface GardenOperatorSurfaceConfig {
   /** Fleet-wide read model assembled through companion admin transports. */
   fleetModelUsage?: FleetModelUsageRouteService;
   /**
-   * Direct operator → gateway confirmation resolver. Only the independently
-   * authenticated Garden operator process holds this; it carries the operator
-   * ADMIN_TOKEN straight to the gateway so the credential never traverses the
-   * agent (x5rt.10). Absent → operator-only confirmations are not resolvable
-   * from this surface and stay pending (fail closed).
+   * Direct operator → gateway confirmation resolver, so gateway-owned
+   * approvals never depend on the agent (x5rt.10). Standalone Garden carries
+   * the operator ADMIN_TOKEN; Fleet Garden presents the admitted parent
+   * capability instead (wi8z6). Absent → operator-only confirmations are not
+   * resolvable from this surface and stay pending (fail closed).
    */
   operatorConfirmationResolver?: GatewayOperatorConfirmationClient;
   /** Authenticated operator→gateway exchange for an exact agent-audience child capability. */

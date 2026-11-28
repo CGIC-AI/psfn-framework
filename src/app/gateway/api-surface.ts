@@ -54,6 +54,7 @@ import {
 } from '../../system/config/fleet-auth-standalone-surface-guard.js';
 import type { GatewayFleetAuthBroker } from '../../boundary/gateway/fleet-auth-broker.js';
 import type { GatewayFleetAuthChildAssertionBroker } from '../../boundary/gateway/fleet-auth-child-assertions.js';
+import { GatewayFleetConfirmationResolution } from '../../boundary/gateway/fleet-auth-confirmation-resolution.js';
 import {
   CompanionUiActionDeniedError,
   GatewayCompanionUiActionBroker,
@@ -1280,7 +1281,16 @@ export async function startOptionalGatewayApiServer(
     confirmationOperatorRequiresCompanionId: options.multiCompanion === true,
     ...(fleetSsoRouter ? { fleetSsoRouter } : {}),
     ...(options.fleetAuthChildAssertions
-      ? { fleetAuthChildAssertions: options.fleetAuthChildAssertions }
+      ? {
+          fleetAuthChildAssertions: options.fleetAuthChildAssertions,
+          fleetAuthConfirmations: new GatewayFleetConfirmationResolution({
+            parentAuthority: options.fleetAuthChildAssertions,
+            confirmations: {
+              resolveForOwner: async (companionId, params, resolver) => await options.gateway
+                .resolveOperatorApprovalForOwner(companionId, params, resolver),
+            },
+          }),
+        }
       : {}),
     ...(hubDeviceIngress ? { hubDeviceIngress } : {}),
     ...(hubDeviceCompanionId ? { hubDeviceCompanionId } : {}),

@@ -735,7 +735,6 @@ export class MemoryWriter {
         minSalience: writePolicy.minSalience,
         minNovelty: writePolicy.minNovelty,
         reason: writePolicy.reason,
-        text: text.slice(0, 60),
       });
       throw new MemoryWritePolicyError({
         reason: writePolicy.reason,
@@ -943,7 +942,6 @@ export class MemoryWriter {
         minSalience: writePolicy.minSalience,
         minNovelty: writePolicy.minNovelty,
         reason: writePolicy.reason,
-        text: text.slice(0, 60),
       });
       throw new MemoryWritePolicyError({
         reason: writePolicy.reason,

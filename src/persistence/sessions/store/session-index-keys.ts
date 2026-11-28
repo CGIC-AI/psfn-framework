@@ -24,6 +24,34 @@ export function indexedChannelId(sessionId: string, entry: ChannelIndexEntry): s
   return normalizeOptionalString(entry.channelId) ?? sessionId;
 }
 
+/**
+ * One channel's journal-file sessions. A channel whose L0 history spans
+ * several independent journal chains is indexed as `<channel>` plus
+ * `<channel>#<file>` sessions (sessionIdForChannelFile); they are one
+ * conversation. `channelId` is the canonical id: a bare-channel lookup resolves
+ * to the channel's primary chain and appends are projected under it.
+ */
+export interface JournalSessionGroup {
+  channelId: string;
+  /** Canonical channel id first, then every indexed journal session of it. */
+  sessionIds: string[];
+}
+
+export function resolveJournalSessionGroup(
+  sessionId: string,
+  channelIndex: ReadonlyMap<string, ChannelIndexEntry>,
+): JournalSessionGroup {
+  const entry = channelIndex.get(sessionId);
+  const channelId = entry ? indexedChannelId(sessionId, entry) : sessionId;
+  const sessionIds = [channelId];
+  for (const [candidateId, candidate] of channelIndex.entries()) {
+    if (candidateId !== channelId && indexedChannelId(candidateId, candidate) === channelId) {
+      sessionIds.push(candidateId);
+    }
+  }
+  return { channelId, sessionIds };
+}
+
 export function findSessionIdByFilename(
   filename: string,
   channelIndex: ReadonlyMap<string, ChannelIndexEntry>,

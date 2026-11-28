@@ -13,6 +13,7 @@ import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.j
 import type { PurrMemory } from './types.js';
 import { DEDUP_THRESHOLD, MEMORY_CONFIG } from './types.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { logger } from '../../shared/logger.js';
 import { createCompanionRoomMembershipAuthority } from './companion-provenance.js';
 
 // ── Mock factories ──
@@ -1212,6 +1213,7 @@ describe('MemoryWriter', () => {
       store.searchByEmbedding.mockReturnValueOnce([]); // dedup
       store.searchByEmbedding.mockReturnValueOnce([]); // broader novelty
 
+      const written = vi.spyOn(logger, 'write');
       await expect(writer.write({
         text: 'Low salience confidential detail',
         type: 'semantic',
@@ -1219,8 +1221,15 @@ describe('MemoryWriter', () => {
         salience: 0.4,
         importance: 0.4,
       })).rejects.toThrow(MemoryWritePolicyError);
+      const rejection = written.mock.calls.map(([info]) => info as Record<string, unknown>)
+        .find(info => info.message === 'Rejected memory write by sensitivity policy');
+      written.mockRestore();
 
       expect(store.insertMemory).not.toHaveBeenCalled();
+      // d5e0p.29: the INFO rejection reaches stdout unredacted; it carries policy facts only.
+      expect(rejection).toMatchObject({ level: 'info', sensitivity: 'confidential', reason: expect.any(String) });
+      expect(rejection).not.toHaveProperty('text');
+      expect(JSON.stringify(rejection)).not.toContain('Low salience confidential');
     });
 
     it('rejects intimate writes when novelty is below threshold', async () => {

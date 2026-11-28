@@ -75,7 +75,11 @@ import {
   TurnRecordEligibilitySnapshotInvalidError,
   type SourceTurnRecordEligibility,
 } from './store/turn-record-operations.js';
-import { indexedChannelId, resolvePrimarySessionId } from './store/session-index-keys.js';
+import {
+  indexedChannelId,
+  resolvePrimarySessionId,
+  type JournalSessionGroup,
+} from './store/session-index-keys.js';
 import { withSessionJournalWriteLock } from './store/session-journal-write-lock.js';
 import { rollSessionArchiveIfNeeded } from './store/session-rollover.js';
 import {
@@ -365,6 +369,10 @@ export class SessionStore implements TranscriptSearchPort {
   }
   listChannels(): Array<{ sessionId: string; channelId: string; messageCount: number }> {
     return this.cursorOperations.listChannels();
+  }
+  /** Every journal session of the conversation `sessionId` belongs to (d5e0p.8). */
+  getJournalSessionGroup(sessionId: string): JournalSessionGroup {
+    return this.cursorOperations.getJournalSessionGroup(sessionId);
   }
   getRecentDiscordMessageIds(channelId: string, limit: number): Set<string> {
     return this.cursorOperations.getRecentDiscordMessageIds(channelId, limit);

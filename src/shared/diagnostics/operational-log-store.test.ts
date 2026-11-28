@@ -66,6 +66,27 @@ describe('durable operational metadata', () => {
     expect(body).not.toMatch(/private prompt|private response|private-credential/);
   });
 
+  it('persists numeric extraction telemetry under message-shaped keys without unmasking text (d5e0p.18)', () => {
+    const store = new OperationalLogStore({ logsDir: root(), process: 'agent', companionId: 'companion-a', retentionDays: 30, now: () => NOW });
+    store.record({ observedAt: NOW, level: 'info', message: 'Extraction completed', source: 'in_process' }, {
+      channelId: 'discord:dm-example',
+      coveredUpToMessageId: 4812,
+      sourceMessageIds: [4801, 4810],
+      ambiguousSpeakerSkipReasons: { ambiguous_source_message_ids: 3 },
+      text: 'private extracted memory',
+    });
+    store.close();
+    const body = readFileSync(join(store.directory, readdirSync(store.directory)[0]!), 'utf8');
+    const record = JSON.parse(body);
+    expect(record.metadata).toMatchObject({
+      coveredUpToMessageId: 4812,
+      sourceMessageIds: [4801, 4810],
+      ambiguousSpeakerSkipReasons: { ambiguous_source_message_ids: 3 },
+      text: '[REDACTED_CONTENT]',
+    });
+    expect(body).not.toContain('private extracted memory');
+  });
+
   it('retains young overflow across rotation and deletes only fully expired days', () => {
     let now = NOW;
     const store = new OperationalLogStore({ logsDir: root(), process: 'gateway', retentionDays: 30, now: () => now });

@@ -89,6 +89,10 @@ export function createDecisionRuntime(options: DecisionRuntimeOptions): Decision
     const settings = options.resolveSettings();
     const jev = options.jev;
     if (!jev || !settings) {
+      log.warn('Remote decision backend is not configured; answering locally', {
+        siteId: request.siteId,
+        reason: !jev ? 'backend_not_wired' : 'settings_unavailable',
+      });
       return { ok: false, reason: 'error', backend: 'jev', latencyMs: 0 };
     }
     const remoteRequest: RemoteDecisionRequest = {
@@ -97,6 +101,10 @@ export function createDecisionRuntime(options: DecisionRuntimeOptions): Decision
       questions: request.questions,
     };
     if (JSON.stringify(remoteRequest).length > settings.jev.maxRequestChars) {
+      log.warn('Remote decision state exceeds the request limit; answering locally', {
+        siteId: request.siteId,
+        maxRequestChars: settings.jev.maxRequestChars,
+      });
       return { ok: false, reason: 'invalid_output', backend: 'jev', latencyMs: 0 };
     }
     const controller = new AbortController();
@@ -104,7 +112,16 @@ export function createDecisionRuntime(options: DecisionRuntimeOptions): Decision
     request.signal?.addEventListener('abort', abortFromCaller, { once: true });
     const timer = setTimeout(() => controller.abort(), settings.jev.timeoutMs);
     try {
-      return await jev.decide(remoteRequest, controller.signal);
+      const outcome = await jev.decide(remoteRequest, controller.signal);
+      if (!outcome.ok) {
+        // A declined remote answer is a fallback like a thrown one: say so.
+        log.warn('Remote decision backend returned no answer; answering locally', {
+          siteId: request.siteId,
+          reason: outcome.reason,
+          latencyMs: outcome.latencyMs,
+        });
+      }
+      return outcome;
     } catch (error) {
       log.warn('Remote decision backend failed; answering locally', {
         siteId: request.siteId,

@@ -538,6 +538,13 @@ export interface EpisodeTimeSearchOptions extends EpisodeListOptions {
    */
   spanSessionId?: string;
   /**
+   * Real session scope over several session ids at once: episodes carrying a
+   * span in ANY of them. Used for one conversation indexed under several
+   * journal sessions (d5e0p.8). Mutually exclusive with `spanSessionId`; an
+   * empty list is rejected rather than read as "every session".
+   */
+  spanSessionIds?: readonly string[];
+  /**
    * Order results by start time. Defaults to 'asc' (oldest first). Use 'desc'
    * when a capped query must include the most recent episodes rather than
    * starving them behind an older backlog.

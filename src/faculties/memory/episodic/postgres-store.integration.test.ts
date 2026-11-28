@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { createPostgresPool, ensurePostgresSchema } from '../../../persistence/postgres.js';
 import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
@@ -9,6 +12,7 @@ import {
   type PostgresTestHarness,
 } from '../../../test-support/postgres-test-harness.js';
 import { PostgresEpisodicStore } from './postgres-store.js';
+import { SessionStore } from '../../../persistence/sessions/store.js';
 import { EpisodeSemanticIndexer } from './episode-index.js';
 import type { EpisodeCreateInput, EpisodeEmbeddingProfile } from './store-port.js';
 
@@ -429,5 +433,57 @@ describe('PostgresEpisodicStore admission identity integration', () => {
       // itself survives so the derivation edge is never silently erased.
       expect(stored?.provenanceRefs).toEqual([{ kind: 'turn', refId: 'turn-malformed' }]);
     });
+  });
+});
+
+describe('PostgresEpisodicStore journal session scope integration (d5e0p.8)', () => {
+  function spanEpisode(id: string, sessionId: string, startedAt: string): EpisodeCreateInput {
+    return {
+      ...episodeInput(id, `topic:${id}`),
+      channelId: 'discord:dm-7',
+      startedAt,
+      endedAt: new Date(Date.parse(startedAt) + 5 * 60_000).toISOString(),
+      spanRefs: [{ spanId: `span-${id}`, sessionId }],
+    };
+  }
+
+  it('returns one channel conversation for either journal session id and excludes a prefix-sharing session', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-journal-scope-'));
+    try {
+      const journal = (filename: string, channelId: string, timestamp: number) => {
+        writeFileSync(join(sessionsDir, filename), `${JSON.stringify({
+          type: 'message', id: 1, channelId, role: 'user', content: `entry ${filename}`, timestamp,
+        })}\n`);
+      };
+      journal('20260318_discord-dm-7_alex_111111.jsonl', 'discord:dm-7', Date.parse('2026-03-18T10:00:00.000Z'));
+      journal('20261007_discord-dm-7_alex_222222.jsonl', 'discord:dm-7', Date.parse('2026-10-07T10:00:00.000Z'));
+      journal('20261007_discord-dm-70_alex_333333.jsonl', 'discord:dm-70', Date.parse('2026-10-07T11:00:00.000Z'));
+      const sessions = new SessionStore(sessionsDir);
+      const suffixedId = sessions.listChannels()
+        .find(session => session.channelId === 'discord:dm-7' && session.sessionId !== 'discord:dm-7')?.sessionId;
+      if (!suffixedId) throw new Error('expected a suffixed journal session for discord:dm-7');
+
+      await withEpisodicDatabase(async (_pool, store) => {
+        await store.createEpisode(spanEpisode('episode-bare', 'discord:dm-7', '2026-07-28T10:01:00.000Z'));
+        await store.createEpisode(spanEpisode('episode-suffixed', suffixedId, '2026-07-28T10:02:00.000Z'));
+        await store.createEpisode(spanEpisode('episode-prefix-sharing', 'discord:dm-70', '2026-07-28T10:03:00.000Z'));
+
+        const episodeIdsFor = async (sessionId: string) => (await store.searchByTime({
+          spanSessionIds: sessions.getJournalSessionGroup(sessionId).sessionIds,
+          order: 'desc',
+          limit: 10,
+        })).map(episode => episode.id);
+
+        expect(await episodeIdsFor('discord:dm-7')).toEqual(['episode-suffixed', 'episode-bare']);
+        expect(await episodeIdsFor(suffixedId)).toEqual(['episode-suffixed', 'episode-bare']);
+        expect(await episodeIdsFor('discord:dm-70')).toEqual(['episode-prefix-sharing']);
+        await expect(store.searchByTime({ spanSessionIds: [] }))
+          .rejects.toThrow('spanSessionIds must name at least one session');
+        await expect(store.searchByTime({ spanSessionId: 'discord:dm-7', spanSessionIds: ['discord:dm-7'] }))
+          .rejects.toThrow('mutually exclusive');
+      });
+    } finally {
+      rmSync(sessionsDir, { recursive: true, force: true });
+    }
   });
 });

@@ -4,6 +4,7 @@ import {
   type DecisionBackendSettings,
   type DecisionSiteId,
 } from '../../../system/config/decision-backend-config.js';
+import { logger } from '../../../shared/logger.js';
 import { buildLLMWorkSpec } from '../work-spec.js';
 import { createDecisionRuntime, type RemoteDecisionBackend } from './decide.js';
 import type { LocalDecisionBackend } from './local-backend.js';
@@ -127,11 +128,17 @@ describe('createDecisionRuntime', () => {
     expect(jev.decide).not.toHaveBeenCalled();
   });
 
-  it('falls back to local on a remote failure', async () => {
+  it('falls back to local on a remote failure and logs the reason without state', async () => {
+    const written = vi.spyOn(logger, 'write');
     const { runtime } = rig(settingsWith('jev'), async () => ({
       ok: false, reason: 'invalid_output', backend: 'jev', latencyMs: 12,
     }));
     await expect(runtime.decide(makeRequest())).resolves.toEqual({ ...LOCAL_OUTCOME, backend: 'local-fallback' });
+    const warning = written.mock.calls.map(([info]) => info as Record<string, unknown>)
+      .find(info => info.message === 'Remote decision backend returned no answer; answering locally');
+    written.mockRestore();
+    expect(warning).toMatchObject({ level: 'warn', siteId: 'room.ambiguity', reason: 'invalid_output', latencyMs: 12 });
+    expect(JSON.stringify(warning)).not.toContain('anyone around');
   });
 
   it('falls back to local when the remote backend throws', async () => {

@@ -47,6 +47,7 @@ export interface PromptLayerStatePort {
   ): PromptLayer;
   reorderByLayerIds(layerIds: string[], updatedBy: string, reason?: string): PromptLayer[];
   toggle(id: string): PromptLayer;
+  setRemoteAppraisalShareable(id: string, shareable: boolean): PromptLayer;
   delete(id: string): void;
   getHistory(): PromptHistoryEntry[];
   getLayerHistory(layerId: string): PromptHistoryEntry[];
@@ -90,6 +91,7 @@ export function createPromptLayerStatePort(store: PromptLayerStatePort): PromptL
     ),
     reorderByLayerIds: (layerIds, updatedBy, reason) => store.reorderByLayerIds(layerIds, updatedBy, reason),
     toggle: (id) => store.toggle(id),
+    setRemoteAppraisalShareable: (id, shareable) => store.setRemoteAppraisalShareable(id, shareable),
     delete: (id) => store.delete(id),
     getHistory: () => store.getHistory(),
     getLayerHistory: (layerId) => store.getLayerHistory(layerId),
@@ -125,6 +127,7 @@ function createDisabledPromptLayerStatePort(): PromptLayerStatePort {
     update: disabledError,
     reorderByLayerIds: disabledError,
     toggle: disabledError,
+    setRemoteAppraisalShareable: disabledError,
     delete: disabledError,
     getHistory: () => [],
     getLayerHistory: () => [],

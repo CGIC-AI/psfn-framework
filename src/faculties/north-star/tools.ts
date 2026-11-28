@@ -12,9 +12,21 @@ import {
 import { withCapabilityRequirement, type CapabilityRequirement } from '../../system/capabilities/requirements.js';
 import { textResult, textResultWithError } from '../../core/tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import {
+  TOOL_CALL_IDEMPOTENCY_SCHEMA_KEY,
+  type ToolCallIdempotency,
+  type ToolCallIdempotencySchemaMetadata,
+} from '../../shared/contracts/tool-call-outcome.js';
 
 const NORTH_STAR_ACTIONS = ['list', 'create', 'update', 'delete', 'reorder'] as const;
 type NorthStarAction = (typeof NORTH_STAR_ACTIONS)[number];
+const NORTH_STAR_ACTION_IDEMPOTENCY: Record<NorthStarAction, ToolCallIdempotency> = {
+  list: 'idempotent',
+  create: 'effectful',
+  update: 'effectful',
+  delete: 'effectful',
+  reorder: 'effectful',
+};
 
 interface NorthStarToolParams {
   action?: NorthStarAction;
@@ -120,6 +132,14 @@ export function createNorthStarTool(store: NorthStarStore): SubstrateAgentTool {
         { description: 'Whether the North Star item is shared or companion-owned.' },
       )),
       enabled: Type.Optional(Type.Boolean({ description: 'Whether to include this item in the live prompt.' })),
+    }, {
+      // psfn-framework-mv4xr: a repeated identical list in one turn is
+      // collapsed by the tool-call scheduler; every write stays effectful and
+      // always executes.
+      [TOOL_CALL_IDEMPOTENCY_SCHEMA_KEY]: {
+        default: 'effectful',
+        actions: NORTH_STAR_ACTION_IDEMPOTENCY,
+      } satisfies ToolCallIdempotencySchemaMetadata,
     }),
     execute: async (
       _toolCallId: string,

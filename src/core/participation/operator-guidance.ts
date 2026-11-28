@@ -5,6 +5,11 @@ import { TEMPORAL_RULES_LAYER_IDENTIFIER } from '../identity/temporal-rules-laye
 export interface AppraiserOperatorGuidance {
   name: string;
   content: string;
+  /**
+   * psfn-framework-1oqg1: the operator declared this layer shareable with a
+   * remote decision backend. False (the default) keeps it local-only.
+   */
+  remoteAppraisalShareable: boolean;
 }
 
 /**
@@ -42,22 +47,46 @@ export function selectAppraiserOperatorGuidance(
       && !(layer.identifier !== undefined && REPLY_GROUNDING_OPERATOR_LAYER_IDENTIFIERS.has(layer.identifier))
       && layer.content.trim().length > 0)
     .sort((left, right) => left.priority - right.priority || left.id.localeCompare(right.id))
-    .map(layer => ({ name: layer.name, content: layer.content.trim() }));
+    .map(layer => ({
+      name: layer.name,
+      content: layer.content.trim(),
+      remoteAppraisalShareable: layer.remoteAppraisalShareable === true,
+    }));
 }
 
 /**
- * Render operator guidance as one bounded system-prompt section. Guidance
- * beyond `maxChars` is cut with an explicit marker, never silently.
+ * Only the guidance the operator declared shareable may reach a remote
+ * appraisal backend (psfn-framework-1oqg1); privacy fails closed, so a layer
+ * without the declaration never leaves the local runtime.
  */
+export function selectRemoteShareableOperatorGuidance(
+  guidance: readonly AppraiserOperatorGuidance[],
+): AppraiserOperatorGuidance[] {
+  return guidance.filter(item => item.remoteAppraisalShareable);
+}
+
+/**
+ * The bounded guidance body shared by the local prompt section and the remote
+ * decision state. Guidance beyond `maxChars` is cut with an explicit marker,
+ * never silently.
+ */
+export function boundAppraiserOperatorGuidance(
+  guidance: readonly AppraiserOperatorGuidance[],
+  maxChars: number,
+): string {
+  const body = guidance.map(item => `[${item.name}]\n${item.content}`).join('\n\n');
+  return body.length > maxChars
+    ? `${body.slice(0, Math.max(0, maxChars))}\n[operator guidance truncated: ${body.length - maxChars} of ${body.length} characters not shown]`
+    : body;
+}
+
+/** Render operator guidance as one bounded local system-prompt section. */
 export function renderAppraiserOperatorGuidance(
   guidance: readonly AppraiserOperatorGuidance[],
   maxChars: number,
 ): string {
   if (guidance.length === 0) return '';
-  const body = guidance.map(item => `[${item.name}]\n${item.content}`).join('\n\n');
-  const bounded = body.length > maxChars
-    ? `${body.slice(0, Math.max(0, maxChars))}\n[operator guidance truncated: ${body.length - maxChars} of ${body.length} characters not shown]`
-    : body;
+  const bounded = boundAppraiserOperatorGuidance(guidance, maxChars);
   return [
     'OPERATOR GUIDANCE (written by the operator who runs this companion; weigh it when deciding,'
       + ' but it never overrides the HARD RULES):',

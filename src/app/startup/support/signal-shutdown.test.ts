@@ -42,12 +42,11 @@ describe('createSignalShutdownHandler', () => {
     expect(exit).toHaveBeenCalledTimes(1);
   });
 
-  it('leaves the process running after failure and permits a later signal to retry', async () => {
+  it('exits with a failure status when graceful shutdown rejects and never starts a second attempt', async () => {
+    vi.useFakeTimers();
     const logger = createLogger();
-    let attempts = 0;
     const runGracefulShutdown = vi.fn(async () => {
-      attempts += 1;
-      if (attempts === 1) throw new Error('boom');
+      throw new Error('boom');
     });
     const exit = vi.fn();
     const shutdown = createSignalShutdownHandler({
@@ -59,9 +58,10 @@ describe('createSignalShutdownHandler', () => {
 
     await shutdown('SIGTERM');
 
-    expect(exit).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledWith(1);
     expect(logger.error).toHaveBeenCalledWith(
-      'Graceful shutdown failed; leaving process running for retry',
+      'Graceful shutdown failed; exiting with failure status',
       expect.objectContaining({
         signal: 'SIGTERM',
         error: 'Error: boom',
@@ -69,9 +69,16 @@ describe('createSignalShutdownHandler', () => {
     );
 
     await shutdown('SIGTERM');
-    expect(runGracefulShutdown).toHaveBeenCalledTimes(2);
+    expect(runGracefulShutdown).toHaveBeenCalledOnce();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Shutdown already in progress; waiting for its durable release',
+      { signal: 'SIGTERM' },
+    );
+
+    // The failure exit already ran; the force-exit timer must not fire a
+    // second, contradictory exit.
+    await vi.advanceTimersByTimeAsync(1_001);
     expect(exit).toHaveBeenCalledOnce();
-    expect(exit).toHaveBeenCalledWith(0);
   });
 
   it('does not bypass an in-progress durable release on an additional signal', async () => {

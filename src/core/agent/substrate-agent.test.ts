@@ -7,6 +7,8 @@ import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { isBusyTurnError } from '../../system/lifecycle/turn-contention.js';
 import { classifyPostTurnActionContention } from './post-turn-action-contention.js';
 import { Agent, type AgentTool } from '../../boundary/pi-agent/index.js';
+import type { AssistantMessage } from '@earendil-works/pi-ai';
+import { PSEUDO_TOOL_CALL_CORRECTION } from './pseudo-tool-call-guard.js';
 import type { CanonicalModelRegistry, LLMContext, LLMResponse, MessageAddressingMetadata, ModelRegistryEntry, ModelSlot, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { MemoryProvider, MemoryExtractor, LLMProviderPort } from './substrate-agent.js';
@@ -3825,6 +3827,108 @@ describe('SubstrateAgent.handleMessage', () => {
     } finally {
       setSystemPromptSpy.mockRestore();
     }
+  });
+
+  describe('pseudo tool calls written as reply text (psfn-framework-mv4xr)', () => {
+    const PSEUDO_REPLY = 'Recording it now. <tool_call>garden_ledger.append({"entry":"watered the ferns"})</tool_call>';
+
+    function scriptedLoop(script: Array<AssistantMessage['content']>): {
+      streamFn: ReturnType<typeof vi.fn>;
+      providerContexts: unknown[][];
+    } {
+      const providerContexts: unknown[][] = [];
+      const streamFn = vi.fn(async (_model: unknown, context: { messages: unknown[] }) => {
+        providerContexts.push(structuredClone(context.messages));
+        const content = script[providerContexts.length - 1] ?? script.at(-1)!;
+        const response = {
+          role: 'assistant',
+          content,
+          api: 'chat',
+          provider: 'test',
+          model: 'test-model',
+          usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+          stopReason: content.some(block => block.type === 'toolCall') ? 'toolUse' : 'stop',
+          timestamp: Date.now(),
+        };
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: 'start', partial: structuredClone(response) };
+            yield { type: 'done' };
+          },
+          result: async () => structuredClone(response),
+        } as never;
+      });
+      return { streamFn, providerContexts };
+    }
+
+    function makeLedgerAgent(
+      streamFn: ReturnType<typeof vi.fn>,
+      promptCalls: number,
+    ): { agent: SubstrateAgent; ledger: AgentTool<any> } {
+      const agent = new SubstrateAgent(
+        new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),
+        { streamFn: streamFn as never },
+      );
+      const ledger = makeExtendedProbeTool('garden_ledger');
+      agent.registerTool(ledger, 'core');
+      // Run the real agent loop for exactly the turn's own prompt() calls.
+      for (let call = 0; call < promptCalls; call += 1) {
+        promptSpy.mockImplementationOnce(function (this: Agent, input, images) {
+          return realAgentPrompt.call(this, input, images);
+        });
+      }
+      return { agent, ledger };
+    }
+
+    it('sends one corrective prompt in the same turn, then runs only the real structured call', async () => {
+      const { streamFn, providerContexts } = scriptedLoop([
+        [{ type: 'text', text: PSEUDO_REPLY }],
+        [{ type: 'toolCall', id: 'ledger-1', name: 'garden_ledger', arguments: { entry: 'watered the ferns' } }],
+        [{ type: 'text', text: 'Logged: watered the ferns.' }],
+      ]);
+      const { agent, ledger } = makeLedgerAgent(streamFn, 2);
+
+      const response = await agent.handleMessage(makeMessage({ content: 'Please log that I watered the ferns.' }));
+
+      expect(response.content).toBe('Logged: watered the ferns.');
+      expect(streamFn).toHaveBeenCalledTimes(3);
+      expect(ledger.execute).toHaveBeenCalledOnce();
+      // The corrective prompt continued the turn: the pseudo reply is still in
+      // the provider context, followed by the runtime correction.
+      const retryContext = JSON.stringify(providerContexts[1]);
+      expect(retryContext).toContain('watered the ferns');
+      expect(retryContext).toContain('wrote a call to garden_ledger as text');
+      expect(response.metadata.model).not.toBe('runtime-fallback');
+    });
+
+    it('never executes text and replaces a second pseudo call with a non-fabricating notice', async () => {
+      const { streamFn } = scriptedLoop([
+        [{ type: 'text', text: PSEUDO_REPLY }],
+        [{ type: 'text', text: 'Done! <|tool_call|> garden_ledger append entry="watered the ferns"' }],
+      ]);
+      const { agent, ledger } = makeLedgerAgent(streamFn, 2);
+
+      const response = await agent.handleMessage(makeMessage({ content: 'Please log that I watered the ferns.' }));
+
+      expect(streamFn).toHaveBeenCalledTimes(2);
+      expect(ledger.execute).not.toHaveBeenCalled();
+      expect(response.content).toBe(PSEUDO_TOOL_CALL_CORRECTION);
+      expect(response.metadata.model).toBe('runtime-fallback');
+    });
+
+    it('does not retry a toolCall-only message with empty arguments followed by a plain reply', async () => {
+      const { streamFn, providerContexts } = scriptedLoop([
+        [{ type: 'toolCall', id: 'ledger-empty', name: 'garden_ledger', arguments: {} }],
+        [{ type: 'text', text: 'All set.' }],
+      ]);
+      const { agent } = makeLedgerAgent(streamFn, 1);
+
+      const response = await agent.handleMessage(makeMessage({ content: 'Log something.' }));
+
+      expect(response.content).toBe('All set.');
+      expect(streamFn).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(providerContexts)).not.toContain('Runtime correction');
+    });
   });
 
   it('routes normal response turns through MoA deliberation when enabled', async () => {

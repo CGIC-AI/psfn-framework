@@ -287,8 +287,9 @@ async function completeDurableShutdownForRestart(
       await prepareRestartCommand();
     } catch (err) {
       const errorText = err instanceof Error ? err.message : String(err);
-      log.error('Durable restart preparation failed; aborting restart command', { error: errorText });
+      log.error('Durable restart preparation failed; exiting with failure status', { error: errorText });
       await notifier.notifyShutdown(`${failurePrefix} blocked: ${errorText.slice(0, 160)}`);
+      exitAfterFailedDurableStop();
       return false;
     }
 
@@ -307,11 +308,23 @@ async function completeDurableShutdownForRestart(
     await stopFn();
   } catch (err) {
     const errorText = err instanceof Error ? err.message : String(err);
-    log.error('Durable shutdown failed; aborting restart', { error: errorText });
+    log.error('Durable shutdown failed; exiting with failure status', { error: errorText });
     await notifier.notifyShutdown(`${failurePrefix} blocked: ${errorText.slice(0, 160)}`);
+    exitAfterFailedDurableStop();
     return false;
   }
   return true;
+}
+
+/**
+ * psfn-framework-69l9c: a durable stop that rejected has already latched the
+ * background work supervisor (and, for a full stop, earlier subsystems), so the
+ * process can no longer serve a turn. Staying alive would answer every later
+ * turn with a delivery failure; exit visibly so the process supervisor starts a
+ * fresh runtime. Unreleased claims fall to lease-expiry recovery.
+ */
+function exitAfterFailedDurableStop(): void {
+  process.exit(1);
 }
 
 /**

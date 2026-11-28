@@ -509,7 +509,11 @@ export class BackgroundWorkSupervisor {
     } catch (error) {
       // Permit an explicit bounded retry by the shutdown owner. `stopping`
       // remains true, so no new claims or enqueue handoffs can enter between
-      // attempts and the database must remain open until one succeeds.
+      // attempts and the database must remain open until one succeeds. A
+      // stop is one-way: aborted claims may still be unwinding toward their
+      // pre-boundary fence, so the supervisor never resumes serving. An owner
+      // whose bounded retries are exhausted must end the process
+      // (psfn-framework-69l9c) rather than leave it running half-stopped.
       if (this.stopPromise === stopAttempt) this.stopPromise = null;
       throw error;
     }

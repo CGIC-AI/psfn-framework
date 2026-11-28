@@ -8,13 +8,13 @@
 import '../../shared/utils/load-dotenv.js';
 import { migratePostgresMemoryEmbeddings } from '../../faculties/memory/migration.js';
 import type { ReembedMigrationProgress } from '../../faculties/memory/migration.js';
-import { createProviderRuntimeServices } from '../../system/config/provider-runtime-factory.js';
 import {
   bootstrapMaintenanceRuntime,
   isMaintenanceCliEntrypoint,
   parseCommonMaintenanceArgs,
   runMaintenanceCli,
 } from './cli-harness.js';
+import { createMaintenanceEmbeddingProvider } from './maintenance-embedding-provider.js';
 
 interface CliOptions {
   batchSize?: number;
@@ -84,7 +84,7 @@ function runCli(): Promise<unknown> {
 
       console.log(`Persistence backend: ${config.persistenceBackend}`);
 
-      const { embeddingProvider } = createProviderRuntimeServices({ config });
+      const embeddingProvider = createMaintenanceEmbeddingProvider(config, 'embed');
       console.log(`Embedding provider: ${embeddingProvider.kind} (dims=${embeddingProvider.dims})`);
       console.log('');
 

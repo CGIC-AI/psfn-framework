@@ -416,11 +416,14 @@ export async function migratePostgresMemoryEmbeddings(
     applicationName: 'psfn-memory-embedding-migration',
     allowExitOnIdle: true,
     ...(options.schema ? { schema: options.schema } : {}),
+    // A dry run only reports: it reads on a read-only session and leaves the
+    // schema to the companion runtime that owns its migrations (uhc6b).
+    ...(dryRun ? { readOnly: true } : {}),
   });
 
   try {
     await assertMemoryCorpusExists(pool);
-    await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
+    if (!dryRun) await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
     const coverageBefore = await inspectMemoryEmbeddingCoverage(pool);
     if (missingOnly && !dryRun) {
       await assertProviderMatchesStoredDimensions(pool, embeddingService.dims);

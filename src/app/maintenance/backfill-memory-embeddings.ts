@@ -11,13 +11,13 @@ import {
   migratePostgresMemoryEmbeddings,
   type EmbeddingMigrationResult,
 } from '../../faculties/memory/migration.js';
-import { createProviderRuntimeServices } from '../../system/config/provider-runtime-factory.js';
 import {
   bootstrapMaintenanceRuntime,
   isMaintenanceCliEntrypoint,
   parseCommonMaintenanceArgs,
   runMaintenanceCli,
 } from './cli-harness.js';
+import { createMaintenanceEmbeddingProvider } from './maintenance-embedding-provider.js';
 
 interface CliOptions {
   apply: boolean;
@@ -114,7 +114,7 @@ async function run(options: CliOptions): Promise<EmbeddingMigrationResult> {
     throw new Error('Missing-embedding backfill requires --postgres-url or config.postgresDatabaseUrl');
   }
   const schema = options.schema?.trim() || config.postgresSchema?.trim() || undefined;
-  const { embeddingProvider } = createProviderRuntimeServices({ config });
+  const embeddingProvider = createMaintenanceEmbeddingProvider(config, options.apply ? 'embed' : 'report');
 
   const report = await migratePostgresMemoryEmbeddings(postgresUrl, embeddingProvider, {
     missingOnly: true,

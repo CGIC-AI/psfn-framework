@@ -323,7 +323,23 @@ export interface PongMessage {
 
 export type ApprovalResolutionStatus = "approved" | "denied" | "expired" | "blocked";
 
-export type ToolActivityPhase = "started" | "progress" | "completed" | "failed";
+/**
+ * Tool-activity lifecycle phases the Hub accepts from the companion relay.
+ * Mirrors `COMPANION_TOOL_ACTIVITY_PHASES` in
+ * `src/shared/contracts/companion-relay.ts` (the Hub project cannot import
+ * framework source); `companion-relay-hub-phase-contract.test.ts` at the
+ * framework root fails if the two lists diverge.
+ */
+export const TOOL_ACTIVITY_PHASES = [
+  "started",
+  "progress",
+  "completed",
+  "failed",
+  "rejected",
+  "skipped",
+] as const;
+
+export type ToolActivityPhase = typeof TOOL_ACTIVITY_PHASES[number];
 
 export interface ApprovalRequestedMessage {
   type: "approval.requested";

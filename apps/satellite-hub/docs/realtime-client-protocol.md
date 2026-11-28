@@ -375,8 +375,9 @@ becomes `artifact.preview.error` for the requesting satellite only.
 }
 ```
 
-`phase` is one of `started`, `progress`, `completed`, or `failed`. `detail` is
-optional and already redacted by PSFN.
+`phase` is one of `started`, `progress`, `completed`, `failed`, `rejected`
+(validation or policy refusal, or withheld content), or `skipped` (duplicate or
+unmet-dependency skip). `detail` is optional and already redacted by PSFN.
 
 `emotion.snapshot`
 

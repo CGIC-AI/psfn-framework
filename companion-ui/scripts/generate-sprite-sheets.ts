@@ -5,11 +5,11 @@
 // since this repo's Node has no TypeScript loader). The runtime never runs this
 // — it loads the committed public/sprites/manifest.json at boot.
 //
-// To swap in real art: replace the PNGs in public/sprites/ with final sheets
-// that honour each sheet's grid (cols x rows, frameSize) from the manifest,
-// then flip `placeholder` provenance in the manifest builder options below.
+// Real art is packed by scripts/pack-sprite-sheets.ts (npm run sprites:pack),
+// which keeps per-entry provenance truthful; this generator refuses to
+// overwrite a manifest that already lists real-art entries.
 
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { buildSpriteManifest } from '../src/lib/sprites/manifest.js';
 import { renderSpriteSheets } from '../src/lib/sprites/render-sprites.js';
@@ -21,6 +21,16 @@ function main(): void {
   const outDir = resolve(process.cwd(), 'public', 'sprites');
 
   mkdirSync(outDir, { recursive: true });
+
+  // Never overwrite packed real art with placeholders.
+  const manifestPath = join(outDir, 'manifest.json');
+  if (existsSync(manifestPath)) {
+    const existing = JSON.parse(readFileSync(manifestPath, 'utf8')) as { entries?: Record<string, { placeholder?: boolean }> };
+    const real = Object.values(existing.entries ?? {}).filter((entry) => entry.placeholder === false).length;
+    if (real > 0) {
+      throw new Error(`${manifestPath} lists ${real} real-art entries; repack with npm run sprites:pack instead of regenerating placeholders`);
+    }
+  }
 
   // Clean previously generated placeholder PNGs (but not other files) so a
   // taxonomy shrink never leaves orphaned sheets behind.

@@ -4,6 +4,7 @@ import { createComponentLogger } from '../../../shared/logger.js';
 import {
   EPISODE_ARC_KINDS,
   type Episode,
+  type EpisodeArc,
   type EpisodeArcKind,
 } from '../../../shared/contracts/episodic-memory.js';
 import { resolveKnownEpisodeId } from './episode-ids.js';
@@ -30,8 +31,8 @@ export interface ArcFormationOptions {
   /** Confidence floor below which proposed arcs are rejected (0..1). */
   minConfidence?: number;
   /**
-   * Safety bound on a single arc-driven topic-thread merge (apq0). A losing
-   * thread larger than this is left unmerged fail-safe. Defaults to
+   * Safety bound on a topic thread (apq0, d5e0p.1). A union whose merged
+   * thread would be larger than this is left unmerged fail-safe. Defaults to
    * DEFAULT_MAX_THREAD_EPISODES.
    */
   maxThreadEpisodes?: number;
@@ -87,7 +88,12 @@ const DEFAULT_PASS_INTERVAL_MS = 6 * 24 * 60 * 60_000;
 const DEFAULT_REVIEW_WINDOW_MS = 30 * 24 * 60 * 60_000;
 const DEFAULT_MAX_ARCS_PER_RUN = 12;
 const DEFAULT_MAX_EPISODES_PER_RUN = 60;
-const DEFAULT_MAX_THREAD_EPISODES = 500;
+/**
+ * Runtime topic-thread cap. The thread recompute repair uses this same value:
+ * arc replay re-attempts every cap-refused thread-forming arc under this cap,
+ * so a recompute under any other cap would not stay as computed.
+ */
+export const DEFAULT_MAX_THREAD_EPISODES = 500;
 const MIN_EPISODES_FOR_PASS = 4;
 const MIN_ARC_CONFIDENCE = 0.5;
 const ARC_FORMATION_PROCESSOR = 'arc_formation';
@@ -379,10 +385,10 @@ export class EpisodeArcWeaver {
         const source = episodesById.get(sourceEpisodeId);
         const target = episodesById.get(targetEpisodeId);
         if (!source || !target) continue;
-        const arcExists = await this.arcAlreadyExists(source.id, target.id);
-        if (!arcExists) {
+        let arcKind = (await this.findExistingArc(source.id, target.id))?.arcKind;
+        if (!arcKind) {
           if (result.writtenArcs >= this.maxArcsPerRun) break;
-          await this.store.writeEpisodeArc({
+          const written = await this.store.writeEpisodeArc({
             sourceEpisodeId: source.id,
             targetEpisodeId: target.id,
             arcKind: proposal.kind,
@@ -400,16 +406,20 @@ export class EpisodeArcWeaver {
               reason: proposal.reason || `arc proposal "${proposal.label}"`,
             },
           });
+          arcKind = written.arcKind;
           result.writtenArcs += 1;
         }
         // apq0: materialize topic-thread identity. A thread-forming arc puts
-        // its episodes in one topic thread (a same_theme/recurrence proposal
-        // does not, d5e0p.1); union onto the min-id representative and persist. This also retries the union when
-        // the arc already existed, rather than permanently skipping it after a
-        // prior post-commit failure. Mutates the in-memory episodes so a
-        // chained arc (A-B-C) converges within this pass.
+        // its episodes in one topic thread; union onto the min-id
+        // representative and persist. The union follows the PERSISTED arc's
+        // kind (d5e0p.1): an existing arc is not rewritten, so a re-proposal of
+        // a different kind must not merge threads the stored arc does not
+        // justify. This also retries the union when the arc already existed,
+        // rather than permanently skipping it after a prior post-commit
+        // failure. Mutates the in-memory episodes so a chained arc (A-B-C)
+        // converges within this pass.
         await applyThreadUnionForArc(this.store, source, target, {
-          arcKind: proposal.kind,
+          arcKind,
           maxThreadEpisodes: this.maxThreadEpisodes,
           now: this.now,
           ...(this.onThreadAssignment ? { onEvent: this.onThreadAssignment } : {}),
@@ -474,9 +484,9 @@ export class EpisodeArcWeaver {
     }
   }
 
-  private async arcAlreadyExists(sourceEpisodeId: string, targetEpisodeId: string): Promise<boolean> {
+  private async findExistingArc(sourceEpisodeId: string, targetEpisodeId: string): Promise<EpisodeArc | undefined> {
     const arcs = await this.store.listEpisodeArcsForEpisode(sourceEpisodeId, { direction: 'both' });
-    return arcs.some(arc => (
+    return arcs.find(arc => (
       (arc.sourceEpisodeId === sourceEpisodeId && arc.targetEpisodeId === targetEpisodeId)
       || (arc.sourceEpisodeId === targetEpisodeId && arc.targetEpisodeId === sourceEpisodeId)
     ));

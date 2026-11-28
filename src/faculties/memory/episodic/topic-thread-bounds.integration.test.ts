@@ -23,7 +23,6 @@ import { applyThreadUnionForArc, type ThreadAssignmentEvent } from './thread-ass
 // merely recurs) do not merge threads, the cap holds on the WINNING side of a
 // union, and existing mega-threads can be recomputed into bounded threads.
 
-const INTEGRATION_TIMEOUT_MS = 120_000;
 const NOW = new Date('2026-06-30T08:00:00.000Z');
 const CHANNEL_ID = 'discord:dm-long-history';
 
@@ -31,11 +30,11 @@ let harness: PostgresTestHarness | null = null;
 
 beforeAll(async () => {
   harness = await startPostgresTestHarness();
-}, INTEGRATION_TIMEOUT_MS);
+});
 
 afterAll(async () => {
   await harness?.stop();
-}, INTEGRATION_TIMEOUT_MS);
+});
 
 async function withEpisodicDatabase<T>(
   operation: (pool: Pool, store: PostgresEpisodicStore) => Promise<T>,
@@ -147,7 +146,7 @@ describe('bounded topic threads (real Postgres)', () => {
       expect(merged.skippedOversize).toBe(false);
       expect(await threadOf(store, 'ep-z9')).toBe('ep-a1');
     });
-  }, INTEGRATION_TIMEOUT_MS);
+  });
 
   it('never merges threads for recurring-subject arcs, live or on replay', async () => {
     await withEpisodicDatabase(async (pool, store) => {
@@ -189,6 +188,16 @@ describe('bounded topic threads (real Postgres)', () => {
               confidence: 0.85,
               reason: 'one build progressing',
             },
+            {
+              // Re-proposes, as a continuation, a pair that already holds a
+              // same_theme arc. The stored arc is not rewritten, so it must
+              // not merge threads either.
+              episode_ids: ['ep-1', 'ep-2'],
+              kind: 'continuation',
+              label: 'daily check-ins',
+              confidence: 0.85,
+              reason: 'the check-in picks up again',
+            },
           ],
         }),
       }));
@@ -200,7 +209,7 @@ describe('bounded topic threads (real Postgres)', () => {
       expect(await threadOf(store, 'ep-2')).toBe('ep-2');
       expect([...(await liveThreadSizes(pool)).values()].sort()).toEqual([1, 3]);
     });
-  }, INTEGRATION_TIMEOUT_MS);
+  });
 
   it('keeps a long single-channel history with recurring generic themes in bounded, distinct topic threads', async () => {
     await withEpisodicDatabase(async (pool, store) => {
@@ -336,7 +345,7 @@ describe('bounded topic threads (real Postgres)', () => {
         'Spanish lessons follow-up',
       ]);
     });
-  }, INTEGRATION_TIMEOUT_MS);
+  });
 
   it('recomputes an existing mega-thread into bounded topic threads, leaving legacy session threads alone', async () => {
     await withEpisodicDatabase(async (pool, store) => {
@@ -404,6 +413,23 @@ describe('bounded topic threads (real Postgres)', () => {
         siblingLimit: 10,
       });
       expect(drilldown?.threadSiblings.map(episode => episode.id)).toEqual(['ep-05']);
+
+      // The next weaver pass replays every thread-forming arc whose endpoints
+      // are still in different threads, including the cap-refused
+      // ep-03 -> ep-04. Under the same cap it refuses it again, so the
+      // recompute stays as computed.
+      const weaver = new EpisodeArcWeaver(
+        store,
+        { complete: vi.fn(async () => ({ content: JSON.stringify({ arcs: [] }) })) },
+        { now: () => NOW, maxThreadEpisodes: 3 },
+      );
+      await weaver.run({ sessionId: CHANNEL_ID });
+      expect(await threadOf(store, 'ep-04')).toBe('ep-04');
+      expect(await threadOf(store, 'ep-03')).toBe('ep-01');
+      // The live union's existing legacy handling (apq0) extracts only the
+      // arc endpoint out of the session bucket.
+      expect(await threadOf(store, 'ep-legacy')).toBe('ep-05');
+      expect(Math.max(...(await liveThreadSizes(pool)).values())).toBeLessThanOrEqual(3);
     });
-  }, INTEGRATION_TIMEOUT_MS);
+  });
 });

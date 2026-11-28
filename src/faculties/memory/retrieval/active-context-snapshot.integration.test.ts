@@ -17,7 +17,6 @@ import type { PurrMemory } from '../types.js';
 // not rewrite it, and the snapshot must carry the provenance of the retrieval
 // that produced it so the turn can report exactly that.
 
-const INTEGRATION_TIMEOUT_MS = 120_000;
 const QUERY_TEXT = 'harbor lighthouse restoration';
 const NEXT_QUERY_TEXT = 'lighthouse restoration crew schedule';
 const QUERY_EMBEDDING = new Float32Array([1, 0, 0, 0]);
@@ -27,11 +26,11 @@ let harness: PostgresTestHarness | null = null;
 
 beforeAll(async () => {
   harness = await startPostgresTestHarness();
-}, INTEGRATION_TIMEOUT_MS);
+});
 
 afterAll(async () => {
   await harness?.stop();
-}, INTEGRATION_TIMEOUT_MS);
+});
 
 async function withMemoryDatabase<T>(handler: (pool: Pool) => Promise<T>): Promise<T> {
   if (!harness) throw new Error('Postgres integration harness is not available');
@@ -129,5 +128,5 @@ describe('active memory snapshot isolation (real Postgres retriever)', () => {
       expect(consumed?.contextBlock).not.toContain('crew starts on Monday');
       expect(consumed?.disclosureMemorySources?.map(source => source.ref)).toEqual(['memory:mem-consumed']);
     });
-  }, INTEGRATION_TIMEOUT_MS);
+  });
 });

@@ -1476,6 +1476,7 @@ async function composeCompanionRuntime(
     {
       eventBus,
       llmProvider,
+      reasoningEffort: agentLoop.getReasoningEffortRuntime(),
       decisionRuntime,
       automataClassLifecycle,
       capabilityTier: config.capabilityTier,

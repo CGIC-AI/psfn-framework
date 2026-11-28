@@ -2,7 +2,7 @@
 // Creates pi-ai Model objects for OpenAI-compatible routed endpoints, such as
 // a configured shared OpenAI-compatible router.
 
-import type { Api, Model } from '@earendil-works/pi-ai';
+import type { Api, Model, ThinkingLevelMap } from '@earendil-works/pi-ai';
 import type {
   LLMSystemPromptTransport,
   LLMSystemRoleCapabilityMetadata,
@@ -10,7 +10,7 @@ import type {
   ModelRegistryCostMetadata,
 } from '../../shared/contracts/runtime.js';
 
-interface ModelLookupRuntime {
+export interface ModelLookupRuntime {
   getModels(provider: string): readonly Model<Api>[];
 }
 
@@ -39,6 +39,8 @@ export interface OpenAICompatibleEndpointModelConfig {
   cost?: ModelRegistryCostMetadata;
   /** Format for reasoning parameter — required when reasoning: true */
   thinkingFormat?: 'openai' | 'zai' | 'qwen';
+  /** Provider level names for reasoning efforts, copied from the catalogue entry. */
+  thinkingLevelMap?: ThinkingLevelMap;
 }
 
 function resolveRoutedThinkingFormat(
@@ -104,6 +106,23 @@ export function resolveRegisteredModel(
 }
 
 /**
+ * The catalogue's reasoning metadata for a provider/model, without handing out
+ * a transport-capable Model: whether it reasons and its provider level names.
+ */
+export function resolveRegisteredReasoningMetadata(
+  runtime: ModelLookupRuntime,
+  provider: string,
+  modelId: string,
+): { reasoning: boolean; thinkingLevelMap?: ThinkingLevelMap } | null {
+  const model = resolveRegisteredModel(runtime, provider, modelId);
+  if (!model) return null;
+  return {
+    reasoning: model.reasoning === true,
+    ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
+  };
+}
+
+/**
  * Create a pi-ai Model that routes through an OpenAI-compatible endpoint.
  */
 export function createOpenAICompatibleEndpointModel(
@@ -118,6 +137,7 @@ export function createOpenAICompatibleEndpointModel(
     provider: config.provider,
     baseUrl: config.baseUrl,
     reasoning: config.reasoning ?? false,
+    ...(config.reasoning && config.thinkingLevelMap ? { thinkingLevelMap: config.thinkingLevelMap } : {}),
     input: config.supportsVision ? ['text', 'image'] : ['text'],
     cost: {
       input: config.cost?.inputPer1MUsd ?? 0,

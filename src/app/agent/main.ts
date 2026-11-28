@@ -1853,6 +1853,7 @@ async function main(): Promise<void> {
     {
       eventBus,
       llmProvider,
+      reasoningEffort: agentLoop.getReasoningEffortRuntime(),
       decisionRuntime: coreRuntime.decisionRuntime,
       ...(coreRuntime.automataClassLifecycle
         ? { automataClassLifecycle: coreRuntime.automataClassLifecycle }

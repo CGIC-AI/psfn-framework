@@ -81,6 +81,7 @@ import {
   normalizeExecutionTools,
   normalizeTransportTools,
 } from './transport-tool-schema.js';
+import type { ReasoningEffortRuntime } from './reasoning-effort/runtime.js';
 
 const log = createComponentLogger('StreamAdapter');
 const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set(['openrouter', 'local_endpoint']);
@@ -127,6 +128,12 @@ export interface SubstrateStreamRuntimeOptions {
   onTerminalFailure?: (event: StreamTerminalFailureEvent) => void | Promise<void>;
   onProviderFirstOutput?: (event: ProviderFirstOutputEvent) => void | Promise<void>;
   onProviderPayloadCaptured?: (event: ProviderPayloadCapturedEvent) => void | Promise<void>;
+  /**
+   * Sets each candidate's reasoning effort from the turn's lane and the
+   * companion's own choice (psfn-framework-xzt46). Applied per model call, so a
+   * choice made by a tool call reaches the very next request of the turn.
+   */
+  reasoningEffort?: Pick<ReasoningEffortRuntime, 'applyToCandidates'>;
   transport: SubstrateStreamTransport;
 }
 
@@ -178,12 +185,16 @@ export function createSubstrateStreamFn(
       options?.maxTokens,
       requestContext?.requestedMaxOutputTokens,
     );
-    const candidates = resolveStreamCandidates(
+    const routedCandidates = resolveStreamCandidates(
       config,
       purpose,
       model,
       callerMaxTokens,
     );
+    const reasoningEffort = runtimeOptions.reasoningEffort;
+    const candidates = reasoningEffort
+      ? reasoningEffort.applyToCandidates(routedCandidates, requestContext)
+      : routedCandidates;
     const logicalCallId = `llm:${randomUUID()}:chat:${purpose}`;
     let physicalAttempt = 0;
 

@@ -28,6 +28,7 @@ import type { BiographicalDepthPolicy } from './biographical-depth-policy.js';
 import type { BiographicalCandidatePolicy } from './biographical-candidate-policy.js';
 import type { ShellExecSettings } from './shell-exec-config.js';
 import type { DecisionBackendSettings } from './decision-backend-config.js';
+import type { ReasoningEffortSettings } from './reasoning-effort-config.js';
 import type { RuntimeCompanionId } from '../../shared/routing/companion-id.js';
 import type {
   FleetAuthConfig,
@@ -440,6 +441,8 @@ export interface SubstrateConfig {
   shellExec?: ShellExecSettings;
   /** settings.json-owned typed-decision backend selection (epic 4lf3r); absent = local. */
   decisionBackend?: DecisionBackendSettings;
+  /** settings.json-owned per-lane reasoning-effort baseline (psfn-framework-xzt46). */
+  reasoningEffort?: ReasoningEffortSettings;
   capabilityTier?: CapabilityTier;
   disabledTools?: string[];
   compositionalPolicy?: CompositionalPolicyConfig;

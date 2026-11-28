@@ -1,4 +1,7 @@
-import { isCompanionSelfReflectionContext } from '../../primitives/llm/request-context.js';
+import {
+  isCompanionSelfCreationContext,
+  isCompanionSelfReflectionContext,
+} from '../../primitives/llm/request-context.js';
 // ── pi-agent-core Agent-Loop Graft ──
 // Part of the pi-agent version-coupling boundary (see ./index.ts). This file
 // monkey-patches PRIVATE pi-agent-core Agent internals, which no semver
@@ -238,9 +241,15 @@ export function installAgentToolSchedulerPatch(
       throw new Error('Agent is already processing.');
     }
 
+    // The companion's own time (reflection and free time) is not on a
+    // conversation clock: a turn that reasons at length keeps its entry fuse
+    // but not the wall-clock fuse (psfn-framework-xzt46).
+    const turnContext = getRequestContext();
     const continuationFuse = new ParentTurnContinuationFuse({
       ...continuationFuseLimits,
-      ...(isCompanionSelfReflectionContext(getRequestContext()) ? { maxWallTimeMs: null } : {}),
+      ...(isCompanionSelfReflectionContext(turnContext) || isCompanionSelfCreationContext(turnContext)
+        ? { maxWallTimeMs: null }
+        : {}),
     });
     const abortController = new AbortController();
     const requestId = getRequestContext()?.requestId;

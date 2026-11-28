@@ -34,6 +34,7 @@ import type {
   LLMContext,
 } from '../../shared/contracts/runtime.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
+import type { ReasoningEffortRuntime } from '../agent/reasoning-effort/runtime.js';
 import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
 import { wrapUntrustedContext } from '../session/manager-primitives.js';
 import { isRecord } from '../../shared/utils/types.js';
@@ -187,6 +188,11 @@ export interface FreeTimeChooserPorts {
   readonly resolveIdentityPrompt: () => string | null;
   readonly companionId?: string;
   readonly settings?: FreeTimeChooserSettings;
+  /**
+   * The free-time lane's reasoning effort, consulted to tell whether the
+   * choice call reasons (it then runs under `chooserReasoningDeadlineMs`).
+   */
+  readonly reasoningEffort?: Pick<ReasoningEffortRuntime, 'resolveModelHint'>;
 }
 
 const TIMEOUT_SENTINEL = Symbol('free-time-chooser-timeout');
@@ -362,13 +368,22 @@ export class FreeTimeChooser {
     choiceSet: FreeTimeChoiceSet,
     identityPrompt: string,
   ): Promise<string | typeof TIMEOUT_SENTINEL> {
+    const correlation = this.buildCorrelation(context);
+    // Reasoning tokens precede the short choice: a reasoning call runs under
+    // its own deadline when that is the longer one, never under a shorter
+    // deadline than the owner set for the answer (psfn-framework-cdqin).
+    const reasons = this.ports.reasoningEffort?.resolveModelHint('background', correlation) !== undefined;
+    const deadlineCap = reasons && this.settings.chooserReasoningDeadlineMs > this.settings.chooserDeadlineMs
+      ? 'chooserReasoningDeadlineMs'
+      : 'chooserDeadlineMs';
+    const deadlineMs = this.settings[deadlineCap];
     const controller = new AbortController();
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<typeof TIMEOUT_SENTINEL>((resolve) => {
       timeoutHandle = setTimeout(() => {
         controller.abort();
         resolve(TIMEOUT_SENTINEL);
-      }, this.settings.chooserDeadlineMs);
+      }, deadlineMs);
     });
 
     try {
@@ -377,8 +392,8 @@ export class FreeTimeChooser {
         purpose: 'background',
         durable: false,
         maxOutputTokens: this.settings.chooserMaxOutputTokens,
-        deadlineMs: this.settings.chooserDeadlineMs,
-        correlation: this.buildCorrelation(context),
+        deadlineMs,
+        correlation,
       });
 
       const completionPromise = completeWithWorkSpec(
@@ -393,6 +408,12 @@ export class FreeTimeChooser {
 
       const outcome = await Promise.race([completionPromise, deadline]);
       if (outcome === TIMEOUT_SENTINEL) {
+        log.info('Free-time chooser call stopped by a cap', {
+          lane: context.lane,
+          setting: deadlineCap,
+          limitMs: deadlineMs,
+          reasoning: reasons,
+        });
         return TIMEOUT_SENTINEL;
       }
       return outcome.content;

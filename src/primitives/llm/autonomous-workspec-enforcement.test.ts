@@ -19,8 +19,12 @@ const SCAN_ROOTS = [join(SRC_ROOT, 'core'), join(SRC_ROOT, 'faculties')];
 //  - subagents/work-spec.ts is a forwarding provider decorator (mmo9.7.7) that
 //    THREADS the work spec onto the wrapped provider's calls — it adds the spec
 //    rather than omitting it, the same role as the contracts.ts adapter.
+//  - reasoning-effort/provider.ts is a forwarding decorator (psfn-framework-xzt46)
+//    that adds the lane's reasoning effort to the caller's options, work spec
+//    included, and forwards them unchanged otherwise.
 const ALLOWLIST = new Set<string>([
   'core/agent/contracts.ts',
+  'core/agent/reasoning-effort/provider.ts',
   'faculties/subagents/work-spec.ts',
 ]);
 

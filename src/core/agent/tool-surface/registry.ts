@@ -319,7 +319,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     domain: 'system',
     exposure: 'core',
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.self_status,
-    actions: ['capabilities', 'snapshot', 'diagnose', 'logs', 'conformance', 'availability_read', 'availability_publish', 'availability_clear', 'availability_list_peers'],
+    actions: ['capabilities', 'snapshot', 'diagnose', 'logs', 'conformance', 'availability_read', 'availability_publish', 'availability_clear', 'availability_list_peers', 'reasoning_read', 'reasoning_set', 'reasoning_clear'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [],
   },

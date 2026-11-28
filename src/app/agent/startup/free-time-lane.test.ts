@@ -181,6 +181,7 @@ describe('registerFreeTimeLane production composition', () => {
     const observedPriorAssistantContent: string[][] = [];
     const makeAgent = (responseContent: string): SubstrateAgent => ({
       getCurrentAuthoritativeSystemPrompt: () => 'You are Companion, who loves moon gardens.',
+      getReasoningEffortRuntime: () => ({ resolveModelHint: () => undefined }),
       handleMessage: vi.fn(async (
         message: SubstrateMessage,
         _deliveryLifecycle: Parameters<SubstrateAgent['handleMessage']>[1],
@@ -265,6 +266,7 @@ describe('registerFreeTimeLane production composition', () => {
     const promptsReceived: string[] = [];
     const agentLoop = {
       getCurrentAuthoritativeSystemPrompt: () => 'You are Companion.',
+      getReasoningEffortRuntime: () => ({ resolveModelHint: () => undefined }),
       handleMessage: vi.fn(async (message: SubstrateMessage) => {
         promptsReceived.push(message.content);
         return {

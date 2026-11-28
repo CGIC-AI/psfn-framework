@@ -154,8 +154,8 @@ const VALID_TEMPLATE_MODES = new Set(['standard', 'deliberation']);
 const VALID_DELIBERATION_PURPOSES = new Set(['background', 'reasoning']);
 
 const DELIBERATION_MAX_ROUNDS_RANGE = { min: 1, max: 8 };
-const DELIBERATION_MAX_TOTAL_TOKENS_RANGE = { min: 512, max: 50_000 };
-const DELIBERATION_MAX_WALL_TIME_RANGE_MS = { min: 1_000, max: 300_000 };
+const DELIBERATION_MAX_TOTAL_TOKENS_RANGE = { min: 512, max: 2_000_000 };
+const DELIBERATION_MAX_WALL_TIME_RANGE_MS = { min: 1_000, max: 3_600_000 };
 
 function isCadenceTimezone(value: unknown): value is 'local' | 'utc' {
   return value === 'local' || value === 'utc';
@@ -511,8 +511,8 @@ function getDefaults(): ReflectionPolicy {
         mode: 'deliberation',
         deliberation: {
           maxRounds: 3,
-          maxTotalTokens: 10_000,
-          maxWallTimeMs: 60_000,
+          maxTotalTokens: 200_000,
+          maxWallTimeMs: 900_000,
           voices: ['background', 'reasoning'],
         },
       },
@@ -527,8 +527,8 @@ function getDefaults(): ReflectionPolicy {
         mode: 'deliberation',
         deliberation: {
           maxRounds: 3,
-          maxTotalTokens: 14_000,
-          maxWallTimeMs: 90_000,
+          maxTotalTokens: 280_000,
+          maxWallTimeMs: 1_350_000,
           voices: ['reasoning', 'background'],
         },
       },
@@ -550,8 +550,8 @@ function getDefaults(): ReflectionPolicy {
         mode: 'deliberation',
         deliberation: {
           maxRounds: 3,
-          maxTotalTokens: 10_000,
-          maxWallTimeMs: 60_000,
+          maxTotalTokens: 200_000,
+          maxWallTimeMs: 900_000,
           voices: ['reasoning', 'background'],
         },
       },
@@ -560,6 +560,29 @@ function getDefaults(): ReflectionPolicy {
     updatedAt: new Date().toISOString(),
     updatedBy: 'system',
   };
+}
+
+/**
+ * The shipped deliberation caps for a reflection template: its own default
+ * when it is one of the shipped templates, otherwise the daily reflection's.
+ * They are sized for deliberation at medium/high reasoning (psfn-framework-cdqin):
+ * three rounds of up to three calls, each carrying the full authoritative
+ * system prompt plus reasoning and answer tokens. The previous 10k/14k token
+ * and 60s/90s caps were sized for non-reasoning calls; non-reasoning daily
+ * reviews already used 9-12k tokens and stopped on the time cap.
+ */
+export function getShippedDeliberationCaps(
+  templateId: string,
+): { maxTotalTokens: number; maxWallTimeMs: number } {
+  const templates = getDefaults().templates;
+  const shipped = templates.find(template => template.id === templateId)
+    ?? templates.find(template => template.id === DAILY_REVIEW_TEMPLATE_ID);
+  const maxTotalTokens = shipped?.deliberation?.maxTotalTokens;
+  const maxWallTimeMs = shipped?.deliberation?.maxWallTimeMs;
+  if (maxTotalTokens === undefined || maxWallTimeMs === undefined) {
+    throw new Error('Shipped reflection templates must declare deliberation caps');
+  }
+  return { maxTotalTokens, maxWallTimeMs };
 }
 
 // ── Store ──

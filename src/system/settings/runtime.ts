@@ -37,6 +37,7 @@ import {
 import { cloneMemoryDeletionPolicy } from '../config/memory-deletion-policy.js';
 import { createDefaultShellExecSettings } from '../config/shell-exec-config.js';
 import { createDefaultDecisionBackendSettings } from '../config/decision-backend-config.js';
+import { createDefaultReasoningEffortSettings } from '../config/reasoning-effort-config.js';
 import { cloneCogSecPersonaConformanceSettings } from '../config/cogsec-persona-conformance-config.js';
 import {
   cloneImageWorkflowSettings,
@@ -165,6 +166,7 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'fsReadMaxBytes',
   'shellExec',
   'decisionBackend',
+  'reasoningEffort',
   'voiceSessionTimeoutMs',
   'voiceMaxFrameBytes',
   'voiceMaxPendingFrames',
@@ -489,6 +491,9 @@ function getWebAndGardenSettingsSnapshot(config: SubstrateConfig) {
     decisionBackend: structuredClone(
       config.decisionBackend ?? createDefaultDecisionBackendSettings(),
     ),
+    reasoningEffort: {
+      ...(config.reasoningEffort ?? createDefaultReasoningEffortSettings()),
+    },
     chatApiBaseUrl:
       (config as SubstrateConfig & { chatApiBaseUrl?: string })
         .chatApiBaseUrl ?? null,
@@ -514,6 +519,7 @@ function getWebAndGardenSettingsSnapshot(config: SubstrateConfig) {
     | 'promotedExtendedTools'
     | 'shellExec'
     | 'decisionBackend'
+    | 'reasoningEffort'
     | 'chatApiBaseUrl'
     | 'comfyUiBaseUrl'
     | 'imageProvider'

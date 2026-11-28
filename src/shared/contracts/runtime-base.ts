@@ -233,7 +233,9 @@ export interface BroadcastRoutingMetadata {
   visibilityScope?: 'public_only' | 'approved_private_context';
 }
 
-export type ModelThinkingEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+/** Reasoning effort levels, ordered from least to most reasoning. */
+export const MODEL_THINKING_EFFORT_VALUES = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+export type ModelThinkingEffort = typeof MODEL_THINKING_EFFORT_VALUES[number];
 
 export interface ModelControlKnobs {
   maxTokens?: number;

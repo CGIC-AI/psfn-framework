@@ -4,6 +4,7 @@ import { runDeliberation } from '../../../primitives/llm/deliberation.js';
 import type { DeliberationResult, DeliberationStageDefinition } from '../../../primitives/llm/deliberation.js';
 import type { ValuesDeliberationMetadata } from '../../../faculties/values/store.js';
 import type { ContextMessage, CorrelationMetadata } from '../../../shared/contracts/runtime.js';
+import type { OwnTimeDeliberationCaps, OwnTimeDeliberationShape } from './own-time-deliberation-caps.js';
 import {
   extractEmbeddedJsonObject,
   normalizeUnsupportedClaimFlags,
@@ -21,6 +22,8 @@ interface ExperientialDeliberationExecutionResult {
   reflection: string;
   metadata: ValuesDeliberationMetadata;
   metacognitiveFlags: ReflectionMetacognitiveFlag[];
+  /** The raw run, for the caller's cap reporting. */
+  deliberation: DeliberationResult;
 }
 
 export interface RunExperientialTemplateDeliberationInput {
@@ -30,6 +33,8 @@ export interface RunExperientialTemplateDeliberationInput {
   authoritativeSystemPrompt: string;
   correlation: Partial<CorrelationMetadata>;
   logger: ExperientialDeliberationLogger;
+  /** Own-time run caps, resolved by the caller (see own-time-deliberation-caps). */
+  caps: OwnTimeDeliberationCaps;
   toDeliberationMetadata(result: DeliberationResult): ValuesDeliberationMetadata;
 }
 
@@ -174,6 +179,22 @@ const buildExperientialDeliberationStages = (
   },
 ];
 
+function experientialMaxRounds(template: ReflectionTemplate): number {
+  return Math.max(1, Math.min(3, Math.floor(template.deliberation?.maxRounds ?? 3)));
+}
+
+/** The experiential stage sequence as an own-time run shape: one call per stage. */
+export function experientialDeliberationShape(template: ReflectionTemplate): OwnTimeDeliberationShape {
+  const stages = buildExperientialDeliberationStages(template);
+  return {
+    rounds: Math.min(stages.length, experientialMaxRounds(template)),
+    callsPerRound: 1,
+    // The last stage carries every earlier stage's output.
+    carriedOutputs: stages.length - 1,
+    purposes: stages.map(stage => stage.purpose),
+  };
+}
+
 function shapeExperientialDeliberationResult(
   result: DeliberationResult,
   prompt: string,
@@ -210,6 +231,7 @@ export async function runExperientialTemplateDeliberation({
   authoritativeSystemPrompt,
   correlation,
   logger,
+  caps,
   toDeliberationMetadata,
 }: RunExperientialTemplateDeliberationInput): Promise<ExperientialDeliberationExecutionResult> {
   if (!llmProvider) {
@@ -225,9 +247,9 @@ export async function runExperientialTemplateDeliberation({
     correlation,
     stages: buildExperientialDeliberationStages(template),
     caps: {
-      maxRounds: Math.max(1, Math.min(3, Math.floor(template.deliberation?.maxRounds ?? 3))),
-      maxTotalTokens: Math.max(256, Math.floor(template.deliberation?.maxTotalTokens ?? 6_000)),
-      maxWallTimeMs: Math.max(250, Math.floor(template.deliberation?.maxWallTimeMs ?? 35_000)),
+      maxRounds: experientialMaxRounds(template),
+      maxTotalTokens: Math.max(256, Math.floor(caps.maxTotalTokens)),
+      maxWallTimeMs: Math.max(250, Math.floor(caps.maxWallTimeMs)),
     },
     cost: {
       inputUsdPerMillionTokens: template.deliberation?.inputUsdPerMillionTokens
@@ -242,5 +264,6 @@ export async function runExperientialTemplateDeliberation({
     reflection: shaped.reflection,
     metadata: toDeliberationMetadata(result),
     metacognitiveFlags: shaped.metacognitiveFlags,
+    deliberation: result,
   };
 }

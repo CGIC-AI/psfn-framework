@@ -1033,6 +1033,22 @@ describe('social-autonomy owner-file config (jp36.8.2)', () => {
     expect(validated.socialAutonomy.freeTimeChooser.projectListCap).toBe(0);
   });
 
+  it('gives an owner file without chooserReasoningDeadlineMs the default and keeps an owner value', () => {
+    const inherited = validateSchedulerConfig(
+      { ...buildValidSchedulerConfig(), socialAutonomy: { freeTimeChooser: { chooserDeadlineMs: 60_000 } } },
+      'test',
+    );
+    expect(inherited.socialAutonomy.freeTimeChooser).toMatchObject({
+      chooserDeadlineMs: 60_000,
+      chooserReasoningDeadlineMs: 300_000,
+    });
+    const chosen = validateSchedulerConfig(
+      { ...buildValidSchedulerConfig(), socialAutonomy: { freeTimeChooser: { chooserReasoningDeadlineMs: 120_000 } } },
+      'test',
+    );
+    expect(chosen.socialAutonomy.freeTimeChooser.chooserReasoningDeadlineMs).toBe(120_000);
+  });
+
   it('warns when chooser silence can outlive the scheduler block interval', () => {
     const warnings: string[] = [];
     const validated = validateSchedulerConfig(
@@ -1127,6 +1143,10 @@ describe('social-autonomy owner-file config (jp36.8.2)', () => {
       [
         { socialAutonomy: { freeTimeChooser: { chooserDeadlineMs: 1.5 } } },
         /freeTimeChooser\.chooserDeadlineMs must be a finite integer >= 1/u,
+      ],
+      [
+        { socialAutonomy: { freeTimeChooser: { chooserReasoningDeadlineMs: 0 } } },
+        /freeTimeChooser\.chooserReasoningDeadlineMs must be a finite integer >= 1/u,
       ],
     ];
     for (const [override, pattern] of cases) {

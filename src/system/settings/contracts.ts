@@ -10,6 +10,7 @@ import type { BiographicalCandidatePolicy } from '../config/biographical-candida
 import type { ActiveMemoryRetrievalMode, CapabilityTier, CompositionalPolicyConfig, LifecycleKubernetesSettings, SessionRestartBehavior, SessionTailCacheSettings, SubstrateConfig, VoiceReplySegmenterSettings, WikiStartupHydrationSettings } from '../config/runtime-config-contracts.js';
 import type { ShellExecSettings } from '../config/shell-exec-config.js';
 import type { DecisionBackendSettings } from '../config/decision-backend-config.js';
+import type { ReasoningEffortSettings } from '../config/reasoning-effort-config.js';
 import type {
   FalCreateModel,
   FalEditModel,
@@ -294,6 +295,7 @@ export interface EditableSettings {
   promotedExtendedTools?: string[];
   shellExec?: ShellExecSettings;
   decisionBackend?: DecisionBackendSettings;
+  reasoningEffort?: ReasoningEffortSettings;
   /** Override the base URL used by Garden Chat to reach the OpenAI-compatible API.
    *  When set, this takes priority over the `API_BASE_URL` env var and the
    *  auto-resolved URL derived from `API_HOST`/`API_PORT`. Useful when the
@@ -457,6 +459,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'promotedExtendedTools',
   'shellExec',
   'decisionBackend',
+  'reasoningEffort',
   'chatApiBaseUrl',
   'comfyUiBaseUrl',
   'imageProvider',

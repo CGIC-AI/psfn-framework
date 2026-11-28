@@ -39,6 +39,7 @@ const MEMORY_LANE_BLOCKS = {
     minSingleEntryChars: 120,
     topicSegmentationEnabled: false,
     maxPriorCandidates: 24,
+    sessionFailure: { maxAttempts: 5, retryBaseDelayMinutes: 60 },
   },
   sleepConsolidation: {
     reviewWindowDays: 60,

@@ -95,6 +95,34 @@ export const POSTGRES_TRANSCRIPT_MIGRATIONS = [
   `ALTER TABLE session_conversational_workset ADD COLUMN IF NOT EXISTS failed_stage TEXT;`,
   `ALTER TABLE session_conversational_workset ADD COLUMN IF NOT EXISTS failure_message TEXT;`,
   `ALTER TABLE session_conversational_workset ADD COLUMN IF NOT EXISTS failed_at_ms BIGINT;`,
+  // psfn-framework-d5e0p.3: bounded per-session failure handling. A failing
+  // claim counts its attempts, holds until `retry_after_ms`, and after the
+  // owner-file cap is released into quarantine at its claimed revision without
+  // advancing the checkpoint, so its unprocessed source is never discarded.
+  // Additive with zero/NULL defaults: a claim already held before this column
+  // existed reads as "no recorded attempts" and enters the bounded path on its
+  // next failure.
+  `ALTER TABLE session_conversational_workset ADD COLUMN IF NOT EXISTS failure_count INTEGER NOT NULL DEFAULT 0;`,
+  `ALTER TABLE session_conversational_workset ADD COLUMN IF NOT EXISTS retry_after_ms BIGINT;`,
+  `ALTER TABLE session_conversational_workset ADD COLUMN IF NOT EXISTS quarantined_revision BIGINT;`,
+  `ALTER TABLE session_conversational_workset ADD COLUMN IF NOT EXISTS quarantined_at_ms BIGINT;`,
+  `ALTER TABLE session_conversational_workset
+    DROP CONSTRAINT IF EXISTS session_conversational_workset_failure_count_check;`,
+  `ALTER TABLE session_conversational_workset
+    ADD CONSTRAINT session_conversational_workset_failure_count_check
+      CHECK (failure_count >= 0);`,
+  `ALTER TABLE session_conversational_workset
+    DROP CONSTRAINT IF EXISTS session_conversational_workset_quarantine_check;`,
+  `ALTER TABLE session_conversational_workset
+    ADD CONSTRAINT session_conversational_workset_quarantine_check
+      CHECK (
+        (quarantined_revision IS NULL AND quarantined_at_ms IS NULL)
+        OR (
+          quarantined_revision > checkpoint_revision
+          AND quarantined_at_ms >= 0
+          AND claimed_by IS NULL
+        )
+      );`,
   `
   CREATE TABLE IF NOT EXISTS session_message_addressing_quarantine (
     channel_id TEXT NOT NULL,

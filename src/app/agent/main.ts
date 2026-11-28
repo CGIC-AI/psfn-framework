@@ -98,6 +98,7 @@ import {
 import {
   subscribeRefreshFailureHealthEvents,
 } from '../../shared/observability/refresh-failure-emitter.js';
+import { subscribeMemoryPipelineFailureHealthEvents } from '../../shared/observability/memory-pipeline-failure-emitter.js';
 import {
   emitHealthEvent,
   processObserverId,
@@ -416,6 +417,15 @@ async function main(): Promise<void> {
   // failure observations. Subscribed here, beside the sink, so the repeated-
   // failure detector (7qeo1.24.3) has something to count from this boot onward.
   const detachRefreshFailureHealthEvents = subscribeRefreshFailureHealthEvents({
+    eventBus,
+    source: {
+      owner: resolveHealthEventOwner(config.companionId),
+      process: 'agent',
+    },
+  });
+  // Recorded memory-pipeline failures (episode synthesis sessions, group
+  // extraction ranges) reach the same detector and incident surfaces.
+  const detachMemoryPipelineFailureHealthEvents = subscribeMemoryPipelineFailureHealthEvents({
     eventBus,
     source: {
       owner: resolveHealthEventOwner(config.companionId),
@@ -1714,6 +1724,7 @@ async function main(): Promise<void> {
       await persistenceRuntime.letterStore.close();
       await persistenceRuntime.doingMirrorStore.close();
       detachRefreshFailureHealthEvents();
+      detachMemoryPipelineFailureHealthEvents();
       detachIncidentAlerts();
       detachHealthEventStream();
       await persistenceRuntime.healthEventStore.close();

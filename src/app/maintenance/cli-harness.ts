@@ -1,6 +1,9 @@
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import type { Pool } from 'pg';
 import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
+import { createPostgresPool } from '../../persistence/postgres.js';
+import { resolveConfigTenantPoolScope } from '../../persistence/postgres/tenant-pool-scope.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { loadConfig } from '../../system/config/load-gateway-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -115,6 +118,26 @@ export interface MaintenanceRuntime {
   backupDir?: string;
   config: SubstrateConfig;
   dataDir: string;
+}
+
+/**
+ * One short-lived pool on the companion's own tenant schema and role, for
+ * maintenance commands that inspect or repair companion-private tables.
+ */
+export function openMaintenanceCompanionPool(config: SubstrateConfig, applicationName: string): Pool {
+  const databaseUrl = config.postgresDatabaseUrl?.trim();
+  if (!databaseUrl) {
+    throw new Error(`${applicationName} requires POSTGRES_DATABASE_URL`);
+  }
+  const tenant = resolveConfigTenantPoolScope(config);
+  const schema = tenant?.schema ?? (config.postgresSchema?.trim() || undefined);
+  return createPostgresPool(databaseUrl, {
+    applicationName,
+    allowExitOnIdle: true,
+    max: 1,
+    ...(schema ? { schema } : {}),
+    ...(tenant ? { role: tenant.role } : {}),
+  });
 }
 
 const defaultRuntimeDependencies: MaintenanceRuntimeDependencies = {

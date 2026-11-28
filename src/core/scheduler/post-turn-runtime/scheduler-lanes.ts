@@ -23,6 +23,7 @@ import {
   EPISODE_SYNTHESIS_ACTION_KIND,
   EPISODE_SYNTHESIS_TIMER_TASK_ID,
   type EpisodeSynthesisGateEvent,
+  type EpisodeSynthesisSessionFailureEvent,
 } from '../../../faculties/memory/episodic/synthesis-lane.js';
 import {
   DriftVelocityReviewLane,
@@ -265,6 +266,21 @@ export function createSchedulerOwnedPostTurnLanes(
               log.warn('Episode-synthesis gate telemetry emit failed', {
                 sessionId: event.sessionId,
                 outcome: event.outcome,
+                error: String(error),
+              });
+            });
+          },
+          onSessionFailure: (event: EpisodeSynthesisSessionFailureEvent): void => {
+            telemetryEventBus.emit('memory.pipeline.failure', {
+              pipeline: 'episode_synthesis',
+              subjectId: event.sessionId,
+              attemptCount: event.attemptCount,
+              maxAttempts: event.maxAttempts,
+              terminal: event.quarantined,
+              timestamp: event.timestamp,
+            }).catch((error) => {
+              log.warn('Episode-synthesis failure telemetry emit failed', {
+                sessionId: event.sessionId,
                 error: String(error),
               });
             });

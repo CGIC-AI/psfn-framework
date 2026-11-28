@@ -1,12 +1,13 @@
 import { createComponentLogger } from '../../../shared/logger.js';
-import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { formatErrorCauseChain, toErrorMessage } from '../../../shared/utils/errors.js';
 import type { InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { Episode, EpisodeArc } from '../../../shared/contracts/episodic-memory.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type {
+  ClaimedConversationalActivityWorkItem,
   ConversationalActivityWorkItem,
-  ConversationalActivityWorksetPort,
+  RecoverableConversationalActivityWorksetPort,
 } from '../../../core/session/conversational-activity-workset.js';
 import {
   isExperientialSelfDirectedSessionId,
@@ -35,6 +36,8 @@ const EPISODE_SYNTHESIS_DRAIN_CLAIMANT_ID = 'episode-synthesis-drain';
 const EPISODIC_SYNTHESIS_PROCESSOR = 'episodic_synthesis';
 const MAX_BEHAVIORAL_SUMMARY_WRITES = 1;
 const BEHAVIORAL_SUMMARY_STAGE_PREFIX = 'behavioral_summary:';
+const EPISODE_SYNTHESIS_FAILURE_STAGE = 'episode_synthesis';
+const MINUTE_MS = 60_000;
 
 interface BehavioralSummaryWrite {
   arc: EpisodeArc;
@@ -46,24 +49,28 @@ class BehavioralSummaryWriteError extends Error {
   readonly logicalSessionId: string;
 
   constructor(logicalSessionId: string, stage: string, cause: unknown) {
-    super(cause instanceof Error ? cause.message : String(cause));
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = 'BehavioralSummaryWriteError';
     this.logicalSessionId = logicalSessionId;
     this.stage = stage;
   }
 }
 
-class EpisodeSynthesisSessionError extends Error {
+/**
+ * The failure bookkeeping itself failed: the session's failure could not be
+ * recorded (or its exhausted claim could not be quarantined). This is the only
+ * per-session condition the drain still rethrows, because without a durable
+ * record nothing bounds the next attempt.
+ */
+class EpisodeSynthesisFailureRecordError extends AggregateError {
   readonly logicalSessionId: string;
   readonly stage: string;
-  override readonly cause: unknown;
 
-  constructor(logicalSessionId: string, stage: string, cause: unknown) {
-    super(toErrorMessage(cause));
-    this.name = 'EpisodeSynthesisSessionError';
+  constructor(logicalSessionId: string, stage: string, errors: unknown[]) {
+    super(errors, `Episode synthesis failure could not be recorded for ${logicalSessionId}`);
+    this.name = 'EpisodeSynthesisFailureRecordError';
     this.logicalSessionId = logicalSessionId;
     this.stage = stage;
-    this.cause = cause;
   }
 }
 
@@ -87,6 +94,21 @@ export interface EpisodeSynthesisGateEvent {
   newEntryCount: number;
   relevantTurnCount: number;
   minRelevantTurns: number;
+  timestamp: number;
+}
+
+/**
+ * One durably recorded per-session failure. Content-free apart from the
+ * session id (the failure text stays on the workset row): telemetry and the
+ * health plane count these, and `quarantined` marks the terminal attempt.
+ */
+export interface EpisodeSynthesisSessionFailureEvent {
+  sessionId: string;
+  stage: string;
+  attemptCount: number;
+  maxAttempts: number;
+  quarantined: boolean;
+  retryAfterMs?: number;
   timestamp: number;
 }
 
@@ -125,7 +147,7 @@ export interface EpisodeSynthesisLaneOptions {
     'getEpisodesByIds' | 'listEpisodeArcsForEpisodes'
   > | null;
   /** Durable changed-session workset shared by all episode drain triggers. */
-  workset: ConversationalActivityWorksetPort;
+  workset: RecoverableConversationalActivityWorksetPort;
   /** JSON-owned gate config (scheduler.json `episodeSynthesis`). Required. */
   config: EpisodeSynthesisLaneConfig;
   /** Canonical direct-vs-group scope classification; absent => direct scope. */
@@ -142,6 +164,8 @@ export interface EpisodeSynthesisLaneOptions {
   companionId?: string;
   /** Gate telemetry sink; wired to the runtime event bus by composition. */
   onGateEvent?: (event: EpisodeSynthesisGateEvent) => void;
+  /** Recorded per-session failure sink; wired to the runtime event bus. */
+  onSessionFailure?: (event: EpisodeSynthesisSessionFailureEvent) => void;
   now?: () => number;
   /** Stable across restart so an interrupted session claim can be reclaimed. */
   claimantId?: string;
@@ -308,7 +332,7 @@ export class EpisodeSynthesisLane {
     EpisodicStorePort,
     'getEpisodesByIds' | 'listEpisodeArcsForEpisodes'
   > | null;
-  private readonly workset: ConversationalActivityWorksetPort;
+  private readonly workset: RecoverableConversationalActivityWorksetPort;
   private readonly config: EpisodeSynthesisLaneConfig;
   private readonly scopeClassifier: NearTurnMemoryScopeClassifierPort | null;
   private readonly companionNames: readonly string[];
@@ -317,6 +341,7 @@ export class EpisodeSynthesisLane {
   private readonly contactStore: SessionCounterpartyContactStore | null;
   private readonly companionId: string | undefined;
   private readonly onGateEvent?: (event: EpisodeSynthesisGateEvent) => void;
+  private readonly onSessionFailure?: (event: EpisodeSynthesisSessionFailureEvent) => void;
   private readonly now: () => number;
   private readonly claimantId: string;
   private turnCount = 0;
@@ -327,6 +352,11 @@ export class EpisodeSynthesisLane {
     assertPositiveInteger(options.config.turnThreshold, 'turnThreshold');
     assertPositiveInteger(options.config.minRelevantTurns, 'minRelevantTurns');
     assertPositiveInteger(options.config.transcriptMessageLimit, 'transcriptMessageLimit');
+    assertPositiveInteger(options.config.sessionFailure.maxAttempts, 'sessionFailure.maxAttempts');
+    assertPositiveInteger(
+      options.config.sessionFailure.retryBaseDelayMinutes,
+      'sessionFailure.retryBaseDelayMinutes',
+    );
     this.config = options.config;
     this.synthesizer = options.synthesizer;
     this.watermarkStore = options.watermarkStore;
@@ -339,6 +369,7 @@ export class EpisodeSynthesisLane {
     this.contactStore = options.contactStore ?? null;
     this.companionId = options.companionId?.trim() || undefined;
     this.onGateEvent = options.onGateEvent;
+    this.onSessionFailure = options.onSessionFailure;
     this.now = options.now ?? (() => Date.now());
     this.claimantId = options.claimantId?.trim() || EPISODE_SYNTHESIS_DRAIN_CLAIMANT_ID;
   }
@@ -402,7 +433,19 @@ export class EpisodeSynthesisLane {
     const failures: Error[] = [];
     let yielded = false;
     for (const workItem of workItems) {
-      const resumedClaim = workItem.claimantId === this.claimantId
+      const ownClaim = workItem.claimantId === this.claimantId;
+      if (ownClaim && workItem.retryAfterMs !== undefined && workItem.retryAfterMs > this.now()) {
+        // A recorded failure holds its claim for the backoff window; other
+        // sessions keep draining around it.
+        log.info('Episode synthesis session is waiting out its failure backoff', {
+          actionId: action.id,
+          logicalSessionId: workItem.logicalSessionId,
+          failureCount: workItem.failureCount ?? 0,
+          retryAfterMs: workItem.retryAfterMs,
+        });
+        continue;
+      }
+      const resumedClaim = ownClaim
         ? await this.workset.resumeClaim({
             purpose: 'episodic_synthesis',
             logicalSessionId: workItem.logicalSessionId,
@@ -425,46 +468,8 @@ export class EpisodeSynthesisLane {
           claimantId: claim.claimantId,
         });
       } catch (error) {
-        const normalizedError = error instanceof Error ? error : new Error(String(error));
-        const stage = error instanceof BehavioralSummaryWriteError ? error.stage : 'episode_synthesis';
-        const errorSummary = toErrorMessage(normalizedError);
-        log.warn('Episode synthesis failed for session', {
-          actionId: action.id,
-          logicalSessionId: claim.logicalSessionId,
-          revision: claim.revision,
-          stage,
-          error: errorSummary.startsWith(claim.logicalSessionId)
-            ? errorSummary
-            : `${claim.logicalSessionId}/${stage}: ${errorSummary}`,
-        });
-        if (error instanceof BehavioralSummaryWriteError) {
-          try {
-            await this.workset.recordFailure({
-              purpose: 'episodic_synthesis',
-              logicalSessionId: claim.logicalSessionId,
-              revision: claim.revision,
-              claimantId: claim.claimantId,
-              stage: error.stage,
-              message: error.message,
-            });
-          } catch (recordError) {
-            log.warn('Episode behavioral-summary failure checkpoint failed', {
-              actionId: action.id,
-              logicalSessionId: claim.logicalSessionId,
-              revision: claim.revision,
-              stage: error.stage,
-              error: toErrorMessage(recordError),
-            });
-            failures.push(new AggregateError(
-              [error, recordError],
-              `Episode behavioral-summary failure could not be checkpointed for ${claim.logicalSessionId}`,
-            ));
-            continue;
-          }
-          failures.push(error);
-          continue;
-        }
-        failures.push(new EpisodeSynthesisSessionError(claim.logicalSessionId, stage, normalizedError));
+        const bookkeepingFailure = await this.recordSessionFailure(action, claim, error);
+        if (bookkeepingFailure) failures.push(bookkeepingFailure);
         continue;
       }
       const disposition = await options.onSafeBoundary?.({
@@ -480,6 +485,97 @@ export class EpisodeSynthesisLane {
       throw new AggregateError(failures, `Episode synthesis drain failed for ${failures.length} session(s)`);
     }
     return { outcome: yielded ? 'yield' : 'complete' };
+  }
+
+  /**
+   * Durably record one session's failure on its workset row and bound it
+   * (psfn-framework-d5e0p.3). Below the owner-file attempt cap the claim stays
+   * held behind an exponential backoff; at the cap it is quarantined at its
+   * claimed revision without advancing the checkpoint, so the session's
+   * unprocessed source survives for newer activity or an operator release.
+   *
+   * A recorded failure is handled, not rethrown: rethrowing would re-run the
+   * whole drain through post-turn retries and report "exhausted retries" for a
+   * condition that is already bounded and visible. Only a failure to record
+   * is returned for the drain to raise.
+   */
+  private async recordSessionFailure(
+    action: Pick<InferredPostTurnAction, 'id'>,
+    claim: ClaimedConversationalActivityWorkItem,
+    error: unknown,
+  ): Promise<Error | null> {
+    const stage = this.resolveFailureStage(claim, error);
+    const message = formatErrorCauseChain(error);
+    const policy = this.config.sessionFailure;
+    const attemptCount = (claim.failureCount ?? 0) + 1;
+    const quarantined = attemptCount >= policy.maxAttempts;
+    const failedAtMs = this.now();
+    const retryAfterMs = quarantined
+      ? undefined
+      : failedAtMs + policy.retryBaseDelayMinutes * MINUTE_MS * 2 ** (attemptCount - 1);
+    const claimInput = {
+      purpose: 'episodic_synthesis' as const,
+      logicalSessionId: claim.logicalSessionId,
+      revision: claim.revision,
+      claimantId: claim.claimantId,
+    };
+    try {
+      await this.workset.recordFailure({
+        ...claimInput,
+        stage,
+        message,
+        ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+      });
+      if (quarantined) {
+        await this.workset.quarantineClaim(claimInput);
+      }
+    } catch (recordError) {
+      log.error('Episode synthesis session failure could not be recorded', {
+        actionId: action.id,
+        logicalSessionId: claim.logicalSessionId,
+        revision: claim.revision,
+        stage,
+        error: message,
+        recordError: toErrorMessage(recordError),
+      });
+      return new EpisodeSynthesisFailureRecordError(claim.logicalSessionId, stage, [error, recordError]);
+    }
+    const details = {
+      actionId: action.id,
+      logicalSessionId: claim.logicalSessionId,
+      revision: claim.revision,
+      stage,
+      attemptCount,
+      maxAttempts: policy.maxAttempts,
+      error: `${claim.logicalSessionId}/${stage}: ${message}`,
+    };
+    if (quarantined) {
+      log.error('Episode synthesis session quarantined after exhausting its retries', details);
+    } else {
+      log.warn('Episode synthesis failed for session', { ...details, retryAfterMs });
+    }
+    this.onSessionFailure?.({
+      sessionId: claim.logicalSessionId,
+      stage,
+      attemptCount,
+      maxAttempts: policy.maxAttempts,
+      quarantined,
+      ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+      timestamp: failedAtMs,
+    });
+    return null;
+  }
+
+  /**
+   * A behavioral-summary write names its own resumable stage. Any other failure
+   * while a behavioral-summary stage is pending keeps that stage, so recording
+   * the new failure never erases the resume pointer.
+   */
+  private resolveFailureStage(claim: ConversationalActivityWorkItem, error: unknown): string {
+    if (error instanceof BehavioralSummaryWriteError) return error.stage;
+    const pendingStage = claim.lastFailure?.stage;
+    if (pendingStage && parseBehavioralSummaryStage(pendingStage)) return pendingStage;
+    return EPISODE_SYNTHESIS_FAILURE_STAGE;
   }
 
   private async executeSession(

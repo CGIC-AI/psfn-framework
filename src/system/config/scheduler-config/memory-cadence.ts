@@ -88,6 +88,20 @@ export interface EpisodeSynthesisLaneConfig {
    * files keep validating.
    */
   maxPriorCandidates: number;
+  /** Bounded per-session failure handling for the changed-session drain. */
+  sessionFailure: EpisodeSynthesisSessionFailureConfig;
+}
+
+/**
+ * psfn-framework-d5e0p.3: a session whose synthesis keeps failing must not hold
+ * its claim forever. Each failure is recorded on the workset row and the claim
+ * waits `retryBaseDelayMinutes * 2^(attempt-1)` before its next retry; after
+ * `maxAttempts` consecutive failures the claim is quarantined (checkpoint not
+ * advanced, source intact) until newer activity or an operator release.
+ */
+export interface EpisodeSynthesisSessionFailureConfig {
+  maxAttempts: number;
+  retryBaseDelayMinutes: number;
 }
 
 export function validateEpisodicProcessingConfig(
@@ -155,6 +169,31 @@ export const DEFAULT_EPISODE_SYNTHESIS_CADENCE: Readonly<
   timezone: 'local',
 };
 
+/**
+ * Optional block (d5e0p.3): an owner file written before bounded failure
+ * handling carries no `sessionFailure`, so an absent block or key takes the
+ * canonical default. Defaults mirror config/scheduler.seed.json
+ * `episodeSynthesis.sessionFailure` — keep in lockstep.
+ */
+function validateEpisodeSynthesisSessionFailure(raw: unknown): EpisodeSynthesisSessionFailureConfig {
+  const block = raw === undefined ? {} : raw;
+  if (!isRecord(block)) {
+    throw new Error('Invalid scheduler config: episodeSynthesis.sessionFailure must be an object');
+  }
+  return {
+    maxAttempts: block.maxAttempts === undefined
+      ? 5
+      : toPositiveInteger(block.maxAttempts, 'episodeSynthesis.sessionFailure.maxAttempts', 1),
+    retryBaseDelayMinutes: block.retryBaseDelayMinutes === undefined
+      ? 60
+      : toPositiveInteger(
+        block.retryBaseDelayMinutes,
+        'episodeSynthesis.sessionFailure.retryBaseDelayMinutes',
+        1,
+      ),
+  };
+}
+
 export function validateEpisodeSynthesisConfig(
   raw: unknown,
   sourcePath: string,
@@ -196,5 +235,6 @@ export function validateEpisodeSynthesisConfig(
     maxPriorCandidates: raw.maxPriorCandidates === undefined
       ? 24
       : toPositiveInteger(raw.maxPriorCandidates, 'episodeSynthesis.maxPriorCandidates', 1),
+    sessionFailure: validateEpisodeSynthesisSessionFailure(raw.sessionFailure),
   };
 }

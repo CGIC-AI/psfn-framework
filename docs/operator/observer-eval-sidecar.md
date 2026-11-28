@@ -20,8 +20,6 @@ sources:
     resource: repo://src/core/eval/observer-sidecar/startup-race.test.ts
   - id: openwiki-source-90076c3f852a7f184bcee16d
     resource: repo://src/operator/garden/api-routes-observer-eval-sidecar.test.ts
-  - id: openwiki-source-1eb870c3858e2c5eca7d7f57
-    resource: repo://src/operator/garden/fleet-garden-direct-database.ts
   - id: openwiki-source-e262197192f0013de214e56f
     resource: repo://src/operator/garden/local-admin-contract.ts
   - id: openwiki-source-8ecb500c761166a90f3c357d

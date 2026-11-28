@@ -28,7 +28,6 @@
     echoTtsPreset = $bindable(''),
     obsidianVaultName = $bindable(''),
     obsidianCliPath = $bindable('obsidian'),
-    obsidianAutoPublish = $bindable(false),
     obsidianTimeoutMs = $bindable(10000),
     discordTriggerWords = $bindable(''),
     discordTriggerReactions = $bindable('👆'),
@@ -51,7 +50,6 @@
     echoTtsPreset: string;
     obsidianVaultName: string;
     obsidianCliPath: string;
-    obsidianAutoPublish: boolean;
     obsidianTimeoutMs: number;
     discordTriggerWords: string;
     discordTriggerReactions: string;
@@ -161,13 +159,6 @@
       />
       <input type="text" id="obsidianCliPath" class="input-garden w-full" bind:value={obsidianCliPath} placeholder="obsidian" />
       <p class="text-xs text-shadow-500 mt-0.5">Path to the Obsidian CLI binary for the external bridge. Default: obsidian</p>
-    </div>
-    <div class="flex items-center gap-3">
-      <input type="checkbox" id="obsidianAutoPublish" class="rounded border-bark-400" bind:checked={obsidianAutoPublish} />
-      <label class="text-xs font-semibold text-shadow-700" for="obsidianAutoPublish">
-        Auto-publish reflections to external vault
-        <code class="ml-1.5 rounded-md border border-bark-200 bg-bark-100 px-1.5 py-0.5 font-mono text-[0.7rem] font-semibold text-shadow-600">obsidianAutoPublish</code>
-      </label>
     </div>
     <div>
       <SettingFieldLabel

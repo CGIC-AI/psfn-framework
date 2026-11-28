@@ -60,6 +60,25 @@ describe('migrateRequiredSettingsBlocks', () => {
     expect(statSync(filePath).ino).toBe(inode);
   });
 
+  it('removes a retired key and keeps every other value (psfn-framework-au0oz)', () => {
+    const seed = JSON.parse(readFileSync('config/settings.seed.json', 'utf8')) as Record<string, unknown>;
+    const { dataDir, filePath } = prepare({ ...seed, obsidianAutoPublish: false });
+    expect(migrateRequiredSettingsBlocks({ dataDir })).toMatchObject({
+      status: 'planned',
+      removedPaths: ['obsidianAutoPublish'],
+    });
+    expect(migrateRequiredSettingsBlocks({ dataDir, apply: true })).toEqual({
+      mode: 'apply',
+      status: 'applied',
+      filePath,
+      removedPaths: ['obsidianAutoPublish'],
+    });
+    expect(JSON.parse(readFileSync(filePath, 'utf8'))).toEqual(seed);
+    expect(migrateRequiredSettingsBlocks({ dataDir, apply: true })).toMatchObject({
+      status: 'not_needed',
+    });
+  });
+
   it('preserves a present block while adding only the absent block', () => {
     const customWiki = { recentSessionLimit: 7, recentMessageLimit: 22, maxContextChars: 7_000 };
     const { dataDir, filePath } = prepare({ wikiStartupHydration: customWiki });

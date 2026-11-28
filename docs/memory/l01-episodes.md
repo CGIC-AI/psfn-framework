@@ -9,10 +9,10 @@ verified:
 sources:
   - id: openwiki-source-47cb2ecb8349302f6b32c54a
     resource: repo://config/scheduler.seed.json
-  - id: openwiki-source-6f7e85b4e053ef435f67ffe8
-    resource: repo://docs/memory-persistence-authority.md
-  - id: openwiki-source-7678fad136f19a333bb7e4a8
-    resource: repo://docs/memory.md
+  - id: openwiki-source-49618c686568d13b7d80269d
+    resource: repo://docs/memory/overview.md
+  - id: openwiki-source-c4965441fe33d799cc794702
+    resource: repo://docs/memory/persistence-authority.md
   - id: openwiki-source-b567b65b1d23df99ef1b850a
     resource: repo://src/app/agent/main.ts
   - id: openwiki-source-8ef4580bc707dd70ae0290b2

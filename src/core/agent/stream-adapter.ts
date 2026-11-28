@@ -32,7 +32,12 @@ import {
   requiresThinkingDisabledForRequiredTools,
   resolveRegisteredModel,
 } from '../../primitives/llm/models.js';
-import { resolveRoutingCandidates, type RoutingCandidate, type RoutingPurpose } from '../../primitives/llm/routing.js';
+import {
+  resolveCandidateRequestTemperature,
+  resolveRoutingCandidates,
+  type RoutingCandidate,
+  type RoutingPurpose,
+} from '../../primitives/llm/routing.js';
 import {
   buildStreamTransportModelHint,
   resolveCompanionStreamRoute,
@@ -1046,8 +1051,12 @@ function buildStreamRequestOptions(
     requestOptions.contextWindow = candidate.contextWindow;
   }
 
-  if (candidate.temperature !== undefined && requestOptions.temperature === undefined) {
-    requestOptions.temperature = candidate.temperature;
+  const temperature = resolveCandidateRequestTemperature(candidate);
+  if (candidate.rejectsTemperature === true) {
+    // A caller's stream options cannot reintroduce what the card rejects.
+    delete requestOptions.temperature;
+  } else if (temperature !== undefined && requestOptions.temperature === undefined) {
+    requestOptions.temperature = temperature;
   }
 
   const reasoning = resolveStreamReasoningLevel(candidate);

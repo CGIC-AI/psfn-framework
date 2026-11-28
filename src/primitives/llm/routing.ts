@@ -772,3 +772,15 @@ function toNonNegativeRate(value: unknown): number | undefined {
   }
   return value;
 }
+
+/**
+ * The sampling temperature a request for this candidate may carry. A candidate
+ * whose card rejects the parameter sends none, whatever its tuning, a model
+ * hint, or a caller supplied (psfn-framework-glst7). Every request and
+ * transport builder reads the temperature through this function.
+ */
+export function resolveCandidateRequestTemperature(
+  candidate: Pick<RoutingCandidate, 'rejectsTemperature' | 'temperature'>,
+): number | undefined {
+  return candidate.rejectsTemperature === true ? undefined : candidate.temperature;
+}

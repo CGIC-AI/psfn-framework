@@ -1504,6 +1504,50 @@ describe('createSubstrateStreamFn', () => {
       });
   });
 
+  it('never transports a temperature for a chat card that rejects it (psfn-framework-glst7)', async () => {
+    const withChatTuning = (rejectsTemperature: boolean): SubstrateConfig => {
+      const config = makeConfig();
+      config.modelRegistry = {
+        ...config.modelRegistry!,
+        models: config.modelRegistry!.models.map(entry => (
+          entry.purposes.some(tag => tag.purpose === 'chat' && tag.primary)
+            ? {
+              ...entry,
+              capabilities: { ...entry.capabilities, rejectsTemperature },
+              tuning: { ...entry.tuning, temperature: 0.6 },
+            }
+            : entry
+        )),
+      };
+      return config;
+    };
+    streamAdapterMocks.transportStream.mockResolvedValue({
+      content: 'ok',
+      toolCalls: [],
+      model: 'openrouter/deepseek/deepseek-v3.2',
+      inputTokens: 3,
+      outputTokens: 1,
+      stopReason: 'stop',
+    });
+
+    for (const rejectsTemperature of [true, false]) {
+      const config = withChatTuning(rejectsTemperature);
+      const stream = await makeStreamFn(config)(
+        resolveModel(config, makeRuntime(), 'chat'),
+        makePiContext(),
+        { temperature: 0.2 },
+      );
+      await collectStreamEvents(stream);
+    }
+
+    const hints = streamAdapterMocks.transportStream.mock.calls.map(
+      call => (call[0] as LLMContext).modelHint,
+    );
+    expect(hints).toHaveLength(2);
+    expect(hints[0]).not.toHaveProperty('temperature');
+    expect(hints[1]).toMatchObject({ temperature: 0.6 });
+  });
+
   it('clamps every provider candidate to the API-requested completion limit', async () => {
     const config = makeChatFallbackConfig({
       retryMaxAttempts: 0,

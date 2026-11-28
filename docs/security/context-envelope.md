@@ -7,8 +7,6 @@ verified:
   - by: openwiki/0.4.3
     at: 2026-08-28T13:30:04.287Z
 sources:
-  - id: openwiki-source-8416348a60636b3c91ca0962
-    resource: repo://docs/context-envelope.md
   - id: openwiki-source-feb0b60a83c447e8057bc85b
     resource: repo://src/app/agent/core-runtime.ts
   - id: openwiki-source-28cf116b9bda3c64ce77dcae

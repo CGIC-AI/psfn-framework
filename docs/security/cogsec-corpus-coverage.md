@@ -9,8 +9,6 @@ verified:
 sources:
   - id: openwiki-source-429b3a32f3fb86721ac38e60
     resource: repo://config/intake-l1-rules.json
-  - id: openwiki-source-de5f0ba5e123806b203dc55e
-    resource: repo://docs/cogsec-corpus-coverage.md
   - id: openwiki-source-59a4083203352a87cab341f5
     resource: repo://scripts/cogsec-remediation-smoke.ts
   - id: openwiki-source-e5f83df59f4e3e87dffc15bc

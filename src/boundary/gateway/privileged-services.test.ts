@@ -23,7 +23,6 @@ function createConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig
     wyomingEnabled: false,
     telegramEnabled: false,
     capabilityTier: 'nursery',
-    obsidianAutoPublish: false,
     ...overrides,
   } as SubstrateConfig;
 }

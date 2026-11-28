@@ -588,7 +588,6 @@ export interface SubstrateConfig {
   // ── Obsidian vault ──
   obsidianVaultName?: string;
   obsidianCliPath?: string;
-  obsidianAutoPublish?: boolean;
   obsidianTimeoutMs?: number;
 
   // ── Charge policy ──

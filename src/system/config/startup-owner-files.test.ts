@@ -46,6 +46,7 @@ import {
   validateCompanionsConfig,
 } from './companions-config.js';
 import { createOwnerFileConfigStore } from './config-store.js';
+import { migrateRequiredSettingsBlocks } from '../settings/required-blocks-owner-migration.js';
 
 describe('startup owner-file loaders', () => {
   const tempDirs: string[] = [];
@@ -505,6 +506,48 @@ describe('startup owner-file loaders', () => {
     })).toEqual({ ok: true, errors: [] });
     expect(readFileSync(settingsPath, 'utf8')).toBe(migratedContents);
     expect(statSync(settingsPath).ino).toBe(migratedInode);
+  });
+
+  it('still starts on a settings.json that carries the retired obsidianAutoPublish key (psfn-framework-au0oz)', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-owner-files-retired-'));
+    const seedDir = join(process.cwd(), 'config');
+    tempDirs.push(rootDir);
+    writeRequiredOwnerExamples(rootDir);
+    // Every owner file seeded before the removal carries the key.
+    const settingsPath = join(rootDir, 'settings.json');
+    const settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
+    writeFileSync(
+      settingsPath,
+      `${JSON.stringify({ ...settings, obsidianAutoPublish: true }, null, 2)}\n`,
+      'utf8',
+    );
+
+    // A runtime process loads it as-is and simply ignores the retired key.
+    expect(loadStartupRuntimeSettingsOwnerFile({ dataDir: rootDir, seedDir }).runtimeSettings)
+      .not.toHaveProperty('obsidianAutoPublish');
+    expect(createOwnerFileConfigStore({ dataDir: rootDir, seedDir }).loadEffectiveRuntimeSettings())
+      .not.toHaveProperty('obsidianAutoPublish');
+
+    // The strict preflight names the remedy instead of an anonymous unknown key.
+    const before = verifyStartupOwnerFiles({ dataDir: rootDir, seedDir, defaultContextWindow: 128_000 });
+    expect(before.ok).toBe(false);
+    expect(before.errors.join('\n')).toContain(
+      'settings.json payload carries retired keys: obsidianAutoPublish; '
+      + 'run migrate-required-settings-blocks --apply',
+    );
+
+    // The chart's seed init container runs that migration before any runtime
+    // process starts; afterwards the owner file verifies clean.
+    expect(migrateRequiredSettingsBlocks({ dataDir: rootDir, seedDir, apply: true })).toMatchObject({
+      status: 'applied',
+      removedPaths: ['obsidianAutoPublish'],
+    });
+    expect(JSON.parse(readFileSync(settingsPath, 'utf8'))).toEqual(settings);
+    expect(verifyStartupOwnerFiles({
+      dataDir: rootDir,
+      seedDir,
+      defaultContextWindow: 128_000,
+    })).toEqual({ ok: true, errors: [] });
   });
 
   it('validates system owners once and every exact resolved fleet companion root', () => {

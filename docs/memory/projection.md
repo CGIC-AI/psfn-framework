@@ -7,8 +7,6 @@ verified:
   - by: openwiki/0.4.3
     at: 2026-08-28T13:30:04.287Z
 sources:
-  - id: openwiki-source-acdf8d4a6c8cbeea248b4474
-    resource: repo://docs/SPEC_MEMORY_PROJECTION_LAYER.md
   - id: openwiki-source-3b7e885c9116ab6542ae096f
     resource: repo://src/core/agent/substrate-agent/turn-execution/pre-turn-state.ts
   - id: openwiki-source-4498b4d98d6a551fc0fb4a01

@@ -4207,7 +4207,6 @@ describe('AdminServer JSON API routes', () => {
       telegramAuthorizedUsers: '123, 456',
       obsidianVaultName: 'companion',
       obsidianCliPath: '/usr/local/bin/obsidian',
-      obsidianAutoPublish: true,
       obsidianTimeoutMs: 12000,
       moaEnabled: true,
       moaReferenceModels: ['openai/gpt-4.1-mini', 'moonshotai/kimi-k2.5'],

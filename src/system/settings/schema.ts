@@ -1,4 +1,5 @@
 import {
+  REMOVED_RUNTIME_SETTINGS_KEYS,
   RUNTIME_SETTINGS_KEYS,
   type EditableSettings,
   type SettingsDomainSplit,
@@ -122,6 +123,13 @@ export function normalizeEditableSettings(
 export function parseRuntimeSettingsOwnerPayload(value: unknown): EditableSettings {
   if (!isRecord(value)) {
     throw new Error('settings.json payload must be an object');
+  }
+  const retiredKeys = REMOVED_RUNTIME_SETTINGS_KEYS.filter(key => Object.hasOwn(value, key));
+  if (retiredKeys.length > 0) {
+    throw new Error(
+      `settings.json payload carries retired keys: ${retiredKeys.join(', ')}; `
+      + 'run migrate-required-settings-blocks --apply to remove them',
+    );
   }
   assertNoUnknownKeys(
     value,

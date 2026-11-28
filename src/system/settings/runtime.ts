@@ -600,7 +600,6 @@ function getObsidianAndMoaSettingsSnapshot(config: SubstrateConfig) {
   return {
     obsidianVaultName: config.obsidianVaultName ?? null,
     obsidianCliPath: config.obsidianCliPath ?? 'obsidian',
-    obsidianAutoPublish: config.obsidianAutoPublish ?? false,
     obsidianTimeoutMs: config.obsidianTimeoutMs ?? 10000,
     moaEnabled: config.moaEnabled ?? false,
     moaReferenceModels: config.moaReferenceModels ?? [],
@@ -611,7 +610,6 @@ function getObsidianAndMoaSettingsSnapshot(config: SubstrateConfig) {
   } satisfies SnapshotSection<
     | 'obsidianVaultName'
     | 'obsidianCliPath'
-    | 'obsidianAutoPublish'
     | 'obsidianTimeoutMs'
     | 'moaEnabled'
     | 'moaReferenceModels'
@@ -1135,9 +1133,6 @@ function applyObsidianAndMoaSettings(
     'obsidianVaultName',
   );
   applyTrimmedSetting(config, 'obsidianCliPath', settings, 'obsidianCliPath');
-  if ('obsidianAutoPublish' in settings) {
-    config.obsidianAutoPublish = settings.obsidianAutoPublish ?? false;
-  }
   if ('obsidianTimeoutMs' in settings) {
     config.obsidianTimeoutMs = settings.obsidianTimeoutMs;
   }

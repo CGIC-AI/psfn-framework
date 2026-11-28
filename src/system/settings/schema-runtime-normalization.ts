@@ -1508,10 +1508,6 @@ function normalizeObsidianAndMoaSettings(
     normalized.obsidianCliPath =
       nonEmptyStringOrUndefined(settings.obsidianCliPath) ?? 'obsidian';
   }
-  if ('obsidianAutoPublish' in settings) {
-    normalized.obsidianAutoPublish =
-      toBoolean(settings.obsidianAutoPublish) ?? false;
-  }
   if ('obsidianTimeoutMs' in settings) {
     normalized.obsidianTimeoutMs = toIntegerInRange(
       settings.obsidianTimeoutMs,

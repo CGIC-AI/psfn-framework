@@ -2,8 +2,6 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { fromPartial } from '@total-typescript/shoehorn';
-import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createOptionalJournalAutoPublisher } from './journal-runtime.js';
 
 describe('createOptionalJournalAutoPublisher (ik47b.16)', () => {
@@ -15,15 +13,10 @@ describe('createOptionalJournalAutoPublisher (ik47b.16)', () => {
     }
   });
 
-  it('enables local workspace markdown auto-publish even when legacy obsidianAutoPublish is false', async () => {
+  it('publishes reflections to the local workspace markdown journal without any setting', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'journal-runtime-test-'));
-    const config = fromPartial<SubstrateConfig>({
-      vault: {
-        obsidianAutoPublish: false,
-      },
-    });
 
-    const publisher = createOptionalJournalAutoPublisher(tempDir, config);
+    const publisher = createOptionalJournalAutoPublisher(tempDir);
     await publisher.publishReflection({
       templateId: 'daily-review',
       templateName: 'Daily Review',

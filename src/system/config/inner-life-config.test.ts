@@ -18,9 +18,10 @@ const TEST_MODEL_REGISTRY: CanonicalModelRegistry = {
   schemaVersion: 1,
   models: [
     {
-      id: 'gpt-5.4-nano',
+      // The slot the shipped automata-policy seed's reviewer references.
+      id: 'gpt-6-luna',
       rank: 10,
-      identity: { provider: 'openai', model: 'gpt-5.4-nano', source: { type: 'openai' } },
+      identity: { provider: 'openrouter', model: 'openai/gpt-6-luna', source: { type: 'openrouter' } },
       purposes: [{ purpose: 'background', primary: true }],
       capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
       tuning: { maxOutputTokens: 4096, contextWindow: 128_000 },

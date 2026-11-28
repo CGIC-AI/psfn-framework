@@ -404,7 +404,7 @@
     "reflectionMaxTokens": 300
   },
   "blindReviewer": {
-    "enabled": false,
+    "enabled": true,
     "intervalMs": 3600000,
     "maxWorkers": 1,
     "maxIngestPerRun": 64,

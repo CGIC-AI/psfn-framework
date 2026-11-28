@@ -435,10 +435,38 @@ reaches the model; an `ignore` outcome releases the reservation; a retained
 settled gate order: reservation-status guard → room-episode pressure + Law-36
 single-probe breaker → lease-threshold confidence bar → speak-least fairness →
 social-pot draw → acquire the fenced lease → deliver and complete
-(`src/core/agent/arbiter/egress-lease-phase.ts#L404-L560`). The phase and its
-sender are **off by default** — the `enabled` flag is code-pinned `false` and no
-config path may enable autonomous send, so observe/appraise/reserve is live but
-nothing sends autonomously (`src/app/agent/startup/speaking-arbiter-lane.ts#L152-L218`).
+(`src/core/agent/arbiter/egress-lease-phase.ts#L397-L640`).
+
+Autonomous send is operator-configured by the owner setting
+`scheduler.json` `socialAutonomy.egressLease.mode`
+(`src/app/agent/startup/speaking-arbiter-lane.ts#L249-L337`):
+
+- **`off`** — the phase and its sender are not constructed. Observe, appraise
+  and reserve still run, but a retained `reply` reservation never sends.
+- **`shadow`** — the phase runs the full deterministic admission path
+  (reservation guard, pressure and breaker, confidence bar, speak-least
+  fairness) and returns `shadowed`, releasing the reservation. It draws nothing
+  from the social pot, takes no lease and sends nothing, so an operator can
+  observe would-send decisions safely.
+- **`on`** — a fully admitted candidate draws from the social pot, takes the
+  exclusive fenced lease, and is delivered by the hardened sender below. This
+  is the fresh-install seed value (`config/scheduler.seed.json`) and also the
+  code default (`createDefaultEgressLeaseTunables` in
+  `src/system/config/participation-config.ts`), so an owner file that omits
+  `socialAutonomy.egressLease` or its `mode` resolves to `on`. Only an explicit
+  `off` or `shadow` in the owner file withholds autonomous send.
+
+The mode is only one gate. The phase is constructed only in a companion fleet
+(`multiCompanion: true`) with the gateway-owned speaking-arbiter and social-pot
+stores, a charge policy and a companion identity; missing any of these leaves
+autonomous send unwired regardless of mode. With `on`, every send remains
+bounded by the gate order above: a gate refusal releases the reservation and
+sends nothing, a gate error fails closed without sending, a refused social-pot
+draw stays silent, a
+declined lease refunds its draw, and a failed delivery completes the lease as
+`failed` without charging room pressure. The lease TTL, draw units and minimum
+reply confidence are the owner-file tunables `leaseTtlMs`, `egressDrawUnits` and
+`minReplyConfidence`.
 
 `createAgentLoopEgressReplySender` (`src/app/agent/egress-reply-sender.ts`) is the
 concrete sender used when the lease is granted. It is fail-closed by design:

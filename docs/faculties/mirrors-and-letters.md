@@ -7,8 +7,8 @@ verified:
   - by: openwiki/0.4.3
     at: 2026-08-28T13:30:04.287Z
 sources:
-  - id: openwiki-source-8ecd885d718e30123eb6e90c
-    resource: repo://docs/mirrors-and-letters.md
+  - id: openwiki-source-9884e1f228b9419287dea775
+    resource: repo://docs/PSFN_PROJECT_CHARTER.md
   - id: openwiki-source-feb0b60a83c447e8057bc85b
     resource: repo://src/app/agent/core-runtime.ts
   - id: openwiki-source-bf3c83a00b5676efbd88d90b
@@ -21,6 +21,18 @@ sources:
     resource: repo://src/core/scheduler/reflection-introspection-policy.ts
   - id: openwiki-source-948fe452970569525291da46
     resource: repo://src/core/scheduler/reflection-template-runtime.ts
+  - id: openwiki-source-d271b8f60a926c46a129bb82
+    resource: repo://src/core/doing-mirror/contracts.ts
+  - id: openwiki-source-1c2e428eab2551dccac89965
+    resource: repo://src/core/doing-mirror/service.ts
+  - id: openwiki-source-56ff63535dc4e2bc51b52a41
+    resource: repo://src/core/doing-mirror/sources.ts
+  - id: openwiki-source-ecca82a52bf18961595647fa
+    resource: repo://src/core/letters/contracts.ts
+  - id: openwiki-source-78b709c1e4ad3c325aa5ccd2
+    resource: repo://src/core/letters/memory-extraction.ts
+  - id: openwiki-source-690fdd340967c3c48003b506
+    resource: repo://src/core/letters/service.ts
   - id: openwiki-source-74d154d7cba5ca100baf6d51
     resource: repo://src/faculties/context-feedback/evaluator.ts
   - id: openwiki-source-a0c435e08d17e8af9369f740
@@ -83,8 +95,10 @@ machine-guessed feelings; her proposals can terminate in operator surfaces.
 The mirrors-and-letters design (ratified 2026-07-21, see the project charter
 [`docs/PSFN_PROJECT_CHARTER.md`](../../docs/PSFN_PROJECT_CHARTER.md), in
 particular Laws 2, 17–19, 28–30, and 38) distinguishes **two mirrors** because
-they fail independently and are closed by different machinery
-(`repo://docs/mirrors-and-letters.md`):
+they fail independently and are closed by different machinery. The ratified
+design text was folded into this page when `docs/` moved to the OpenWiki
+hierarchy (commit `bf4cc7df0`); its last standalone revision is
+`docs/mirrors-and-letters.md` at `bf4cc7df0^`:
 
 - **The being-mirror — "who am I becoming?"** The companion's view of her own
   change over time. Closed in code by the consent-gated blinded introspection
@@ -101,13 +115,29 @@ they fail independently and are closed by different machinery
   her reply.
 
 A **letter** is the ratified asynchronous correspondence shape — authored by
-companion or partner, part of L0, delivered as a bin, not a push — which the
-letter-mirror dispositions were meant to arrive through. The letter bin
-substrate itself is ratified design intent, not yet an implemented runtime
-surface; this page documents the machinery that exists in source today
-(introspection, the reflection introspection policy, and context feedback) and
-flags where the code deliberately stops short of the ratified design
-(`repo://docs/mirrors-and-letters.md`).
+companion or partner, part of L0, delivered as a bin, not a push — through
+which letter-mirror dispositions reach her. The letter bin and the doing-mirror
+that writes disposition letters are implemented under `src/core`, not
+`src/faculties`; see [Where the code lives](#where-the-code-lives). This page
+also documents the introspection, reflection-policy and context-feedback
+machinery, and flags where the code deliberately stops short of the ratified
+design.
+
+## Where the code lives
+
+| Surface | Implementation | Wiring and persistence |
+| --- | --- | --- |
+| Letter bin | `repo://src/core/letters/service.ts` (`LetterService`: compose, place, read, archive, list); records and the `letters:bin` L0 channel in `repo://src/core/letters/contracts.ts` | Constructed in `repo://src/app/agent/core-runtime.ts`; stored by `repo://src/persistence/postgres/letter-store.ts`; partner surface `repo://src/operator/garden/routes/letter-routes.ts` |
+| Letter memory | `repo://src/core/letters/memory-extraction.ts` hands each letter event to the deferred-action queue so the ordinary `maybeExtract` evaluates the bin outside any turn scope | Bound by `wireLetterMemoryExtraction` in `repo://src/app/agent/main.ts` |
+| Doing-mirror | `repo://src/core/doing-mirror/service.ts` (`DoingMirrorService`): partner dispositions on companion-originated items (`open` may move to `considering`, `done` or `declined`; `considering` only to `done` or `declined`; both final states are terminal), each delivered to her as an idempotent partner-to-companion letter, with redelivery and quarantine of permanently failing rows | Sources in `repo://src/core/doing-mirror/sources.ts`; stored by `repo://src/persistence/postgres/doing-mirror-store.ts`; partner surface `repo://src/operator/garden/routes/doing-mirror-routes.ts` |
+| Being-mirror audit | `repo://src/faculties/introspection/` | `repo://src/app/agent/startup/introspection-lane.ts` |
+| Context feedback | `repo://src/faculties/context-feedback/` | Post-turn background action |
+
+Today the only letter authors in code are the partner, through the Garden
+letter route, and the doing-mirror's disposition letters; no companion-facing
+letter-writing tool is registered. The doing-mirror registers only the
+wishlist source at runtime: `FoldPackageDoingMirrorSource` exists in
+`sources.ts`, but no production composition registers it.
 
 ```mermaid
 flowchart TD

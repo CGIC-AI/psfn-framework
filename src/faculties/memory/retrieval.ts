@@ -159,12 +159,14 @@ import {
   emitRetrievalTelemetry as emitRetrievalTelemetryWithDeps,
 } from './retrieval/telemetry-emission.js';
 import {
+  createEpisodicQuarantineWithheldCollector,
   filterQuarantinedEpisodicChains,
   filterQuarantinedMemories,
   isMemoryQuarantined,
   type MemoryQuarantineCandidate,
   type MemorySessionQuarantineFilter,
 } from './retrieval/session-quarantine.js';
+import type { EpisodicQuarantineWithheld } from './retrieval/episodic-types.js';
 import {
   isMemoryOwnedByCompanion,
   type CompanionRoomMembershipAuthority,
@@ -1156,6 +1158,7 @@ export class MemoryRetriever implements MemoryProvider {
         turnSnapshot?.proactiveCandidates.map(cloneMemory) ?? [],
       );
       const proactiveSource = proactiveQuarantine.memories;
+      const episodicQuarantine = createEpisodicQuarantineWithheldCollector();
       const rawEpisodicChains = Array.isArray(turnSnapshot?.episodicChains)
         ? turnSnapshot.episodicChains.map(cloneEpisodicRetrievalChain)
         : await this.resolveEpisodicChains({
@@ -1165,6 +1168,7 @@ export class MemoryRetriever implements MemoryProvider {
           channelDisclosure,
           canonicalContactId,
           scopeQuery: normalizedScopeQuery,
+          onQuarantineWithheld: withheld => episodicQuarantine.record(withheld),
         });
       const episodicChains = filterQuarantinedEpisodicChains(this.sessionQuarantineFilter, rawEpisodicChains);
     const episodicEpisodeCount = countEpisodicChainEpisodes(episodicChains);
@@ -1173,6 +1177,7 @@ export class MemoryRetriever implements MemoryProvider {
       const snapshotWithheldSummary = cloneMemoryWithheldSummary(turnSnapshot?.withheldSummary);
       let withheldSummary = mergeMemoryWithheldSummaries(
         snapshotWithheldSummary,
+        episodicQuarantine.summary(),
         shapeAccess.withheldSummary,
         contactQuarantine.summary,
         proactiveQuarantine.summary,
@@ -1915,6 +1920,7 @@ export class MemoryRetriever implements MemoryProvider {
     channelDisclosure: ReturnType<typeof classifyChannelDisclosure>;
     canonicalContactId?: string;
     scopeQuery?: MemoryScopeQuery;
+    onQuarantineWithheld?: (withheld: EpisodicQuarantineWithheld) => void;
   }): Promise<EpisodicRetrievalChain[]> {
     return resolveEpisodicChainsWithDeps({
       episodicStore: this.episodicStore,

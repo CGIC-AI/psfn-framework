@@ -471,7 +471,7 @@ describe('EpisodeSynthesisLane', () => {
       linkedArcs: [],
       heldBackEntryCount: 0,
       segmentationFailedChunkCount: 1,
-      segmentationFailure: 'segments must be contiguous; segment 1 leaves a gap or overlap',
+      segmentationFailure: new Error('segments must be contiguous; segment 1 leaves a gap or overlap'),
     });
     const clock = { now: WATERMARK_END_MS };
     const options = {

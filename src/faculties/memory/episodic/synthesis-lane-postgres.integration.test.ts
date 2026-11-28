@@ -4,7 +4,30 @@ import { join } from 'node:path';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+const logSpies = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn() }));
+
+// Keep every real logger export and only spy on component log lines, so the
+// once-per-window budget-deferral visibility (zwwo0) can be asserted.
+vi.mock('../../../shared/logger.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../shared/logger.js')>();
+  return {
+    ...actual,
+    createComponentLogger: () => ({
+      info: logSpies.info,
+      warn: logSpies.warn,
+      error: vi.fn(),
+      debug: vi.fn(),
+      trace: vi.fn(),
+    }),
+  };
+});
+
 import type { SessionEntry } from '../../../core/session/types.js';
+import type { CompletionPurpose, LLMContext, ModelBudgetBlockedEvent } from '../../../shared/contracts/runtime.js';
+import { LLMClient } from '../../../primitives/llm/client.js';
+import { PiProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
+import { PostgresModelUsageStore } from '../../../persistence/postgres/model-usage-store.js';
+import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { createPostgresPool, ensurePostgresSchema } from '../../../persistence/postgres.js';
 import { POSTGRES_MEMORY_MIGRATIONS } from '../../../persistence/postgres/migrations.js';
 import { createDefaultPostgresSessionAdapters } from '../../../persistence/sessions/postgres-adapters.js';
@@ -550,6 +573,295 @@ describe('EpisodeSynthesisLane failure handling (real Postgres)', () => {
       const claims = await store.listEpisodeMessageClaims({ status: 'active' });
       expect(claims).toHaveLength(turnCount);
       await expect(workset.enumerate('episodic_synthesis')).resolves.toEqual([]);
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+});
+
+// psfn-framework-zwwo0: a model-budget refusal happens before any model call is
+// dispatched, so it is no evidence against the session. The refusing client is
+// a real LLMClient whose real budget controller reads a real Postgres usage
+// ledger that is already over the owner-file limit, as in the overnight soak.
+const BUDGET_COMPANION_ID = 'companion-a';
+const BUDGET_PROVIDER = 'test-provider';
+const BUDGET_MODEL = 'priced-memory-model';
+
+function budgetConfig(dataDir: string): SubstrateConfig {
+  return {
+    primaryModel: BUDGET_MODEL,
+    primaryProvider: BUDGET_PROVIDER,
+    extractionModel: BUDGET_MODEL,
+    extractionProvider: BUDGET_PROVIDER,
+    discordToken: '',
+    discordBotId: '',
+    characterCardPath: '',
+    dataDir,
+    databasePath: '',
+    extractionInterval: 5,
+    primaryMaxTokens: 1_024,
+    extractionMaxTokens: 1_024,
+    maintenanceIntervalMs: 300_000,
+    defaultContextWindow: 128_000,
+    extractionThresholdPct: 30,
+    compactionThresholdPct: 70,
+    companionId: BUDGET_COMPANION_ID,
+    modelRoster: {
+      memory: { model: BUDGET_MODEL, provider: BUDGET_PROVIDER, maxTokens: 1_024, contextWindow: 128_000 },
+    },
+    modelRegistry: {
+      schemaVersion: 1,
+      budgetPolicy: { enabled: true, dailyUsdLimit: 5, monthlyUsdLimit: 5, currency: 'USD' },
+      models: [{
+        id: 'memory',
+        rank: 10,
+        identity: { provider: BUDGET_PROVIDER, model: BUDGET_MODEL, source: { type: 'configured' as const } },
+        purposes: [{ purpose: 'memory' as const, primary: true }],
+        capabilities: { maxOutputTokens: 1_024, contextWindow: 128_000 },
+        tuning: { maxOutputTokens: 1_024 },
+        cost: { inputPer1MUsd: 3, outputPer1MUsd: 15, cacheReadPer1MUsd: 3, cacheWritePer1MUsd: 3, currency: 'USD' },
+      }],
+    },
+  };
+}
+
+/** The real pi-ai runtime, counting every provider dispatch it is asked for. */
+class DispatchCountingRuntime extends PiProviderRuntime {
+  dispatches = 0;
+
+  override complete(...args: Parameters<PiProviderRuntime['complete']>): ReturnType<PiProviderRuntime['complete']> {
+    this.dispatches += 1;
+    return super.complete(...args);
+  }
+
+  override stream(...args: Parameters<PiProviderRuntime['stream']>): ReturnType<PiProviderRuntime['stream']> {
+    this.dispatches += 1;
+    return super.stream(...args);
+  }
+}
+
+async function overBudgetLlmClient(pool: Pool, dataDir: string) {
+  const usage = new PostgresModelUsageStore(pool, { companionId: BUDGET_COMPANION_ID });
+  const nowMs = Date.now();
+  // Today's booked spend is already past the 5 USD owner-file limit.
+  await usage.recordUsageEvent({
+    logicalCallId: 'soak-spend-before-block',
+    attempt: 1,
+    recordedAtMs: nowMs - 1_000,
+    startedAtMs: nowMs - 1_010,
+    completedAtMs: nowMs - 1_000,
+    callKind: 'completion',
+    attribution: { callType: 'background', purpose: 'memory', originStage: 'memory.extraction' },
+    provider: BUDGET_PROVIDER,
+    model: BUDGET_MODEL,
+    status: 'success',
+    inputTokens: 1_000,
+    outputTokens: 100,
+    providerCostUsd: 6,
+    costSource: 'provider',
+  });
+  const runtime = new DispatchCountingRuntime();
+  const blocked: ModelBudgetBlockedEvent[] = [];
+  const client = new LLMClient(budgetConfig(dataDir), {
+    runtime,
+    usageRecorder: usage,
+    usageBudgetQuery: usage,
+    onBudgetBlocked: event => blocked.push(event),
+  });
+  return { client, runtime, blocked };
+}
+
+/**
+ * Topic-segmentation model: while `mode` is 'budget' every call goes through
+ * the over-budget LLMClient; 'invalid' answers with output no repair accepts
+ * (a genuine synthesis failure); 'admit' answers one closed segment per chunk.
+ */
+function segmentationModel(budgetClient: LLMClient) {
+  const state: { mode: 'budget' | 'invalid' | 'admit' } = { mode: 'budget' };
+  const scriptedCalls = { count: 0 };
+  const provider = {
+    complete: async (
+      context: LLMContext,
+      purpose: CompletionPurpose,
+      options?: Parameters<LLMClient['complete']>[2],
+    ) => {
+      if (state.mode === 'budget') return budgetClient.complete(context, purpose, options);
+      scriptedCalls.count += 1;
+      const prompt = String(context.messages[0]?.content ?? '');
+      const entryCount = prompt.match(/^\[\d+\] /gmu)?.length ?? 0;
+      return {
+        content: state.mode === 'invalid'
+          ? 'no segments today'
+          : JSON.stringify({
+            segments: [{ start_index: 0, end_index: entryCount - 1, topic: 'weekend trip planning', status: 'closed' }],
+          }),
+        toolCalls: [],
+        model: 'test-model',
+        inputTokens: 0,
+        outputTokens: 0,
+        stopReason: 'stop' as const,
+      };
+    },
+  };
+  return { provider, state, scriptedCalls };
+}
+
+async function appendConversation(
+  transcript: TranscriptFixture,
+  sessionId: string,
+  startMs: number,
+  turnCount: number,
+): Promise<void> {
+  for (let turn = 0; turn < turnCount; turn += 1) {
+    const role = turn % 2 === 0 ? 'user' : 'assistant';
+    await transcript.append(sessionId, `${sessionId} planning a weekend trip, turn ${turn}`, {
+      role,
+      timestamp: startMs + turn * MINUTE_MS,
+      metadata: JSON.stringify({ turn: { schemaVersion: 1, turnId: `turn:${sessionId}:${turn}`, role } }),
+    });
+  }
+}
+
+function budgetDeferralLogs(level: 'warn' | 'info', pipeline: string): unknown[][] {
+  return logSpies[level].mock.calls.filter(([, fields]) => (
+    typeof fields === 'object' && fields !== null
+    && (fields as Record<string, unknown>).pipeline === pipeline
+    && (fields as Record<string, unknown>).deferral === 'model_budget'
+  ));
+}
+
+describe('EpisodeSynthesisLane under a model-budget block (real Postgres, real budget refusal)', () => {
+  it('defers refused sessions without consuming attempts and synthesizes them once the budget admits (zwwo0)', async () => {
+    await withDatabase(async ({ pool, adapters, transcript }) => {
+      await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
+      logSpies.warn.mockClear();
+      logSpies.info.mockClear();
+      const startMs = Date.parse('2026-11-28T06:00:00.000Z');
+      const sessions = ['api:budget-session-a', 'api:budget-session-b'];
+      await appendConversation(transcript, sessions[0]!, startMs, 4);
+      await appendConversation(transcript, sessions[1]!, startMs + 10 * MINUTE_MS, 4);
+      const budget = await overBudgetLlmClient(pool, newSessionsDir('psfn-episode-budget-data-'));
+      const model = segmentationModel(budget.client);
+      const store = new PostgresEpisodicStore(pool, { now: () => new Date(startMs + 60 * MINUTE_MS) });
+      const synthesizer = new EpisodicSynthesizer(store, transcript.sessionManager(), {
+        maxEntriesPerEpisode: 14,
+        topicSegmentation: { enabled: true, llmProvider: model.provider },
+      });
+      const failures: EpisodeSynthesisSessionFailureEvent[] = [];
+      const clock = { now: startMs + 60 * MINUTE_MS };
+      const workset = adapters.conversationalActivityWorkset;
+      const maxAttempts = 3;
+      const lane = new EpisodeSynthesisLane({
+        sessionManager: transcript.sessionManager(),
+        synthesizer,
+        watermarkStore: store,
+        workset,
+        config: gateConfig(maxAttempts),
+        onSessionFailure: event => failures.push(event),
+        now: () => clock.now,
+      });
+
+      const drains = maxAttempts + 2;
+      for (let drain = 1; drain <= drains; drain += 1) {
+        await expect(lane.execute(timerAction())).resolves.toEqual({ outcome: 'complete' });
+        // Well past any backoff a counted failure would have set.
+        clock.now += BACKOFF_BASE_MINUTES * MINUTE_MS * 2 ** drain;
+      }
+
+      // Every drain stopped at its first refusal: the second session, refused by
+      // the same companion budget, was never probed, and nothing was dispatched.
+      expect(budget.blocked).toHaveLength(drains);
+      expect(budget.blocked[0]).toMatchObject({ reason: 'daily_budget_exceeded', purpose: 'memory' });
+      expect(budget.runtime.dispatches).toBe(0);
+      expect(failures).toEqual([]);
+      await expect(workset.listQuarantined('episodic_synthesis')).resolves.toEqual([]);
+      const pending = await workset.enumerate('episodic_synthesis');
+      expect(pending.map(item => item.logicalSessionId)).toEqual(sessions);
+      expect(pending[0]).toMatchObject({
+        logicalSessionId: sessions[0],
+        claimantId: 'episode-synthesis-drain',
+        checkpointRevision: 0,
+      });
+      expect(pending[0]?.failureCount ?? 0).toBe(0);
+      expect(pending[0]?.lastFailure).toBeUndefined();
+      expect(pending[0]?.retryAfterMs).toBeUndefined();
+      // One warning for the whole blocked window, not one per refused attempt.
+      expect(budgetDeferralLogs('warn', 'episode_synthesis')).toHaveLength(1);
+      expect(budgetDeferralLogs('info', 'episode_synthesis')).toHaveLength(0);
+
+      model.state.mode = 'admit';
+      await expect(lane.execute(timerAction())).resolves.toEqual({ outcome: 'complete' });
+
+      expect(model.scriptedCalls.count).toBe(sessions.length);
+      expect(budget.runtime.dispatches).toBe(0);
+      expect(failures).toEqual([]);
+      await expect(workset.enumerate('episodic_synthesis')).resolves.toEqual([]);
+      await expect(workset.listQuarantined('episodic_synthesis')).resolves.toEqual([]);
+      await expect(store.listEpisodeMessageClaims({ status: 'active' })).resolves.toHaveLength(8);
+      const resumed = budgetDeferralLogs('info', 'episode_synthesis');
+      expect(resumed).toHaveLength(1);
+      expect(resumed[0]?.[1]).toMatchObject({ refusedAttempts: drains });
+      expect(budgetDeferralLogs('warn', 'episode_synthesis')).toHaveLength(1);
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('keeps counting genuine synthesis failures across budget refusals and quarantines at the cap (zwwo0)', async () => {
+    await withDatabase(async ({ pool, adapters, transcript }) => {
+      await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
+      const startMs = Date.parse('2026-11-28T06:00:00.000Z');
+      const sessionId = 'api:budget-session-poisoned';
+      await appendConversation(transcript, sessionId, startMs, 4);
+      const budget = await overBudgetLlmClient(pool, newSessionsDir('psfn-episode-budget-cap-data-'));
+      const model = segmentationModel(budget.client);
+      const store = new PostgresEpisodicStore(pool, { now: () => new Date(startMs + 60 * MINUTE_MS) });
+      const synthesizer = new EpisodicSynthesizer(store, transcript.sessionManager(), {
+        maxEntriesPerEpisode: 14,
+        topicSegmentation: { enabled: true, llmProvider: model.provider },
+      });
+      const failures: EpisodeSynthesisSessionFailureEvent[] = [];
+      const clock = { now: startMs + 60 * MINUTE_MS };
+      const workset = adapters.conversationalActivityWorkset;
+      const lane = new EpisodeSynthesisLane({
+        sessionManager: transcript.sessionManager(),
+        synthesizer,
+        watermarkStore: store,
+        workset,
+        config: gateConfig(3),
+        onSessionFailure: event => failures.push(event),
+        now: () => clock.now,
+      });
+      const drainAfterBackoff = async (mode: 'budget' | 'invalid'): Promise<void> => {
+        model.state.mode = mode;
+        clock.now += BACKOFF_BASE_MINUTES * MINUTE_MS * 8;
+        await lane.execute(timerAction());
+      };
+
+      await drainAfterBackoff('invalid');
+      await drainAfterBackoff('budget');
+      await drainAfterBackoff('budget');
+      await drainAfterBackoff('invalid');
+      for (let refusal = 0; refusal < 4; refusal += 1) await drainAfterBackoff('budget');
+
+      const [held] = await workset.enumerate('episodic_synthesis');
+      // Refusals neither consumed an attempt nor erased the recorded failure.
+      expect(held).toMatchObject({
+        logicalSessionId: sessionId,
+        failureCount: 2,
+        lastFailure: { stage: 'episode_synthesis', message: expect.stringContaining('after one corrective retry') },
+      });
+      expect(failures.map(event => [event.attemptCount, event.quarantined])).toEqual([[1, false], [2, false]]);
+      expect(budget.blocked).toHaveLength(6);
+
+      await drainAfterBackoff('invalid');
+
+      expect(failures.map(event => [event.attemptCount, event.quarantined])).toEqual([
+        [1, false],
+        [2, false],
+        [3, true],
+      ]);
+      await expect(workset.enumerate('episodic_synthesis')).resolves.toEqual([]);
+      expect(await workset.listQuarantined('episodic_synthesis')).toEqual([
+        expect.objectContaining({ logicalSessionId: sessionId, failureCount: 3 }),
+      ]);
+      expect(budget.runtime.dispatches).toBe(0);
     });
   }, INTEGRATION_TIMEOUT_MS);
 });

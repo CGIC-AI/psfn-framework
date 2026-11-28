@@ -22,6 +22,7 @@ import {
   type SessionCounterpartyContactStore,
   type SessionMemoryAttribution,
 } from '../session-counterparty-resolution.js';
+import { findModelBudgetRefusal, ModelRefusalDeferralWindow } from '../model-budget-deferral.js';
 import type { EpisodicSynthesisRunResult, EpisodicSynthesizer } from './synthesis.js';
 import type {
   EpisodicStorePort,
@@ -346,6 +347,7 @@ export class EpisodeSynthesisLane {
   private readonly onSessionFailure?: (event: EpisodeSynthesisSessionFailureEvent) => void;
   private readonly now: () => number;
   private readonly claimantId: string;
+  private readonly budgetDeferral: ModelRefusalDeferralWindow;
   private turnCount = 0;
   private activeDrain: Promise<EpisodeSynthesisDrainOutcome> | null = null;
 
@@ -373,6 +375,7 @@ export class EpisodeSynthesisLane {
     this.onGateEvent = options.onGateEvent;
     this.onSessionFailure = options.onSessionFailure;
     this.now = options.now ?? (() => Date.now());
+    this.budgetDeferral = new ModelRefusalDeferralWindow('episode_synthesis', this.now);
     this.claimantId = options.claimantId?.trim() || EPISODE_SYNTHESIS_DRAIN_CLAIMANT_ID;
   }
 
@@ -474,6 +477,19 @@ export class EpisodeSynthesisLane {
           ? this.workset.releaseClaim(claimInput)
           : this.workset.checkpoint(claimInput));
       } catch (error) {
+        const refusal = error instanceof BehavioralSummaryWriteError ? undefined : findModelBudgetRefusal(error);
+        if (refusal) {
+          // zwwo0: the budget refused the call before anything was dispatched,
+          // so this is no evidence against the session. Its claim stays held
+          // exactly as it is (no attempt consumed, no backoff, any recorded
+          // failure kept) and the next drain resumes it. Every other session
+          // asks the same companion budget, so stop probing them this drain.
+          this.budgetDeferral.noteRefusal(refusal, {
+            actionId: action.id,
+            logicalSessionId: claim.logicalSessionId,
+          });
+          break;
+        }
         const bookkeepingFailure = await this.recordSessionFailure(action, claim, error);
         if (bookkeepingFailure) failures.push(bookkeepingFailure);
         continue;
@@ -761,9 +777,10 @@ export class EpisodeSynthesisLane {
     });
     if (synthesis.segmentationFailedChunkCount > 0) {
       throw new Error('Episode topic segmentation failed; unprocessed source remains retryable', {
-        ...(synthesis.segmentationFailure ? { cause: new Error(synthesis.segmentationFailure) } : {}),
+        ...(synthesis.segmentationFailure ? { cause: synthesis.segmentationFailure } : {}),
       });
     }
+    this.budgetDeferral.noteAdmitted();
     this.emitGateEvent({
       sessionId,
       channelId,

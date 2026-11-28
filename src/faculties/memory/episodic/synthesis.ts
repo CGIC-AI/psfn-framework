@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import { createComponentLogger } from '../../../shared/logger.js';
-import { formatErrorCauseChain } from '../../../shared/utils/errors.js';
+import { formatErrorCauseChain, toError } from '../../../shared/utils/errors.js';
 import { toIsoInstant } from '../../../shared/utils/timing.js';
 import type {
   Episode,
@@ -140,8 +140,11 @@ export interface EpisodicSynthesisRunResult {
   heldBackEntryCount: number;
   /** Chunks whose segmentation output failed schema validation (fail closed). */
   segmentationFailedChunkCount: number;
-  /** Root cause of the failed chunk, carried to the lane's durable failure record. */
-  segmentationFailure?: string;
+  /**
+   * The error that failed the chunk, unchanged, so the lane both records its
+   * root cause and can tell a pre-dispatch budget refusal from a failure (zwwo0).
+   */
+  segmentationFailure?: Error;
 }
 
 export interface EpisodicSynthesisWatermarkScope {
@@ -178,7 +181,7 @@ interface SegmentationRunOutcome {
   heldBackEntryCount: number;
   segmentationFailedChunkCount: number;
   candidateEpisodeCount: number;
-  segmentationFailure?: string;
+  segmentationFailure?: Error;
 }
 
 interface CandidateDecisionResult {
@@ -819,7 +822,7 @@ export class EpisodicSynthesizer {
     let candidateEpisodeCount: number;
     let heldBackEntryCount = 0;
     let segmentationFailedChunkCount = 0;
-    let segmentationFailure: string | undefined;
+    let segmentationFailure: Error | undefined;
 
     if (this.segmentationEnabled) {
       const outcome = await this.runSegmentedGroups(input, salientGroups, state);
@@ -904,7 +907,7 @@ export class EpisodicSynthesizer {
           heldBackEntryCount,
           segmentationFailedChunkCount: 1,
           candidateEpisodeCount,
-          segmentationFailure: message,
+          segmentationFailure: toError(error),
         };
       }
       const segments = proposal.segments;

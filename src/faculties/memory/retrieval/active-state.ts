@@ -107,5 +107,6 @@ function cloneManifestSeed(seed: ContextManifestMemorySeed): ContextManifestMemo
     ...(seed.withheldRelevanceBands
       ? { withheldRelevanceBands: { ...seed.withheldRelevanceBands } }
       : {}),
+    ...(seed.provenanceRefs ? { provenanceRefs: [...seed.provenanceRefs] } : {}),
   };
 }

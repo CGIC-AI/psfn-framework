@@ -59,5 +59,6 @@ export function buildManifestSeedFromTelemetry(telemetry: RetrievalTelemetry): C
     budgetCappedCount: telemetry.budgetCappedCount ?? 0,
     ...(telemetry.selectedTypes ? { selectedTypes: { ...telemetry.selectedTypes } } : {}),
     ...(telemetry.compositionalMode ? { compositionalMode: telemetry.compositionalMode } : {}),
+    ...(telemetry.provenanceRefs.length > 0 ? { provenanceRefs: [...telemetry.provenanceRefs] } : {}),
   };
 }

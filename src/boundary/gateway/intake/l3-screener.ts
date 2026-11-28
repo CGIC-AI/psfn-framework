@@ -603,6 +603,13 @@ export interface EvaluateL3Input {
    * Absent for direct mandatory-tier routing where L2 never ran.
    */
   l2?: { labels: readonly IntakeRiskLabel[]; injectionConfidence: number };
+  /**
+   * The reason L2 returned `escalate_l3`. L2 has already decided L3 must run
+   * (its own routing, or the intake.l2 decision-site threshold, which
+   * `shouldEscalateToL3` cannot see), so L3 runs on this reason instead of
+   * re-deriving its trigger from the L2 labels and confidence.
+   */
+  l2EscalationReason?: string;
   config: IntakePolicyConfig;
   /**
    * Startup-resolved models. Single mode treats these as an ordered failover
@@ -670,7 +677,9 @@ function aggregateL3Verdicts(verdicts: L3Verdict[], dual: boolean): L3AggregateV
  */
 export async function evaluateL3(input: EvaluateL3Input): Promise<L3ScreeningOutcome> {
   const { config, context } = input;
-  const trigger = shouldEscalateToL3(config, context.sourceRiskTier, input.l2);
+  const trigger: L3EscalationTrigger = input.l2EscalationReason !== undefined
+    ? { escalate: true, reason: input.l2EscalationReason }
+    : shouldEscalateToL3(config, context.sourceRiskTier, input.l2);
   if (!trigger.escalate) {
     return { kind: 'skipped', reason: trigger.reason };
   }

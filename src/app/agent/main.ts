@@ -1237,7 +1237,7 @@ async function main(): Promise<void> {
       },
     },
   });
-  const sleepConsolidator = new SleepCycleEpisodeConsolidator(firstPersonPreservingEpisodicStore, sessionManager, llmProvider, {
+  const sleepConsolidator = new SleepCycleEpisodeConsolidator(firstPersonPreservingEpisodicStore, sessionManager.storedSessionTranscriptReader, llmProvider, {
     reviewWindowMs: schedulerConfig.sleepConsolidation.reviewWindowDays * DAY_MS,
     refinementWindowMs: schedulerConfig.sleepConsolidation.refinementWindowHours * HOUR_MS,
     adjacencyGapMs: schedulerConfig.sleepConsolidation.adjacencyGapMinutes * MINUTE_MS,
@@ -1289,8 +1289,8 @@ async function main(): Promise<void> {
     ),
   }, agentLoop, {
     // Ground each meaning in the actual attributed turns, not the auto-summarized
-    // title/landmark (bead dtym). Same reader synthesis/consolidation use.
-    transcriptReader: sessionManager,
+    // title/landmark (bead dtym). Same stored-session reader sleep consolidation uses.
+    transcriptReader: sessionManager.storedSessionTranscriptReader,
     // Prioritized nightly budget (h4fp.6): rank participants by contact trust
     // so high-trust episodes land inside the capped pass first. Unknown
     // participant ids simply rank 0.

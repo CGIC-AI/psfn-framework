@@ -371,6 +371,89 @@ test('model attribution follows a slow appraisal to success instead of abandonin
   }
 });
 
+test('model attribution selects its interactive rows by turn id, not by the request session (k53rj)', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    choices: [{ message: { content: 'ok' } }],
+  }), { status: 200 });
+  let turnIndex = 0;
+  // The kube testing-harness principal lands every turn in one persistent
+  // channel, so ledger rows carry that channel as session_id rather than the
+  // X-Session-ID the case sent.
+  const harnessChannel = 'api:testing-harness';
+  const row = (turnId, slotKey, model, lane, originStage) => ({
+    slot_key: slotKey,
+    provider: 'fixture-router',
+    model,
+    charge_lane: lane,
+    charge_surface: 'unknown',
+    purpose: lane === 'background' ? 'background' : 'chat',
+    origin_stage: originStage,
+    recorded_at_ms: 0,
+    turn_id: turnId,
+    session_id: harnessChannel,
+  });
+  const ledger = [
+    row('turn-lane-1', 'chat-slot', 'chat-model', 'interactive', 'agent.turn.prompt'),
+    row('turn-lane-2', 'vision-slot', 'vision-model', 'interactive', 'agent.turn.prompt'),
+    row('turn-lane-3', 'background-slot', 'background-model', 'background', 'emotion.appraisal'),
+    // Another case's turn in the same persistent channel, on a different slot.
+    row('turn-other-case', 'background-slot', 'background-model', 'interactive', 'agent.turn.prompt'),
+  ];
+  const modelsConfig = {
+    models: [
+      { id: 'chat-slot', identity: { provider: 'fixture-router', model: 'chat-model' }, purposes: [{ purpose: 'chat', primary: true }] },
+      { id: 'vision-slot', identity: { provider: 'fixture-router', model: 'vision-model' }, purposes: [{ purpose: 'vision', primary: true }] },
+      { id: 'background-slot', identity: { provider: 'fixture-router', model: 'background-model' }, purposes: [{ purpose: 'background', primary: true }] },
+    ],
+  };
+  const ledgerReads = [];
+  const laneServices = {
+    ...services,
+    readJsonIfExists: () => modelsConfig,
+    waitForTurnRecord: async () => ({
+      turnId: `turn-lane-${++turnIndex}`, status: 'completed', assistantMessage: { content: 'ok' },
+    }),
+    pgAll: async (sql, params) => (/emotion_appraisal/u.test(sql)
+      ? [{ job_id: 'job-lane', kind: 'emotion_appraisal', source_turn_id: params[0], state: 'succeeded' }]
+      : []),
+    gatewayPgScalar: async () => 'emotion.appraisal',
+    gatewayPgAll: async (sql, params) => {
+      if (/call_kind = 'embedding'/u.test(sql)) return [];
+      ledgerReads.push(params);
+      const [interactiveScope, backgroundTurnId] = params;
+      const inInteractiveScope = (entry) => (Array.isArray(interactiveScope)
+        ? interactiveScope.includes(entry.turn_id)
+        : entry.session_id === interactiveScope);
+      return ledger.filter((entry) => (
+        (entry.charge_lane === 'interactive' && inInteractiveScope(entry))
+        || (entry.charge_lane === 'background'
+          && entry.turn_id === backgroundTurnId
+          && entry.origin_stage === 'emotion.appraisal')
+      ));
+    },
+  };
+
+  try {
+    const attribution = buildHardeningCases(context, laneServices, {
+      modelLaneDispatchTimeoutMs: 20_000,
+    }).find((entry) => entry.id === 'model_lane_attribution');
+    const outcome = await attribution.execute({
+      ctx: context,
+      sessionId: 'hardening-spend-kube-channel',
+      apiUserId: context.primaryApiUserId,
+    });
+    assert.deepEqual(ledgerReads, [[['turn-lane-1', 'turn-lane-2'], 'turn-lane-3']]);
+    assert.deepEqual(
+      outcome.sideChecks.modelLane.ledgerRows.map((entry) => entry.turn_id),
+      ['turn-lane-1', 'turn-lane-2', 'turn-lane-3'],
+    );
+    assert.deepEqual(attribution.validatePersistedProof({ outcome }), []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('the backup round-trip case self-derives a benign scalar flip and full payloads from backup.json', async () => {
   const svc = backupServices(backupOwnerFile());
   const beforeChecks = await backupCase(svc).before({ ctx: context });

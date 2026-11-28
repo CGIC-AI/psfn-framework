@@ -65,15 +65,17 @@ const BACKUP_FLIP_FIELD_CANDIDATES = Object.freeze([
 const VISION_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 
-// Scope the spend ledger to THIS case: foreground rows carry the case session
-// id, while the emotion-appraisal call carries the source turn id. The
-// lane+turn predicate excludes unrelated concurrent background work. $1 = case
-// session id; $2 = the source turn whose successful appraisal landed usage.
+// Scope the spend ledger to THIS case by the exact turns it drove. The
+// ledger's session_id is the gateway channel, not the X-Session-ID the case
+// sent: on kube every testing-harness turn lands in one persistent channel
+// (psfn-framework-k53rj). The lane+turn predicate also excludes unrelated
+// concurrent background work. $1 = the case's interactive and vision turn ids;
+// $2 = the source turn whose successful appraisal landed usage.
 const MODEL_USAGE_QUERY = `
   select slot_key, provider, model, charge_lane, charge_surface, purpose,
          origin_stage, recorded_at_ms, turn_id, session_id
   from model_usage_events
-  where (session_id = $1 and charge_lane = 'interactive')
+  where (turn_id = any($1::text[]) and charge_lane = 'interactive')
     or (
       charge_lane = 'background'
       and turn_id = $2
@@ -524,7 +526,10 @@ export function buildHardeningCases(ctx, services, options = {}) {
             try {
               ledgerRows = await services.gatewayPgAll(
                 MODEL_USAGE_QUERY,
-                [sessionId, background.backgroundTurnId],
+                [
+                  [interactiveTurnId, visionTurnId].filter((turnId) => typeof turnId === 'string'),
+                  background.backgroundTurnId,
+                ],
               );
             } catch (error) {
               proofQueryFailures.push({

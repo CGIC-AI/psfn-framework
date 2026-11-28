@@ -73,7 +73,7 @@ function runCli(): Promise<unknown> {
     parseArgs,
     printUsage,
     run: async options => {
-      const { config } = await bootstrapMaintenanceRuntime();
+      const { config } = await bootstrapMaintenanceRuntime({ hydrateOwnerFiles: true });
       if (config.persistenceBackend !== 'postgres') {
         throw new Error('Embedding migration requires config.persistenceBackend=postgres');
       }

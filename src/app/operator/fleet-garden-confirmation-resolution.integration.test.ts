@@ -88,7 +88,7 @@ const signer = createGatewayRequestCapabilitySigner({
   ttlSeconds: 30,
 });
 
-type Actor = 'admin_token' | 'sso_admin' | 'sso_guest';
+type Actor = 'admin_token' | 'sso_admin' | 'sso_guest' | 'testing_harness';
 
 function authContext(actor: Actor, companionId: CompanionId): RequestCapabilityAuthContext {
   if (actor === 'admin_token') {
@@ -104,6 +104,23 @@ function authContext(actor: Actor, companionId: CompanionId): RequestCapabilityA
       sessionRecordId: `admin-token-session-${companionId}`,
       sessionAssurance: 'break_glass',
       fleetAccessMode: 'sole_admin',
+      authorizationEventId: randomUUID(),
+      resolvedAt: '2030-01-01T00:00:00.000Z',
+    };
+  }
+  if (actor === 'testing_harness') {
+    return {
+      principalId: 'testing-harness',
+      provider: 'testing_harness',
+      providerSubjectId: 'testing-harness',
+      companionId,
+      contactBindingId: 'binding-1',
+      contactId: 'contact-1',
+      operatorGrantId: 'harness-grant',
+      role: 'admin',
+      sessionRecordId: 'session-1',
+      sessionAssurance: 'oauth',
+      fleetAccessMode: 'multi_admin',
       authorizationEventId: randomUUID(),
       resolvedAt: '2030-01-01T00:00:00.000Z',
     };
@@ -164,8 +181,11 @@ async function issue(input: {
     authContext: authContext(input.actor, input.companionId),
     versions: VERSIONS,
   };
-  const token = signer.signOperator(signInput);
-  const verified = verifier.verifyOperator({ token, ...signInput });
+  const harness = input.actor === 'testing_harness';
+  const token = harness ? signer.signTestingHarness(signInput) : signer.signOperator(signInput);
+  const verified = harness
+    ? verifier.verifyTestingHarness({ token, ...signInput })
+    : verifier.verifyOperator({ token, ...signInput });
   const issued = await gatewayReplay.consume(
     compileRequestCapabilityReplayConsumption({ token, verified, target }),
   );
@@ -332,6 +352,13 @@ describe('Fleet Garden resolution of gateway-owned approvals', () => {
       verifier,
       signer,
       replay: gatewayReplay,
+      testingHarness: {
+        enabled: true,
+        principalId: 'testing-harness',
+        operatorGrantId: 'harness-grant',
+        role: 'admin',
+        allowedActions: ['confirmations.read', 'confirmations.manage'],
+      },
       authority: {
         reauthorize: async (input) => {
           reauthorizations.push(input);
@@ -384,6 +411,7 @@ describe('Fleet Garden resolution of gateway-owned approvals', () => {
         }))),
         verifier,
         replay: new AtomicRequestCapabilityReplayPort(),
+        testingHarness: { enabled: true },
       }),
       fleetTransport: {
         close: callback => callback(),
@@ -501,6 +529,46 @@ describe('Fleet Garden resolution of gateway-owned approvals', () => {
       body: { id, decision: 'approve' },
     }));
     expect(result.status).toBe(403);
+    expect(effects).toEqual([]);
+    expect(pending(id)).toBe(true);
+  });
+
+  it('resolves for the testing-harness Garden principal with its provider identity', async () => {
+    const id = await enqueue(COMPANION_A);
+    const result = await resolveThroughGarden(await issue({
+      companionId: COMPANION_A,
+      actor: 'testing_harness',
+      body: { id, decision: 'approve' },
+    }));
+    expect(result).toEqual({
+      status: 200,
+      body: expect.objectContaining({ ok: true, status: 'approved', executed: true }),
+    });
+    expect(effects).toEqual([COMPANION_A]);
+    expect(boundary.listConfirmationHistory().find(entry => entry.id === id)).toMatchObject({
+      resolver: {
+        kind: 'operator',
+        id: `fleet-garden:${COMPANION_A}:testing_harness:testing-harness`,
+      },
+    });
+  });
+
+  it('hands a body the gateway cannot read to the agent instead of failing', async () => {
+    const id = await enqueue(COMPANION_A);
+    // The Garden accepts extra keys; the strict gateway door does not.
+    const result = await resolveThroughGarden(await issue({
+      companionId: COMPANION_A,
+      actor: 'admin_token',
+      body: { id, decision: 'approve', note: 'extra' },
+    }));
+    expect(result).toEqual({
+      status: 200,
+      body: expect.objectContaining({ ok: false, status: 'not_found', executed: false }),
+    });
+    expect(agentForwards).toEqual([{
+      companionId: COMPANION_A,
+      requestPath: '/api/admin/confirmations/resolve',
+    }]);
     expect(effects).toEqual([]);
     expect(pending(id)).toBe(true);
   });

@@ -6,6 +6,7 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import {
   GatewayOperatorConfirmationDeniedError,
+  GatewayOperatorConfirmationInvalidError,
   type GatewayOperatorConfirmationClient,
 } from '../../app/startup/support/gateway-operator-confirmation-client.js';
 import { isResolvedConfirmationDecision } from '../../system/capabilities/confirmation-queue.js';
@@ -263,6 +264,14 @@ export class FleetGardenOperatorRouter {
           requestId: admitted.verified.requestId,
           decisionId: admitted.verified.decisionId,
           versions: admitted.verified.versions,
+          ...(admitted.verified.authContext.provider === 'testing_harness'
+            ? {
+                providerIdentity: {
+                  provider: 'testing_harness' as const,
+                  audience: admitted.verified.authContext.principalId,
+                },
+              }
+            : {}),
         },
       });
       if (result.status === 'not_found') return false;
@@ -274,6 +283,9 @@ export class FleetGardenOperatorRouter {
       });
       return true;
     } catch (error) {
+      // The gateway holds no resolution for a body it cannot read; an
+      // agent-local confirmation may, exactly as for not_found.
+      if (error instanceof GatewayOperatorConfirmationInvalidError) return false;
       if (error instanceof GatewayOperatorConfirmationDeniedError) {
         // The service-denial observer records this 403 with the admitted actor.
         sendJson(res, 403, { ok: false, message: 'Confirmation resolve denied' });

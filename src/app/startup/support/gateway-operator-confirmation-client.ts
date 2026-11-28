@@ -35,6 +35,8 @@ export interface FleetConfirmationParentCapability {
   readonly requestId: string;
   readonly decisionId: string;
   readonly versions: RequestCapabilityAuthorityVersions;
+  /** Present only for testing-harness parents, as on the child exchange. */
+  readonly providerIdentity?: Readonly<{ provider: 'testing_harness'; audience: string }>;
 }
 
 type GatewayOperatorConfirmationAuthority =
@@ -47,6 +49,17 @@ type GatewayOperatorConfirmationAuthority =
       kind: 'fleet_principal';
       parent: FleetConfirmationParentCapability;
     }>;
+
+/**
+ * The gateway could not read the request as one of its resolutions; nothing
+ * was resolved, so an agent-local confirmation may still own it.
+ */
+export class GatewayOperatorConfirmationInvalidError extends Error {
+  constructor() {
+    super('Gateway operator confirmation request was invalid.');
+    this.name = 'GatewayOperatorConfirmationInvalidError';
+  }
+}
 
 /** The gateway refused the presented authority; no resolution happened. */
 export class GatewayOperatorConfirmationDeniedError extends Error {
@@ -177,6 +190,7 @@ async function postResolution(input: {
     body: JSON.stringify(input.body),
   });
   const responseText = await readBoundedText(response);
+  if (response.status === 400) throw new GatewayOperatorConfirmationInvalidError();
   if (response.status === 403) throw new GatewayOperatorConfirmationDeniedError();
   if (!response.ok) {
     throw new Error(`Gateway operator confirmation failed with HTTP ${response.status}.`);
@@ -264,6 +278,7 @@ export function createGatewayFleetConfirmationClient(
         body: {
           schemaVersion: 1,
           companionId: parent.target.companionId,
+          ...(parent.providerIdentity ? { providerIdentity: parent.providerIdentity } : {}),
           parent: {
             token: parent.token,
             target: {

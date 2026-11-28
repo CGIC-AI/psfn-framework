@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { GatewayFleetAuthChildAssertionBroker } from '../../../boundary/gateway/fleet-auth-child-assertions.js';
 import {
   GatewayChildAssertionDeniedError,
-  type AuthenticatedOperatorControlIdentity,
+  type AuthenticatedChildAssertionControlIdentity,
   type GatewayChildAssertionExchangeInput,
   type GatewayOperatorEffectInput,
 } from '../../../boundary/gateway/fleet-auth-child-assertions.js';
@@ -124,14 +124,32 @@ function parseParent(
   });
 }
 
-function operatorProcessIdentity(
+function providerIdentityValid(value: Record<string, unknown>): boolean {
+  return !Object.hasOwn(value, 'providerIdentity')
+    || (isRecord(value.providerIdentity)
+      && hasExactKeys(value.providerIdentity, ['provider', 'audience'])
+      && value.providerIdentity.provider === 'testing_harness'
+      && typeof value.providerIdentity.audience === 'string');
+}
+
+function controlIdentity(
+  value: Record<string, unknown>,
   companionId: ReturnType<typeof createCompanionId>,
-): AuthenticatedOperatorControlIdentity {
-  return Object.freeze({
-    kind: 'operator_process' as const,
-    operatorId: `operator:${companionId}` as const,
-    companionId,
-  });
+): AuthenticatedChildAssertionControlIdentity {
+  return Object.hasOwn(value, 'providerIdentity')
+    ? Object.freeze({
+        kind: 'testing_harness_provider' as const,
+        provider: 'testing_harness' as const,
+        audience: normalizeTestingHarnessApiPrincipalId(
+          (value.providerIdentity as Record<string, unknown>).audience as string,
+        ),
+        companionId,
+      })
+    : Object.freeze({
+        kind: 'operator_process' as const,
+        operatorId: `operator:${companionId}` as const,
+        companionId,
+      });
 }
 
 /**
@@ -141,15 +159,22 @@ function operatorProcessIdentity(
 export function parseOperatorParentEffectRequest(
   value: unknown,
 ): GatewayOperatorEffectInput {
+  const hasProviderIdentity = isRecord(value) && Object.hasOwn(value, 'providerIdentity');
   if (!isRecord(value)
-    || !hasExactKeys(value, ['schemaVersion', 'companionId', 'parent'])
+    || !hasExactKeys(
+      value,
+      hasProviderIdentity
+        ? ['schemaVersion', 'companionId', 'providerIdentity', 'parent']
+        : ['schemaVersion', 'companionId', 'parent'],
+    )
     || value.schemaVersion !== 1
+    || !providerIdentityValid(value)
     || !parentKeysValid(value.parent)) {
     throw new Error('invalid operator parent effect request');
   }
   const companionId = createCompanionId(value.companionId);
   return Object.freeze({
-    operator: operatorProcessIdentity(companionId),
+    operator: controlIdentity(value, companionId),
     parent: parseParent(value.parent, companionId),
   });
 }
@@ -166,11 +191,7 @@ export function parseChildAssertionExchangeRequest(
         : ['schemaVersion', 'companionId', 'parent', 'child'],
     )
     || value.schemaVersion !== 1
-    || (hasProviderIdentity
-      && (!isRecord(value.providerIdentity)
-        || !hasExactKeys(value.providerIdentity, ['provider', 'audience'])
-        || value.providerIdentity.provider !== 'testing_harness'
-        || typeof value.providerIdentity.audience !== 'string'))
+    || !providerIdentityValid(value)
     || !parentKeysValid(value.parent)
     || (value.parent.token as string).length > 65_536
     || !isRecord(value.child)
@@ -181,18 +202,8 @@ export function parseChildAssertionExchangeRequest(
   const companionId = createCompanionId(value.companionId);
   const parent = parseParent(value.parent, companionId);
   const childTarget = parseTarget(value.child.target, companionId);
-  const operator = hasProviderIdentity
-    ? Object.freeze({
-        kind: 'testing_harness_provider' as const,
-        provider: 'testing_harness' as const,
-        audience: normalizeTestingHarnessApiPrincipalId(
-          (value.providerIdentity as Record<string, unknown>).audience as string,
-        ),
-        companionId,
-      })
-    : operatorProcessIdentity(companionId);
   return Object.freeze({
-    operator,
+    operator: controlIdentity(value, companionId),
     parent,
     child: Object.freeze({
       target: childTarget,

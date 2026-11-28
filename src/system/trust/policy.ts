@@ -586,6 +586,12 @@ export function resolveChannelResponseStyle(
     channelType?: string;
     meta?: ChannelMeta;
     overrides?: ResponseStyleOverrides;
+    /**
+     * The turn is the companion's own time (free time, reflection,
+     * self-directed work), resolved by the runtime. It carries no concise
+     * nudge: that nudge is for conversation.
+     */
+    ownTime?: boolean;
   } = {},
 ): ResponseStyle {
   const overrides = options.overrides;
@@ -624,7 +630,7 @@ export function resolveChannelResponseStyle(
     return 'concise';
   }
   if (normalizedChannelType === 'internal' || normalizedChannelId.startsWith('internal:')) {
-    return 'concise';
+    return options.ownTime === true ? 'expressive' : 'concise';
   }
 
   if (normalizeChannelPrivacy(options.meta?.privacyLevel)) {

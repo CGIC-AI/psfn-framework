@@ -559,5 +559,11 @@
   "obsidianTimeoutMs": 10000,
   "uiThemeId": "garden",
   "retryMaxAttempts": 3,
-  "retryBaseDelayMs": 2000
+  "retryBaseDelayMs": 2000,
+  "reasoningEffort": {
+    "chat": "low",
+    "freeTime": "medium",
+    "reflection": "medium",
+    "selfDirected": "medium"
+  }
 }

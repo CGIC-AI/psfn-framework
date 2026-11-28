@@ -321,6 +321,10 @@ const SELF_STATUS_READ_ACTIONS = new Set([
   'conformance',
   'availability_read',
   'availability_list_peers',
+  // The companion's own reasoning effort: self state, never an external effect.
+  'reasoning_read',
+  'reasoning_set',
+  'reasoning_clear',
 ]);
 const SELF_STATUS_WRITE_ACTIONS = new Set(['availability_publish', 'availability_clear']);
 

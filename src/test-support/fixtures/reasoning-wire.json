@@ -1,0 +1,43 @@
+{
+  "registry": {
+    "schemaVersion": 1,
+    "models": [
+      {
+        "id": "primary",
+        "rank": 100,
+        "identity": { "provider": "openrouter", "model": "z-ai/glm-5", "source": { "type": "openrouter" } },
+        "purposes": [{ "purpose": "chat", "primary": true }],
+        "capabilities": { "maxOutputTokens": 16384, "contextWindow": 128000 },
+        "tuning": { "maxOutputTokens": 16384 }
+      },
+      {
+        "id": "extraction",
+        "rank": 80,
+        "identity": { "provider": "openrouter", "model": "deepseek/deepseek-v3.2", "source": { "type": "openrouter" } },
+        "purposes": [
+          { "purpose": "background", "primary": true },
+          { "purpose": "memory", "primary": true }
+        ],
+        "capabilities": { "maxOutputTokens": 8192, "contextWindow": 128000 },
+        "tuning": { "maxOutputTokens": 8192 }
+      }
+    ]
+  },
+  "config": {
+    "primaryModel": "z-ai/glm-5",
+    "primaryProvider": "openrouter",
+    "openRouterApiBaseUrl": "https://openrouter.ai/api/v1",
+    "extractionModel": "deepseek/deepseek-v3.2",
+    "extractionProvider": "openrouter",
+    "primaryMaxTokens": 4096,
+    "extractionMaxTokens": 2048,
+    "discordToken": "",
+    "discordBotId": "",
+    "characterCardPath": "",
+    "extractionInterval": 5,
+    "maintenanceIntervalMs": 300000,
+    "defaultContextWindow": 128000,
+    "extractionThresholdPct": 30,
+    "compactionThresholdPct": 70
+  }
+}

@@ -230,6 +230,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   imageComfyPollIntervalMs: { sectionId: 'channels', surface: 'advanced' },
   moaEnabled: { sectionId: 'channels', surface: 'advanced' },
   decisionBackend: { sectionId: 'llm', surface: 'advanced' },
+  reasoningEffort: { sectionId: 'llm', surface: 'advanced' },
   moaReferenceModels: { sectionId: 'channels', surface: 'advanced' },
   moaAggregatorModel: { sectionId: 'channels', surface: 'advanced' },
   moaMaxRounds: { sectionId: 'channels', surface: 'advanced' },

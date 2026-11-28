@@ -59,6 +59,7 @@ import {
   type AutomataClassLifecycleRuntime,
 } from '../../../faculties/automata/bus/class-lifecycle.js';
 import type { PostTurnActionRuntime } from '../../../core/agent/post-turn-action-runtime.js';
+import { withLaneReasoningEffort } from '../../../core/agent/reasoning-effort/provider.js';
 import type { ProductionAutomataClassId } from '../../../faculties/automata/registry-contract.js';
 
 export interface FreeTimeLaneDeps {
@@ -223,7 +224,10 @@ export function registerFreeTimeLane(deps: FreeTimeLaneDeps): void {
   });
   const freeTimeRestWindowPolicy = new DurableRestWindowPolicy(deps.restSilenceStore);
   const freeTimeChooser = new FreeTimeChooser({
-    llmProvider,
+    // The choice is the start of the companion's own time: it runs on the
+    // free-time reasoning lane (psfn-framework-xzt46).
+    llmProvider: withLaneReasoningEffort(llmProvider, agentLoop.getReasoningEffortRuntime()),
+    reasoningEffort: agentLoop.getReasoningEffortRuntime(),
     resolver: freeTimeResolver,
     restWindowPolicy: freeTimeRestWindowPolicy,
     listResumableProjects: (): FreeTimeProjectSummary[] => personalProjects.listProjects()

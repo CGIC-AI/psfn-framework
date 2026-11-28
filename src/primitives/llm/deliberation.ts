@@ -19,6 +19,11 @@ const DEFAULT_CAPS = {
   maxWallTimeMs: 45_000,
 };
 
+/** The round count a deliberation runs to when its caller names none. */
+export function defaultDeliberationMaxRounds(): number {
+  return DEFAULT_CAPS.maxRounds;
+}
+
 const DEFAULT_FATIGUE = {
   noveltyFloor: 0.18,
   fatigueStep: 0.75,

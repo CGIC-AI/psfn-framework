@@ -125,13 +125,17 @@ describe('full callable catalog schema token cost', () => {
       // psfn-framework-mv4xr declared north_star per-action idempotency
       // (list idempotent, writes effectful) through the existing schema key:
       // +172 bytes / +45 tokens on both payloads.
-      beforeTokens: 18_111,
-      afterTokens: 22_172,
-      deltaTokens: 4_061,
-      beforeBytes: 85_051,
-      afterBytes: 101_035,
-      providerSchemaHash: 'fab290637b51b37bbd7e3cef2a34cd933760e44a098fa9efb9e620d02c5d18d6',
-      parameterSchemaHash: '0aa6e51bd30ad57b26a54094da0bdcbb12d3367cb80488a6468a42c947ecb2de',
+      // psfn-framework-xzt46 added self_status reasoning_read / reasoning_set /
+      // reasoning_clear and their level / scope fields:
+      // +680 bytes / +154 tokens before, +933 bytes / +211 tokens after.
+      // Both together (shakedown candidate): the sum of the two deltas.
+      beforeTokens: 18_265,
+      afterTokens: 22_383,
+      deltaTokens: 4_118,
+      beforeBytes: 85_731,
+      afterBytes: 101_968,
+      providerSchemaHash: 'be7d0982337fea6021f1bf769015008c26a6b7b00ae491167f04dde861dcf765',
+      parameterSchemaHash: 'f5af75020f79afb8d9606aeecca784a11402cfc581d8480cbbfb1553bee18ba1',
     });
 
     // The additional description tokens affect an uncached request. A stable

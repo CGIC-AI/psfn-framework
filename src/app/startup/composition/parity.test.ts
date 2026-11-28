@@ -646,10 +646,12 @@ describe('wireReflectionRuntime', () => {
       expect(entry.telemetry?.deliberation?.totalTokens).toBe(70);
       expect(entry.telemetry?.deliberation?.estimatedCostUsd).toBeGreaterThan(0);
       expect(entry.telemetry?.deliberation?.episode).toMatchObject({
+        // Template caps below the own-time reasoning floor are raised to the
+        // shipped weekly caps (psfn-framework-cdqin).
         budget: {
           maxRounds: 1,
-          maxTotalTokens: 4000,
-          maxWallTimeMs: 30000,
+          maxTotalTokens: 280_000,
+          maxWallTimeMs: 1_350_000,
         },
         exit: {
           reason: 'max_rounds',

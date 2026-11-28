@@ -342,6 +342,9 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
     availability_publish: SCHEMA_ASSERT,
     availability_clear: SCHEMA_ASSERT,
     availability_list_peers: SCHEMA_ASSERT,
+    reasoning_read: safeRead({ action: 'reasoning_read' }),
+    reasoning_set: SCHEMA_ASSERT,
+    reasoning_clear: SCHEMA_ASSERT,
   },
   system: {
     // read depends on a settings key we cannot safely assume; restart/rebuild are

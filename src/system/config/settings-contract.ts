@@ -417,6 +417,7 @@ const SETTINGS_OBJECT_FIELDS = new Set<string>([
   'shardToolsets',
   'shellExec',
   'decisionBackend',
+  'reasoningEffort',
 ]);
 
 const DEPRECATED_SETTINGS_FIELDS = new Set<string>([

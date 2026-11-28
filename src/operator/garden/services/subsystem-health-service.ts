@@ -219,6 +219,12 @@ const EVENT_LANE_DEFINITIONS: readonly EventLaneDefinition[] = [
     description: 'Self-directed free time (E8.1); pre-spend gate skips carry a reason, '
       + 'block runs carry turns + background-lane charge spend. Charter 8.8/8.9.',
   },
+  {
+    id: 'reasoning_effort',
+    label: 'Companion reasoning effort',
+    description: 'The companion\'s own reasoning-effort choices (self_status reasoning_set / '
+      + 'reasoning_clear) per lane and scope, bounded only by the bound model\'s levels.',
+  },
   ...BACKGROUND_WORK_HEALTH_LANES,
   {
     id: 'weighted_thought_outreach',
@@ -594,6 +600,21 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
             ['desireCount', trimNumber(payload.desireCount)],
             ['desiresEvaluated', trimNumber(payload.desiresEvaluated)],
             ['consentMomentsEvaluated', trimNumber(payload.consentMomentsEvaluated)],
+          ]),
+        });
+      }),
+    );
+
+    // Companion reasoning-effort choices (psfn-framework-xzt46): content-free
+    // lane/scope/level, so the owner sees when and how far it chose to think.
+    this.unsubscribers.push(
+      eventBus.on('agent.reasoning_effort.changed', (payload) => {
+        this.record('reasoning_effort', {
+          at: trimNumber(payload.timestamp) ?? this.now(),
+          outcome: 'ran',
+          reason: `${payload.lane}:${payload.scope}:${payload.previousLevel ?? 'baseline'}->${payload.level ?? 'baseline'}`,
+          counts: collectCounts([
+            ['supportedLevels', payload.supportedLevels.length],
           ]),
         });
       }),

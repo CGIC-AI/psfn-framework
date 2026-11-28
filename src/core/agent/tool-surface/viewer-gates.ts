@@ -162,6 +162,9 @@ export const TOOL_VIEWER_GATE_DECISIONS: Readonly<Record<string, Readonly<Record
     availability_publish: write('availability'),
     availability_clear: write('availability'),
     availability_list_peers: na('sibling availability, no content'),
+    reasoning_read: na('own reasoning effort, no content'),
+    reasoning_set: write('own reasoning effort'),
+    reasoning_clear: write('own reasoning effort'),
   },
   system: { read: na('system status'), restart: write('system'), rebuild: write('system') },
   skill: {

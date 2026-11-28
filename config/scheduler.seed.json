@@ -285,7 +285,8 @@
       "chooserMaxOutputTokens": 4096,
       "projectListCap": 8,
       "projectMetadataChars": 120,
-      "silencePersistenceMinutes": 180
+      "silencePersistenceMinutes": 180,
+      "chooserReasoningDeadlineMs": 300000
     }
   },
   "weightedThoughtOutreach": {

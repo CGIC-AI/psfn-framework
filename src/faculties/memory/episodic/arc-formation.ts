@@ -100,7 +100,8 @@ const ARC_JUDGMENT_SYSTEM_PROMPT = [
   'Arcs are threads about ONE subject across time, not summaries of one day:',
   '- a book discussed on Monday and again on Wednesday is one arc about that book, even with unrelated episodes in between;',
   '- episodes in an arc are usually NOT adjacent — skip over unrelated episodes freely and link only the ones that share the thread;',
-  '- prefer "same_theme" or "recurrence" for a subject that keeps coming back, "continuation" for one effort progressing, "causal"/"resolution" when a later episode follows from or settles an earlier one, "contrast" when a later episode reverses an earlier stance;',
+  '- use "continuation" when a later episode picks up the same discussion or effort (a book discussion resuming, a project progressing), "causal"/"resolution" when a later episode follows from or settles an earlier one, "contrast" when a later episode reverses an earlier stance — these kinds join the episodes into one topic thread;',
+  '- use "same_theme" or "recurrence" only for a broad subject that keeps coming back across otherwise separate conversations (daily check-ins, a recurring mood); these stay linked but do not join one topic thread;',
   '- one episode may belong to several arcs when it genuinely serves several threads.',
   'Return strict JSON only:',
   '{',
@@ -401,13 +402,14 @@ export class EpisodeArcWeaver {
           });
           result.writtenArcs += 1;
         }
-        // apq0: materialize topic-thread identity. Arc-linked episodes belong
-        // to one topic thread; union their threads onto the deterministic
-        // min-id representative and persist. This also retries the union when
+        // apq0: materialize topic-thread identity. A thread-forming arc puts
+        // its episodes in one topic thread (a same_theme/recurrence proposal
+        // does not, d5e0p.1); union onto the min-id representative and persist. This also retries the union when
         // the arc already existed, rather than permanently skipping it after a
         // prior post-commit failure. Mutates the in-memory episodes so a
         // chained arc (A-B-C) converges within this pass.
         await applyThreadUnionForArc(this.store, source, target, {
+          arcKind: proposal.kind,
           maxThreadEpisodes: this.maxThreadEpisodes,
           now: this.now,
           ...(this.onThreadAssignment ? { onEvent: this.onThreadAssignment } : {}),
@@ -457,6 +459,7 @@ export class EpisodeArcWeaver {
         continue;
       }
       const outcome = await applyThreadUnionForArc(this.store, source, target, {
+        arcKind: arc.arcKind,
         maxThreadEpisodes: this.maxThreadEpisodes,
         now: this.now,
         ...(this.onThreadAssignment ? { onEvent: this.onThreadAssignment } : {}),

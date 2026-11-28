@@ -312,11 +312,18 @@ function hasOperatorEvidence(episode: Episode): boolean {
     || episode.themes.some(theme => /\boperator(?:[-_ ]defined)?\b/i.test(theme));
 }
 
-function classifyArcKind(source: Episode, target: Episode, overlap: number): EpisodeArcWriteInput['arcKind'] {
+function classifyArcKind(source: Episode, target: Episode, related: RelatedSource): EpisodeArcWriteInput['arcKind'] {
   const targetText = episodeEvidenceText(target);
   const combinedText = `${episodeEvidenceText(source)} ${targetText}`;
   if (hasOperatorEvidence(source) || hasOperatorEvidence(target)) {
     return 'operator_defined';
+  }
+  // d5e0p.1: the keyword kinds below assert one effort progressing and merge
+  // topic threads. Words like "update" or "again" are near-universal, so
+  // without concrete shared evidence the link only says the episodes share
+  // broad themes: that is same_theme.
+  if (!related.concreteEvidence) {
+    return 'same_theme';
   }
   if (/\b(resolved|resolution|fixed|completed|closed|done|finali[sz]ed|shipped|settled|unblocked)\b/.test(targetText)) {
     return 'resolution';
@@ -336,7 +343,7 @@ function classifyArcKind(source: Episode, target: Episode, overlap: number): Epi
   ) {
     return 'continuation';
   }
-  return overlap > 0 ? 'same_theme' : 'continuation';
+  return related.overlap > 0 ? 'same_theme' : 'continuation';
 }
 
 function arcConfidence(kind: EpisodeArcWriteInput['arcKind'], overlap: number): number {
@@ -353,14 +360,15 @@ function arcConfidence(kind: EpisodeArcWriteInput['arcKind'], overlap: number): 
 }
 
 export function buildArcInput(
-  source: Episode,
+  related: RelatedSource,
   target: Episode,
-  overlap: number,
   stableId: (prefix: string, parts: readonly string[]) => string,
 ): EpisodeArcWriteInput {
+  const source = related.episode;
+  const overlap = related.overlap;
   const sharedThemes = source.themes.filter(theme => target.themes.includes(theme));
   const themes = sharedThemes.length > 0 ? sharedThemes : target.themes.slice(0, 3);
-  const arcKind = classifyArcKind(source, target, overlap);
+  const arcKind = classifyArcKind(source, target, related);
   return {
     id: stableId('episode-arc', [source.id, target.id, themes.join('|')]),
     sourceEpisodeId: source.id,
@@ -375,11 +383,22 @@ export function buildArcInput(
   };
 }
 
+export interface RelatedSource {
+  episode: Episode;
+  overlap: number;
+  /**
+   * The link rests on more than shared broad themes: a shared specific
+   * (non-taxonomy) theme such as a topic slug, a shared artifact, or an
+   * already-shared thread.
+   */
+  concreteEvidence: boolean;
+}
+
 export function findRelatedSource(
   target: Episode,
   candidates: readonly Episode[],
-): { episode: Episode; overlap: number } | null {
-  let best: { episode: Episode; overlap: number; distanceMs: number } | null = null;
+): RelatedSource | null {
+  let best: (RelatedSource & { distanceMs: number }) | null = null;
   const targetStart = Date.parse(target.startedAt);
   const targetSubstantive = new Set(substantiveThemes(target.themes));
 
@@ -405,16 +424,24 @@ export function findRelatedSource(
     }
 
     const distanceMs = Math.max(0, targetStart - Date.parse(candidate.endedAt));
+    const concreteEvidence = specificOverlap > 0 || sharedArtifact || sameThread;
+    // A concretely related episode beats a closer one that only shares
+    // broad themes; within a class, more overlap then the nearest wins.
     if (
       !best
-      || overlap > best.overlap
-      || (overlap === best.overlap && distanceMs < best.distanceMs)
+      || (concreteEvidence && !best.concreteEvidence)
+      || (concreteEvidence === best.concreteEvidence && (
+        overlap > best.overlap
+        || (overlap === best.overlap && distanceMs < best.distanceMs)
+      ))
     ) {
-      best = { episode: candidate, overlap, distanceMs };
+      best = { episode: candidate, overlap, concreteEvidence, distanceMs };
     }
   }
 
-  return best ? { episode: best.episode, overlap: best.overlap } : null;
+  return best
+    ? { episode: best.episode, overlap: best.overlap, concreteEvidence: best.concreteEvidence }
+    : null;
 }
 
 export type { EpisodeCandidateInput };

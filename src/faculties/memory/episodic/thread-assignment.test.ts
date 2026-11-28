@@ -2,9 +2,11 @@ import type { Pool } from 'pg';
 import { describe, expect, it } from 'vitest';
 import { FakeEpisodicPool } from '../../../test-support/fake-postgres-episodic-pool.js';
 import { PostgresEpisodicStore } from './postgres-store.js';
+import { EPISODE_ARC_KINDS } from '../../../shared/contracts/episodic-memory.js';
 import type { EpisodeCreateInput } from './store-port.js';
 import {
   applyThreadUnionForArc,
+  arcFormsTopicThread,
   chooseThreadRepresentative,
   computeThreadComponents,
   hasLegacySessionThreadId,
@@ -95,6 +97,24 @@ describe('computeThreadComponents', () => {
     );
     expect([...assignments.values()].every(rep => rep === 'e3')).toBe(true);
   });
+
+  it('refuses, in edge order, any union whose merged component would exceed the cap (d5e0p.1)', () => {
+    const refused: Array<readonly [string, string]> = [];
+    const assignments = computeThreadComponents(
+      ['a', 'b', 'c', 'd', 'e'],
+      [['a', 'b'], ['b', 'c'], ['c', 'd'], ['d', 'e']],
+      { maxThreadEpisodes: 3, onRefusedEdge: edge => refused.push(edge) },
+    );
+    expect(Object.fromEntries(assignments)).toEqual({ a: 'a', b: 'a', c: 'a', d: 'd', e: 'd' });
+    expect(refused).toEqual([['c', 'd']]);
+  });
+});
+
+describe('arcFormsTopicThread', () => {
+  it('lets only arcs asserting one effort progressing merge topic threads', () => {
+    expect(EPISODE_ARC_KINDS.filter(kind => arcFormsTopicThread(kind)))
+      .toEqual(['continuation', 'causal', 'contrast', 'resolution', 'operator_defined']);
+  });
 });
 
 describe('applyThreadUnionForArc', () => {
@@ -105,6 +125,7 @@ describe('applyThreadUnionForArc', () => {
     const events: ThreadAssignmentEvent[] = [];
 
     const result = await applyThreadUnionForArc(store, source, target, {
+      arcKind: 'continuation',
       maxThreadEpisodes: 100,
       now: () => NOW,
       onEvent: event => events.push(event),
@@ -131,7 +152,7 @@ describe('applyThreadUnionForArc', () => {
     await store.createEpisode(episodeInput('e8', 'e5')); // already in e5 thread
     const newcomer = await store.createEpisode(episodeInput('e2')); // its own thread, lower id
 
-    await applyThreadUnionForArc(store, anchor, newcomer, { maxThreadEpisodes: 100 });
+    await applyThreadUnionForArc(store, anchor, newcomer, { arcKind: 'continuation', maxThreadEpisodes: 100 });
 
     // e2 is the new representative; the whole e5 thread (anchor + sibling) moves.
     expect(await threadOf(store, 'e5')).toBe('e2');
@@ -146,7 +167,7 @@ describe('applyThreadUnionForArc', () => {
     await store.createEpisode(episodeInput('e4', 'e5'));
     const newcomer = await store.createEpisode(episodeInput('e2'));
 
-    const result = await applyThreadUnionForArc(store, anchor, newcomer, { maxThreadEpisodes: 100 });
+    const result = await applyThreadUnionForArc(store, anchor, newcomer, { arcKind: 'continuation', maxThreadEpisodes: 100 });
 
     // Three live members re-pointed, but only ONE re-point statement was
     // issued: there is no per-member loop, so a mid-union crash cannot leave
@@ -165,6 +186,7 @@ describe('applyThreadUnionForArc', () => {
     const events: ThreadAssignmentEvent[] = [];
 
     const result = await applyThreadUnionForArc(store, source, target, {
+      arcKind: 'continuation',
       maxThreadEpisodes: 100,
       onEvent: event => events.push(event),
     });
@@ -184,6 +206,7 @@ describe('applyThreadUnionForArc', () => {
 
     // Losing thread 'e9' has 3 members (e9, e6, e7) which exceeds the cap of 2.
     const result = await applyThreadUnionForArc(store, source, target, {
+      arcKind: 'continuation',
       maxThreadEpisodes: 2,
       onEvent: event => events.push(event),
     });
@@ -199,7 +222,7 @@ describe('applyThreadUnionForArc', () => {
     const { store } = makeHarness();
     const source = await store.createEpisode(episodeInput('a'));
     const target = await store.createEpisode(episodeInput('b'));
-    await expect(applyThreadUnionForArc(store, source, target, { maxThreadEpisodes: 0 }))
+    await expect(applyThreadUnionForArc(store, source, target, { arcKind: 'continuation', maxThreadEpisodes: 0 }))
       .rejects.toThrow(/positive integer maxThreadEpisodes/);
   });
 });
@@ -235,6 +258,7 @@ describe('legacy session-keyed threads (pre-apq0 threadId = sessionId)', () => {
     const events: ThreadAssignmentEvent[] = [];
 
     const result = await applyThreadUnionForArc(store, bucketMember, fresh, {
+      arcKind: 'continuation',
       maxThreadEpisodes: 100,
       now: () => NOW,
       onEvent: event => events.push(event),
@@ -268,6 +292,7 @@ describe('legacy session-keyed threads (pre-apq0 threadId = sessionId)', () => {
     const events: ThreadAssignmentEvent[] = [];
 
     const result = await applyThreadUnionForArc(store, left, right, {
+      arcKind: 'continuation',
       maxThreadEpisodes: 100,
       onEvent: event => events.push(event),
     });

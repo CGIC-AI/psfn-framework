@@ -452,6 +452,17 @@ export class SessionManager implements SessionManagerTypeSurface {
   }
 
   /**
+   * A stored session id (a workset item, an episode span) names one session:
+   * only its deterministic source route may redirect it. The mutable API active
+   * context that `session new|resume` sets steers ingress, so following it here
+   * would read whichever session the companion last switched to
+   * (psfn-framework-5qipi).
+   */
+  private resolveStoredSessionId(sessionId: string): string {
+    return this.sessionRouteStore.resolve(sessionId) ?? sessionId;
+  }
+
+  /**
    * Mutable active-context resolution is an ingress operation. Admitted work
    * receives CapturedSessionReads instead and cannot call this through its
    * narrowed turn-runtime contract.
@@ -2262,6 +2273,10 @@ export class SessionManager implements SessionManagerTypeSurface {
     }).entries;
   }
 
+  /**
+   * `maxEntryId` is a revision in one session's entry-id space, so the session
+   * is resolved as a stored id, never through the mutable active context.
+   */
   getRecentMessagesAtOrBefore(
     channelId: string,
     maxEntryId: number,
@@ -2269,11 +2284,23 @@ export class SessionManager implements SessionManagerTypeSurface {
   ): SessionEntry[] {
     this.assertMutableSessionReadAllowed('SessionManager.getRecentMessagesAtOrBefore');
     return this.getRecentMessagesAtOrBeforeForResolvedChannel(
-      this.resolveSessionChannelId(channelId),
+      this.resolveStoredSessionId(channelId),
       maxEntryId,
       limit,
     );
   }
+
+  /**
+   * Transcript reads for background passes keyed by a stored session id (the
+   * sleeptime stages, the dream pass). Same entries as `getRecentMessages`, but
+   * the session is resolved as a stored id.
+   */
+  readonly storedSessionTranscriptReader = {
+    getRecentMessages: (sessionId: string, limit: number): SessionEntry[] => {
+      this.assertMutableSessionReadAllowed('SessionManager.storedSessionTranscriptReader');
+      return this.getRecentMessagesForResolvedChannel(this.resolveStoredSessionId(sessionId), limit);
+    },
+  };
 
   private getRecentMessagesAtOrBeforeForResolvedChannel(
     resolvedChannelId: string,

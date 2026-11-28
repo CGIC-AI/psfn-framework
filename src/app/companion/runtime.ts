@@ -1231,7 +1231,7 @@ async function composeCompanionRuntime(
       },
     },
   });
-  const sleepConsolidator = new SleepCycleEpisodeConsolidator(firstPersonPreservingEpisodicStore, sessionManager, llmProvider, {
+  const sleepConsolidator = new SleepCycleEpisodeConsolidator(firstPersonPreservingEpisodicStore, sessionManager.storedSessionTranscriptReader, llmProvider, {
     reviewWindowMs: schedulerConfig.sleepConsolidation.reviewWindowDays * MS_PER_DAY,
     refinementWindowMs: schedulerConfig.sleepConsolidation.refinementWindowHours * MS_PER_HOUR,
     adjacencyGapMs: schedulerConfig.sleepConsolidation.adjacencyGapMinutes * MS_PER_MINUTE,
@@ -1281,7 +1281,7 @@ async function composeCompanionRuntime(
       companionAuthoredEpisodicStore.updateCompanionAuthoredEpisode(input)
     ),
   }, agentLoop, {
-    transcriptReader: sessionManager,
+    transcriptReader: sessionManager.storedSessionTranscriptReader,
     contactTrust: {
       resolveTrustRanks: async (contactIds) => {
         const entries = await Promise.all(contactIds.map(async (contactId) => {

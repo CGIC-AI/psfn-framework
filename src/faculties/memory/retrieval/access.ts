@@ -22,6 +22,10 @@ import {
   type MemoryWithheldSummary,
 } from '../withheld-summary.js';
 import type { RetrievalAccessDecision } from './types.js';
+import {
+  EXTERNAL_MEMORY_CHANNEL,
+  externalMemoryPolicyChannelId,
+} from '../../../shared/routing/external-memory-channel.js';
 
 const WITHHOLD_BOUNDARY_TAGS = new Set([
   'withhold',
@@ -146,6 +150,35 @@ function resolveMemorySourceRoom(memory: Pick<PurrMemory, 'provenance' | 'scopeR
   };
 }
 
+/**
+ * Hermes archives each external session under its own `api:hermes:<hash>` room,
+ * but the governed external channel is one logical room per bound contact: the
+ * session hash is derived from that contact binding (externalMemorySessionId).
+ * Two external session rooms are therefore the same room only inside a DM scope
+ * whose contact is the recall's canonical contact AND the memory's sole
+ * participant attribution. Unattributed memories, other contacts' sessions and
+ * every non-external room stay distinct, so visibility fails closed.
+ */
+function isSameBoundExternalRoom(
+  sourceRoomId: string,
+  currentRoomId: string,
+  memory: Pick<PurrMemory, 'contactId' | 'provenance'>,
+  options: RetrievalParticipantAccessContext,
+): boolean {
+  if (externalMemoryPolicyChannelId(sourceRoomId) !== EXTERNAL_MEMORY_CHANNEL
+    || externalMemoryPolicyChannelId(currentRoomId) !== EXTERNAL_MEMORY_CHANNEL) {
+    return false;
+  }
+  const scope = options.roomVisibility?.conversationScope;
+  if (scope?.kind !== 'dm') return false;
+  const scopeContactId = normalizeContactId(scope.contact.contactId);
+  if (!scopeContactId || normalizeContactId(options.canonicalContactId) !== scopeContactId) {
+    return false;
+  }
+  return resolveMemorySubjectContactId(memory) === scopeContactId
+    && hasOnlyCanonicalParticipantAttribution(memory, scopeContactId);
+}
+
 function isPrimaryPrivateDmSubject(
   memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'tags' | 'provenance' | 'scopeRef' | 'scopeTags'>,
   options: RetrievalParticipantAccessContext,
@@ -231,6 +264,7 @@ function evaluateRoomVisibilityDecision(
     return undefined;
   }
   if (source.roomId === currentRoomId) return undefined;
+  if (isSameBoundExternalRoom(source.roomId, currentRoomId, memory, options)) return undefined;
 
   if (isScopeDirectMessage(roomVisibility)) {
     if (roomVisibility.canonicalContactRoomIds?.has(source.roomId)) {

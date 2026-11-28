@@ -7693,13 +7693,6 @@
     },
     {
       "file": "src/faculties/memory/writer.ts",
-      "name": "MemoryWriter.upsert.$call:truncation:slice.arg1#4",
-      "value": "60",
-      "form": "truncation",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
-      "file": "src/faculties/memory/writer.ts",
       "name": "MemoryWriter.writeWithEmbedding.$call:truncation:slice.arg1#1",
       "value": "60",
       "form": "truncation",
@@ -7722,13 +7715,6 @@
     {
       "file": "src/faculties/memory/writer.ts",
       "name": "MemoryWriter.writeWithEmbedding.$call:truncation:slice.arg1#4",
-      "value": "60",
-      "form": "truncation",
-      "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."
-    },
-    {
-      "file": "src/faculties/memory/writer.ts",
-      "name": "MemoryWriter.writeWithEmbedding.$call:truncation:slice.arg1#5",
       "value": "60",
       "form": "truncation",
       "note": "Reviewed existing call-site policy surfaced by psfn-framework-aicg6.32; explicitly baselined as acknowledged migration debt, not silently accepted as immutable code ownership."

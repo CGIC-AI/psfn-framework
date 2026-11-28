@@ -3438,6 +3438,38 @@ describe('SessionStore', () => {
     expect(reloaded.getRecent(channelId, 10).map(entry => entry.content)).toEqual(['newer session']);
   });
 
+  it('groups every journal session of one channel under the channel id (d5e0p.8)', () => {
+    const channelId = 'voxta:legacy:cf0a06ea';
+    const prefixSharingChannelId = 'voxta:legacy:cf0a06e';
+    const journal = (filename: string, channel: string, content: string, timestamp: number) => {
+      writeFileSync(join(dir, filename), `${JSON.stringify({
+        type: 'message', id: 1, channelId: channel, role: 'user', content, timestamp,
+      })}\n`);
+    };
+    journal('20241119_voxta-legacy-cf0a06ea_alex_111111.jsonl', channelId, 'older chain', 1_731_994_680_409);
+    journal('20241225_voxta-legacy-cf0a06ea_alex_222222.jsonl', channelId, 'newer chain', 1_735_138_451_488);
+    journal('20241226_voxta-legacy-cf0a06e_alex_333333.jsonl', prefixSharingChannelId, 'other channel', 1_735_200_000_000);
+
+    const reloaded = new SessionStore(dir);
+    const sessionIds = reloaded.listChannels()
+      .filter(session => session.channelId === channelId)
+      .map(session => session.sessionId);
+    expect(sessionIds).toHaveLength(2);
+    const suffixedId = sessionIds.find(sessionId => sessionId !== channelId);
+    expect(suffixedId).toMatch(/^voxta:legacy:cf0a06ea#/u);
+
+    for (const sessionId of [channelId, ...sessionIds]) {
+      const group = reloaded.getJournalSessionGroup(sessionId);
+      expect(group.channelId).toBe(channelId);
+      expect(group.sessionIds[0]).toBe(channelId);
+      expect(new Set(group.sessionIds)).toEqual(new Set([channelId, ...sessionIds]));
+    }
+    expect(reloaded.getJournalSessionGroup(prefixSharingChannelId)).toEqual({
+      channelId: prefixSharingChannelId,
+      sessionIds: [prefixSharingChannelId],
+    });
+  });
+
   it('resolves latest session by last message timestamp across channels', () => {
     store.append({
       channelId: 'api:older',

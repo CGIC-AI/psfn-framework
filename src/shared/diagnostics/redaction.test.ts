@@ -3,6 +3,8 @@ import {
   isDiagnosticSecretKey,
   redactSecretsInText,
   redactSecretsInValue,
+  sanitizeDiagnosticValue,
+  sanitizeOperationalMetadata,
 } from './redaction.js';
 
 describe('shared secret redaction', () => {
@@ -49,5 +51,40 @@ describe('shared secret redaction', () => {
         safe: 'keep-me',
       },
     });
+  });
+});
+
+describe('numeric telemetry under content-shaped keys (d5e0p.18)', () => {
+  it('keeps numbers and numeric lists while masking string content under the same keys', () => {
+    expect(sanitizeOperationalMetadata({
+      coveredUpToMessageId: 4812,
+      sourceMessageIds: [4801, 4802, 4810],
+      ambiguousSpeakerSkipReasons: { ambiguous_source_message_ids: 3, unattributed_turn: 1 },
+      messageCount: 0,
+      text: 'private memory text',
+      lastMessage: 'private transcript line',
+      messageIds: ['discord-message-id'],
+      mixedMessageIds: [12, 'private text'],
+      content: { body: 'private body' },
+      badMessageId: Number.NaN,
+    })).toEqual({
+      coveredUpToMessageId: 4812,
+      sourceMessageIds: [4801, 4802, 4810],
+      ambiguousSpeakerSkipReasons: { ambiguous_source_message_ids: 3, unattributed_turn: 1 },
+      messageCount: 0,
+      text: '[REDACTED_CONTENT]',
+      lastMessage: '[REDACTED_CONTENT]',
+      messageIds: '[REDACTED_CONTENT]',
+      mixedMessageIds: '[REDACTED_CONTENT]',
+      content: '[REDACTED_CONTENT]',
+      badMessageId: '[REDACTED_CONTENT]',
+    });
+  });
+
+  it('keeps numeric diagnostic context and still masks secrets that happen to be numeric', () => {
+    expect(sanitizeDiagnosticValue(4812, 'coveredUpToMessageId')).toBe(4812);
+    expect(sanitizeDiagnosticValue('4812', 'coveredUpToMessageId')).toBe('[REDACTED_CONTENT]');
+    expect(sanitizeDiagnosticValue(123456, 'password')).toBe('[REDACTED_SECRET]');
+    expect(sanitizeOperationalMetadata({ secretMessageIds: [1, 2] })).toEqual({ secretMessageIds: '[REDACTED_SECRET]' });
   });
 });

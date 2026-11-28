@@ -63,6 +63,7 @@ import type {
   CompanionToolActivityPayload,
 } from './contracts/companion-relay.js';
 import type { AcacAxis, VADVector } from './contracts/emotion-contracts.js';
+import type { DecisionSiteTrace } from '../primitives/llm/decision/types.js';
 import { createComponentLogger } from './logger.js';
 
 const log = createComponentLogger('EventBus');
@@ -959,6 +960,8 @@ export interface EventMap {
     compositionalCandidateCount?: number;
     compositionalEvaluationBatchCount?: number;
     compositionalFinalistCount?: number;
+    queryIntentDecision?: DecisionSiteTrace;
+    rerankDecision?: DecisionSiteTrace;
     embeddingCalls?: number;
     searchCalls?: number;
     stageTimingsMs?: Record<string, number>;

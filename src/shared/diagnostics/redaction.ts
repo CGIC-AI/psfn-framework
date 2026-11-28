@@ -23,6 +23,17 @@ export function isDiagnosticContentKey(key: string): boolean {
   return CONTENT_KEY_PATTERN.test(key);
 }
 
+/**
+ * Content keys match by substring (`coveredUpToMessageId`,
+ * `ambiguous_source_message_ids`), but a finite number — or a list of them —
+ * is a count, id or watermark, never transcript text (d5e0p.18). Strings,
+ * objects and mixed lists under content keys stay masked.
+ */
+function isNumericTelemetryValue(value: unknown): value is number | number[] {
+  if (typeof value === 'number') return Number.isFinite(value);
+  return Array.isArray(value) && value.every(item => typeof item === 'number' && Number.isFinite(item));
+}
+
 export function sanitizeDiagnosticText(input: unknown): string {
   const raw = String(input ?? '').trim();
   if (!raw) return '';
@@ -76,7 +87,9 @@ export function sanitizeDiagnosticValue(value: unknown, key = ''): string | numb
   if (['promptTokens', 'completionTokens', 'totalTokens'].includes(key)
     && typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return value;
   if (key && isDiagnosticSecretKey(key)) return SECRET_VALUE;
-  if (key && isDiagnosticContentKey(key)) return CONTENT_VALUE;
+  if (key && isDiagnosticContentKey(key)) {
+    return typeof value === 'number' && isNumericTelemetryValue(value) ? value : CONTENT_VALUE;
+  }
   if (value === null || value === undefined) return null;
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
   if (typeof value === 'boolean') return value;
@@ -89,6 +102,7 @@ export function sanitizeOperationalMetadata(value: unknown): unknown {
   const seen = new WeakSet<object>();
   const visit = (entry: unknown, key = ''): unknown => {
     if (key && (isDiagnosticSecretKey(key) || isDiagnosticContentKey(key))) {
+      if (!isDiagnosticSecretKey(key) && Array.isArray(entry) && isNumericTelemetryValue(entry)) return [...entry];
       return sanitizeDiagnosticValue(entry, key);
     }
     if (entry === null || typeof entry !== 'object') return sanitizeDiagnosticValue(entry, key);

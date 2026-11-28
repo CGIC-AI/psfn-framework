@@ -157,7 +157,7 @@ export interface SleeptimeReviewAgent {
 }
 
 type SleeptimeEpisodeReader = Pick<EpisodicStorePort, 'searchByTime'>;
-type SessionMemoryReader = Pick<SessionManager, 'getRecentMessagesAtOrBefore'>
+type SessionMemoryReader = Pick<SessionManager, 'getRecentMessagesAtOrBefore' | 'getJournalSessionGroup'>
   & Partial<Pick<SessionManager, 'isSessionRetiredOrQuarantined'>>;
 type SleeptimeMemoryWriter = Pick<MemoryWriter, 'write'>;
 type SleeptimeEpisodeConsolidator = Pick<SleepCycleEpisodeConsolidator, 'run'>;
@@ -968,6 +968,21 @@ export class SleeptimeMemoryAgent {
     if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) {
       throw new Error('Retired or quarantined sessions are not eligible for sleeptime');
     }
+    // d5e0p.8: a channel whose L0 history spans several journal chains is
+    // indexed as `<channel>` plus `<channel>#<file>` sessions. They are one
+    // conversation: the channel session reads its primary chain, receives its
+    // appends, and reviews the episodes of every chain. A suffixed alias is a
+    // logged no-op so the same day is never reviewed twice.
+    const journalGroup = this.sessionManager.getJournalSessionGroup(sessionId);
+    if (journalGroup.channelId !== sessionId) {
+      log.info('Sleeptime stage skipped for a journal alias session; its conversation is reviewed under the channel session', {
+        sessionId,
+        channelId: journalGroup.channelId,
+        stage: input.stage,
+        journalSessionCount: journalGroup.sessionIds.length,
+      });
+      return;
+    }
     let recentEntries = entriesBySession.get(sessionId);
     if (!recentEntries) {
       recentEntries = this.sessionManager
@@ -1304,11 +1319,13 @@ export class SleeptimeMemoryAgent {
    * The current logical session's recent consolidated episodes, returned oldest
    * first. One logical session may span bound private physical surfaces; group,
    * invite-only, and unrelated private sessions retain distinct logical owners.
+   * Episodes stamped with any journal session of the same channel belong to
+   * this conversation (d5e0p.8).
    * Errors propagate rather than silently widening or degrading that context.
    */
   private async loadDayEpisodes(sessionId: string, throughOccurredAtMs: number): Promise<Episode[]> {
     const episodes = await this.episodicStore.searchByTime({
-      spanSessionId: sessionId,
+      spanSessionIds: this.sessionManager.getJournalSessionGroup(sessionId).sessionIds,
       order: 'desc',
       from: toIsoInstant(throughOccurredAtMs - DAY_MS),
       to: toIsoInstant(throughOccurredAtMs),

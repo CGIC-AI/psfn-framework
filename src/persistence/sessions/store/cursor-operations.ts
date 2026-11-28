@@ -12,7 +12,11 @@ import {
 } from '../store-primitives.js';
 import type { ResolvedIndexedSession } from './channel-index.js';
 import type { SessionJournalRuntime } from './journal-runtime.js';
-import { indexedChannelId } from './session-index-keys.js';
+import {
+  indexedChannelId,
+  resolveJournalSessionGroup,
+  type JournalSessionGroup,
+} from './session-index-keys.js';
 import {
   buildRecentEntriesFingerprint,
   syncLightweightSessionCacheFromIndex,
@@ -572,6 +576,10 @@ export class SessionCursorOperations {
       channelType: latest.channelType,
       lastRole: latest.lastRole,
     };
+  }
+  getJournalSessionGroup(sessionId: string): JournalSessionGroup {
+    this.context.refreshChannelIndexFromDisk();
+    return resolveJournalSessionGroup(sessionId, new Map(this.context.getChannelIndexEntries()));
   }
   listChannels(): Array<{ sessionId: string; channelId: string; messageCount: number }> {
     this.context.primeChannelIndexFromDisk();

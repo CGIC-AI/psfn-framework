@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, it, expect, vi } from 'vitest';
+import { SessionStore } from '../../persistence/sessions/store.js';
 import type { InferredPostTurnAction, SubstrateMessage, AgentResponse } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
 import {
@@ -39,6 +40,12 @@ import {
   clearDiagnosticLogRingBufferForTests,
   getRecentDiagnosticLogRecords,
 } from '../../shared/logger.js';
+
+/** A session indexed under one journal chain (d5e0p.8). */
+function singleJournalSession(sessionId: string): { channelId: string; sessionIds: string[] } {
+  return { channelId: sessionId, sessionIds: [sessionId] };
+}
+
 
 /** start == end means the window covers the whole day. */
 function alwaysOpenRestWindow(): EpisodicProcessingRestWindowConfig {
@@ -219,6 +226,7 @@ describe('SleeptimeMemoryAgent', () => {
       episodicStore: makeEpisodeReader(),
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([]),
       },
       conversationalActivityWorkset: makeConversationalWorkset(),
@@ -292,6 +300,7 @@ describe('SleeptimeMemoryAgent', () => {
   it('infers one companion sleeptime action for quiet changed sessions', async () => {
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getJournalSessionGroup: singleJournalSession,
       getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([]),
       listRecentSessions: vi.fn().mockReturnValue([
         {
@@ -330,6 +339,7 @@ describe('SleeptimeMemoryAgent', () => {
   it('does not infer sleeptime actions for testing sessions', async () => {
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getJournalSessionGroup: singleJournalSession,
       getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([]),
       listRecentSessions: vi.fn().mockReturnValue([
         {
@@ -359,6 +369,7 @@ describe('SleeptimeMemoryAgent', () => {
     const reviewAgent = makeReviewAgent('{}');
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getJournalSessionGroup: singleJournalSession,
       getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([{
         id: 1,
         channelId: 'terminal:testing:queued-rest-window-probe',
@@ -457,6 +468,7 @@ describe('SleeptimeMemoryAgent', () => {
       restWindow: nightRestWindow(),
       conversationalActivityWorkset: workset,
       sessionManager: {
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([{
           id: 1,
           channelId: validId,
@@ -485,6 +497,7 @@ describe('SleeptimeMemoryAgent', () => {
   it('does not infer idle actions for sessions active inside the window', async () => {
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getJournalSessionGroup: singleJournalSession,
       getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([]),
       listRecentSessions: vi.fn().mockReturnValue([
         {
@@ -543,6 +556,7 @@ describe('SleeptimeMemoryAgent', () => {
       }));
       const sessionManager = {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           {
             id: 1,
@@ -643,6 +657,7 @@ describe('SleeptimeMemoryAgent', () => {
       }));
       const sessionManager = {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           { id: 1, channelId: CHANNEL, role: 'user', content: 'Please keep answers concise while we debug.', timestamp: CONVERSATION_AT - 120_000 },
           { id: 2, channelId: CHANNEL, role: 'assistant', content: 'Understood, I will prioritize concise replies.', timestamp: CONVERSATION_AT - 60_000 },
@@ -751,6 +766,7 @@ describe('SleeptimeMemoryAgent', () => {
       agent: reviewAgent,
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           {
             id: 1,
@@ -808,6 +824,7 @@ describe('SleeptimeMemoryAgent', () => {
       agent: reviewAgent,
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           {
             id: 1,
@@ -862,6 +879,7 @@ describe('SleeptimeMemoryAgent', () => {
       agent: reviewAgent,
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           { id: 1, channelId: 'terminal:test', role: 'user', content: 'We debugged the gateway all evening.', timestamp: Date.now() },
         ]),
@@ -899,6 +917,7 @@ describe('SleeptimeMemoryAgent', () => {
       conversationalActivityWorkset: workset,
       memoryWriter,
       sessionManager: {
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([{
           id: 1,
           channelId: 'terminal:test',
@@ -947,6 +966,7 @@ describe('SleeptimeMemoryAgent', () => {
       coreMemoryStore,
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           { id: 1, channelId: 'terminal:test', role: 'user', content: 'Still working through the gateway debugging together.', timestamp: Date.now() },
         ]),
@@ -990,6 +1010,7 @@ describe('SleeptimeMemoryAgent', () => {
       },
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           { id: 1, channelId: 'terminal:test', role: 'user', content: 'That gateway outage tonight made me anxious, honestly.', timestamp: Date.now() },
         ]),
@@ -1032,6 +1053,7 @@ describe('SleeptimeMemoryAgent', () => {
       },
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           { id: 1, channelId: 'terminal:test', role: 'user', content: 'We debugged the gateway all evening.', timestamp: Date.now() },
         ]),
@@ -1068,6 +1090,7 @@ describe('SleeptimeMemoryAgent', () => {
       }]),
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           { id: 1, channelId: 'terminal:test', role: 'user', content: 'What a marathon.', timestamp: Date.now() },
         ]),
@@ -1105,6 +1128,7 @@ describe('SleeptimeMemoryAgent', () => {
       agent: { handleMessage },
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           { id: 1, channelId: 'terminal:test', role: 'user', content: 'What a marathon.', timestamp: Date.now() },
         ]),
@@ -1170,6 +1194,7 @@ describe('SleeptimeMemoryAgent', () => {
       ]),
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           { id: 1, channelId: 'terminal:test', role: 'user', content: 'A long evening and a slow morning.', timestamp: Date.now() },
         ]),
@@ -1217,8 +1242,8 @@ describe('SleeptimeMemoryAgent', () => {
       endedAt: '2026-07-22T02:30:00.000Z',
       themes: ['private logistics'],
     };
-    const searchByTime = vi.fn((options?: { spanSessionId?: string }) => (
-      options?.spanSessionId === 'discord:dm-logical'
+    const searchByTime = vi.fn((options?: { spanSessionIds?: readonly string[] }) => (
+      options?.spanSessionIds?.length === 1 && options.spanSessionIds[0] === 'discord:dm-logical'
         ? [currentEpisode]
         : [currentEpisode, foreignEpisode]
     ) as never);
@@ -1246,6 +1271,7 @@ describe('SleeptimeMemoryAgent', () => {
       conversationalActivityWorkset: makeConversationalWorkset('discord:dm-logical'),
       sessionManager: {
         resolveSessionChannelId: vi.fn(() => 'discord:dm-logical'),
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           { id: 1, channelId: 'api:private-app', role: 'user', content: 'What a gateway debugging marathon.', timestamp: Date.now() },
         ]),
@@ -1258,13 +1284,87 @@ describe('SleeptimeMemoryAgent', () => {
     }));
 
     expect(searchByTime).toHaveBeenCalledWith(expect.objectContaining({
-      spanSessionId: 'discord:dm-logical',
+      spanSessionIds: ['discord:dm-logical'],
       order: 'desc',
     }));
     const openingPrompt = (reviewAgent.handleMessage.mock.calls[0]?.[0] as { content: string }).content;
     expect(openingPrompt).not.toContain('Private bicycle storage arrangement');
     expect(openingPrompt).not.toContain('blue shed');
     expect(memoryWriter.write).not.toHaveBeenCalled();
+  });
+
+  it('reviews a channel split across journal sessions once, with every session\'s episodes (d5e0p.8)', async () => {
+    const channelId = 'discord:dm-7';
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-sleeptime-journal-'));
+    try {
+      for (const [filename, timestamp] of [
+        ['20260318_discord-dm-7_alex_111111.jsonl', Date.parse('2026-03-18T10:00:00.000Z')],
+        ['20261007_discord-dm-7_alex_222222.jsonl', Date.parse('2026-10-07T10:00:00.000Z')],
+      ] as const) {
+        writeFileSync(join(sessionsDir, filename), `${JSON.stringify({
+          type: 'message', id: 1, channelId, role: 'user', content: 'journal entry', timestamp,
+        })}\n`);
+      }
+      const sessions = new SessionStore(sessionsDir);
+      const aliasId = sessions.listChannels()
+        .find(session => session.channelId === channelId && session.sessionId !== channelId)?.sessionId;
+      if (!aliasId) throw new Error('expected a suffixed journal session');
+      const episode = (id: string, title: string, sessionId: string) => ({
+        id, title, landmark: `${title} landmark`, themes: ['day'],
+        startedAt: '2026-10-07T09:00:00.000Z', endedAt: '2026-10-07T09:30:00.000Z',
+        spanRefs: [{ spanId: `span-${id}`, sessionId }],
+      });
+      const dayEpisodes = [
+        episode('ep-bare', 'Morning walk plan', channelId),
+        episode('ep-alias', 'Evening recipe swap', aliasId),
+        episode('ep-other', 'Unrelated room budget', 'discord:dm-70'),
+      ];
+      const searchByTime = vi.fn(async (options?: { spanSessionIds?: readonly string[] }) => dayEpisodes.filter(
+        candidate => candidate.spanRefs.some(ref => options?.spanSessionIds?.includes(ref.sessionId)),
+      ) as never);
+      const transcript = [{
+        id: 1, channelId, role: 'user' as const, content: 'We planned a morning walk and swapped a recipe.', timestamp: Date.now(),
+      }];
+      const run = async (logicalSessionId: string) => {
+        const reviewAgent = makeReviewAgent(JSON.stringify({
+          orient: { persona: 'Rested.', human: 'Planned a morning walk.', goals: 'Keep the walk going.' },
+          memory_writes: [],
+        }));
+        const sleepConsolidator = { run: vi.fn().mockResolvedValue({ reviewedEpisodes: 0 }) };
+        const getRecentMessagesAtOrBefore = vi.fn().mockReturnValue(transcript);
+        const workset = makeConversationalWorkset(logicalSessionId);
+        await new SleeptimeMemoryAgent(makeAgentOptions({
+          agent: reviewAgent,
+          episodicStore: { searchByTime },
+          conversationalActivityWorkset: workset,
+          sleepConsolidator,
+          sessionManager: {
+            getJournalSessionGroup: sessionId => sessions.getJournalSessionGroup(sessionId),
+            getRecentMessagesAtOrBefore,
+          },
+        })).execute(makeSleeptimeAction({ payload: { sessionId: logicalSessionId } }));
+        return { reviewAgent, sleepConsolidator, getRecentMessagesAtOrBefore, workset };
+      };
+
+      const alias = await run(aliasId);
+      expect(alias.reviewAgent.handleMessage).not.toHaveBeenCalled();
+      expect(alias.sleepConsolidator.run).not.toHaveBeenCalled();
+      expect(alias.getRecentMessagesAtOrBefore).not.toHaveBeenCalled();
+      expect(alias.workset.checkpoint).toHaveBeenCalled();
+
+      searchByTime.mockClear();
+      const canonical = await run(channelId);
+      expect(canonical.sleepConsolidator.run).toHaveBeenCalledWith(expect.objectContaining({ sessionId: channelId }));
+      expect(searchByTime).toHaveBeenCalledWith(expect.objectContaining({
+        spanSessionIds: expect.arrayContaining([channelId, aliasId]),
+      }));
+      const prompt = (canonical.reviewAgent.handleMessage.mock.calls[0]?.[0] as { content: string }).content;
+      expect(prompt).toContain('Morning walk plan');
+      expect(prompt).toContain('Evening recipe swap');
+      expect(prompt).not.toContain('Unrelated room budget');
+    } finally {
+      rmSync(sessionsDir, { recursive: true, force: true });
+    }
   });
 
   it('runs the heavy passes (consolidation, arc weaving, dream meaning) inside the rest window', async () => {
@@ -1278,6 +1378,7 @@ describe('SleeptimeMemoryAgent', () => {
     }));
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getJournalSessionGroup: singleJournalSession,
       getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
         {
           id: 1,
@@ -1327,6 +1428,7 @@ describe('SleeptimeMemoryAgent', () => {
   it('records an episodic pass failure and leaves downstream stages for retry', async () => {
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getJournalSessionGroup: singleJournalSession,
       getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
         {
           id: 1,
@@ -1387,6 +1489,7 @@ describe('SleeptimeMemoryAgent', () => {
     }));
     const sessionManager = {
       getRecentMessages: vi.fn((_sessionId: string, limit: number) => entries.slice(-limit)),
+      getJournalSessionGroup: singleJournalSession,
       getRecentMessagesAtOrBefore: vi.fn((_sessionId: string, revision: number, limit: number) => (
         entries.filter(entry => entry.id <= revision).slice(-limit)
       )),
@@ -1479,6 +1582,7 @@ describe('SleeptimeMemoryAgent', () => {
       coreMemoryStore,
       conversationalActivityWorkset: workset,
       sessionManager: {
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           { id: 1, channelId: sessionId, role: 'user', content: concern.text, timestamp: startedAt },
           { id: 2, channelId: sessionId, role: 'assistant', content: 'I will remember the pending booking.', timestamp: endedAt },
@@ -1528,6 +1632,7 @@ describe('SleeptimeMemoryAgent', () => {
       now: () => now,
       conversationalActivityWorkset: workset,
       sessionManager: {
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           { id: 1, channelId: 'terminal:test', role: 'user', content: 'The booking needs confirmation.', timestamp: sourceAt },
         ]),
@@ -1642,7 +1747,7 @@ describe('SleeptimeMemoryAgent', () => {
     const agent = new SleeptimeMemoryAgent(makeAgentOptions({
       now: () => nowMs,
       conversationalActivityWorkset: workset,
-      sessionManager: { getRecentMessagesAtOrBefore: vi.fn().mockReturnValue(transcripts) },
+      sessionManager: { getJournalSessionGroup: singleJournalSession, getRecentMessagesAtOrBefore: vi.fn().mockReturnValue(transcripts) },
       agent: reviewAgent,
       episodicStore: { searchByTime },
       sleepConsolidator,
@@ -1703,6 +1808,7 @@ describe('SleeptimeMemoryAgent', () => {
     }));
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getJournalSessionGroup: singleJournalSession,
       getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
         {
           id: 1,
@@ -1758,6 +1864,7 @@ describe('SleeptimeMemoryAgent', () => {
     }));
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getJournalSessionGroup: singleJournalSession,
       getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
         {
           id: 1,
@@ -1856,6 +1963,7 @@ describe('SleeptimeMemoryAgent', () => {
     }));
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getJournalSessionGroup: singleJournalSession,
       getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
         {
           id: 1,
@@ -1958,6 +2066,7 @@ describe('SleeptimeMemoryAgent', () => {
       }));
       const sessionManager = {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           {
             id: 1,
@@ -2037,6 +2146,7 @@ describe('SleeptimeMemoryAgent', () => {
     }));
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getJournalSessionGroup: singleJournalSession,
       getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
         {
           id: 1,
@@ -2124,6 +2234,7 @@ describe('SleeptimeMemoryAgent', () => {
       memoryWriter,
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           {
             id: 10,
@@ -2182,6 +2293,7 @@ describe('SleeptimeMemoryAgent', () => {
       coreMemoryStore,
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           {
             id: 21,
@@ -2224,6 +2336,7 @@ describe('SleeptimeMemoryAgent', () => {
       onReviewFailure,
       sessionManager: {
         resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           {
             id: 31,
@@ -2297,6 +2410,7 @@ describe('SleeptimeMemoryAgent', () => {
       conversationalActivityWorkset: makeConversationalWorkset(dmSessionId, 1, 12, 'direct_message'),
       sessionManager: {
         resolveSessionChannelId: vi.fn(() => dmSessionId),
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessagesAtOrBefore: vi.fn().mockReturnValue([
           {
             id: 11,
@@ -2409,6 +2523,7 @@ describe('SleeptimeMemoryAgent', () => {
         ),
         sessionManager: {
           resolveSessionChannelId: vi.fn(() => sessionId),
+          getJournalSessionGroup: singleJournalSession,
           getRecentMessagesAtOrBefore: vi.fn().mockReturnValue(
             entries.map(entry => ({
               id: entry.id,

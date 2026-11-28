@@ -8,6 +8,12 @@ import {
   type SleeptimeMemoryAgentOptions,
 } from './sleeptime-agent.js';
 
+/** A session indexed under one journal chain (d5e0p.8). */
+function singleJournalSession(sessionId: string): { channelId: string; sessionIds: string[] } {
+  return { channelId: sessionId, sessionIds: [sessionId] };
+}
+
+
 const NOW_MS = Date.parse('2026-07-02T04:00:00.000Z');
 const DAY_MS = 24 * 60 * 60_000;
 
@@ -85,6 +91,7 @@ function makeAgent(input: {
     episodicStore: { searchByTime: vi.fn().mockResolvedValue([]) },
     sessionManager: {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getJournalSessionGroup: singleJournalSession,
       getRecentMessagesAtOrBefore: vi.fn().mockReturnValue(input.entries),
     },
     conversationalActivityWorkset: fromAny({

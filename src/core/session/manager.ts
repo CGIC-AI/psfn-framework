@@ -12,6 +12,7 @@ import type {
   LegacyChatImportResult,
   LegacyChatImportRange,
 } from '../../persistence/sessions/store.js';
+import type { JournalSessionGroup } from '../../persistence/sessions/store/session-index-keys.js';
 import {
   createUserContinuityPort,
   createMissingCrossChannelContinuityPort,
@@ -782,6 +783,11 @@ export class SessionManager implements SessionManagerTypeSurface {
 
   getSessionActivity(sessionId: string): SessionActivitySummary | null {
     return this.store.getSessionActivity(sessionId);
+  }
+
+  /** Every journal session of the conversation `sessionId` belongs to (d5e0p.8). */
+  getJournalSessionGroup(sessionId: string): JournalSessionGroup {
+    return this.store.getJournalSessionGroup(sessionId);
   }
 
   recordSessionContinuityArtifact(input: SessionContinuityArtifactInput): SessionContinuityArtifact {

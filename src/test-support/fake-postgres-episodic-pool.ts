@@ -682,14 +682,18 @@ export class FakeEpisodicPool {
       const threadId = String(values[cursor++] ?? '');
       rows = rows.filter(row => row.thread_id === threadId);
     }
-    if (normalized.includes('episode_json @>')) {
-      // apq0 real session scope: jsonb containment on spanRefs[].sessionId.
-      const containment = parseEpisodeJson(values[cursor++]);
-      const spanRefs = Array.isArray(containment.spanRefs) ? containment.spanRefs : [];
-      const wantedSession = spanRefs.length > 0 && spanRefs[0] !== null && typeof spanRefs[0] === 'object'
-        ? String((spanRefs[0] as { sessionId?: unknown }).sessionId ?? '')
-        : '';
-      rows = rows.filter(row => episodeJsonMatchesSession(row.episode_json, wantedSession));
+    const containmentCount = normalized.split('episode_json @>').length - 1;
+    if (containmentCount > 0) {
+      // apq0 real session scope: jsonb containment on spanRefs[].sessionId,
+      // OR-ed when several sessions are in scope.
+      const wantedSessions = Array.from({ length: containmentCount }, () => {
+        const containment = parseEpisodeJson(values[cursor++]);
+        const spanRefs = Array.isArray(containment.spanRefs) ? containment.spanRefs : [];
+        return spanRefs.length > 0 && spanRefs[0] !== null && typeof spanRefs[0] === 'object'
+          ? String((spanRefs[0] as { sessionId?: unknown }).sessionId ?? '')
+          : '';
+      });
+      rows = rows.filter(row => wantedSessions.some(session => episodeJsonMatchesSession(row.episode_json, session)));
     }
 
     const limit = Number(values[cursor++] ?? rows.length);

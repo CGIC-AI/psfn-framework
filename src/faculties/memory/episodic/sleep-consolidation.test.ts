@@ -23,6 +23,12 @@ import {
   getRecentDiagnosticLogRecords,
 } from '../../../shared/logger.js';
 
+/** A session indexed under one journal chain (d5e0p.8). */
+function singleJournalSession(sessionId: string): { channelId: string; sessionIds: string[] } {
+  return { channelId: sessionId, sessionIds: [sessionId] };
+}
+
+
 const NOW = new Date('2026-06-10T08:00:00.000Z');
 
 describe('SleepCycleEpisodeConsolidator', () => {
@@ -107,7 +113,7 @@ describe('SleepCycleEpisodeConsolidator', () => {
     clearDiagnosticLogRingBufferForTests();
     const consolidator = new SleepCycleEpisodeConsolidator(
       makeStore(),
-      { getRecentMessages: () => [] },
+      { getRecentMessages: () => [], getJournalSessionGroup: singleJournalSession },
       { complete: vi.fn() },
       { now: () => NOW },
     );
@@ -129,6 +135,7 @@ describe('SleepCycleEpisodeConsolidator', () => {
 
     const complete = vi.fn(async () => refinementResponse());
     const reader = {
+      getJournalSessionGroup: singleJournalSession,
       getRecentMessages: () => [
         entry(1, '2026-06-10T00:55:00.000Z', 'user', 'look at this one'),
         entry(2, '2026-06-10T01:30:00.000Z', 'assistant', 'I love it'),
@@ -181,6 +188,7 @@ describe('SleepCycleEpisodeConsolidator', () => {
 
     const complete = vi.fn(async () => refinementResponse());
     const reader = {
+      getJournalSessionGroup: singleJournalSession,
       getRecentMessages: () => [
         entry(1, '2026-06-10T00:55:00.000Z', 'user', 'look at this photo from the pier'),
         runtimeFallbackEntry(2, '2026-06-10T01:00:00.000Z'),
@@ -227,7 +235,7 @@ describe('SleepCycleEpisodeConsolidator', () => {
     const complete = vi.fn(async () => refinementResponse());
     const consolidator = new SleepCycleEpisodeConsolidator(
       store,
-      { getRecentMessages: () => [] },
+      { getRecentMessages: () => [], getJournalSessionGroup: singleJournalSession },
       { complete },
       { now: () => NOW },
     );
@@ -260,7 +268,7 @@ describe('SleepCycleEpisodeConsolidator', () => {
     const complete = vi.fn(async () => refinementResponse());
     const consolidator = new SleepCycleEpisodeConsolidator(
       store,
-      { getRecentMessages: () => [] },
+      { getRecentMessages: () => [], getJournalSessionGroup: singleJournalSession },
       { complete },
       { now: () => NOW },
     );
@@ -279,6 +287,41 @@ describe('SleepCycleEpisodeConsolidator', () => {
       spanSessionId: 'telegram:dm',
     });
     expect(otherSession.map(episode => episode.id).sort()).toEqual(['other-1', 'other-2']);
+  });
+
+  it('reviews one channel conversation split across journal sessions from either session id (d5e0p.8)', async () => {
+    const aliasId = 'discord:main#20260318_discord-main_alex_111111';
+    const journalGroup = { channelId: 'discord:main', sessionIds: ['discord:main', aliasId] };
+    const reviewedFor = async (sessionId: string) => {
+      const store = makeStore();
+      await store.createEpisode(episodeInput('bare-1', '2026-06-10T01:00:00.000Z', '2026-06-10T01:20:00.000Z'));
+      await store.createEpisode(episodeInput('alias-1', '2026-06-10T01:22:00.000Z', '2026-06-10T01:40:00.000Z', {
+        spanRefs: [{ spanId: 'span-alias-1', sessionId: aliasId }],
+      }));
+      await store.createEpisode(episodeInput('prefix-sharing', '2026-06-10T01:05:00.000Z', '2026-06-10T01:25:00.000Z', {
+        threadId: 'topic:discord-main-2',
+        channelId: 'discord:main-2',
+        spanRefs: [{ spanId: 'span-prefix', sessionId: 'discord:main-2' }],
+      }));
+      const getJournalSessionGroup = vi.fn((id: string) => (
+        journalGroup.sessionIds.includes(id) ? journalGroup : singleJournalSession(id)
+      ));
+      const result = await new SleepCycleEpisodeConsolidator(
+        store,
+        { getRecentMessages: () => [], getJournalSessionGroup },
+        { complete: vi.fn(async () => refinementResponse()) },
+        { now: () => NOW },
+      ).run({ sessionId });
+      expect(getJournalSessionGroup).toHaveBeenCalledWith(sessionId);
+      return { result, prefixSharing: await store.getEpisode('prefix-sharing') };
+    };
+
+    for (const sessionId of ['discord:main', aliasId]) {
+      const { result, prefixSharing } = await reviewedFor(sessionId);
+      // Both journal sessions' episodes, and never the prefix-sharing channel.
+      expect(result.reviewedEpisodes).toBe(2);
+      expect(prefixSharing?.endedAt).toBe('2026-06-10T01:25:00.000Z');
+    }
   });
 
   it('reviews recent episodes instead of starving them behind an over-limit old backlog (mlwk.13)', async () => {
@@ -302,7 +345,7 @@ describe('SleepCycleEpisodeConsolidator', () => {
 
     const consolidator = new SleepCycleEpisodeConsolidator(
       store,
-      { getRecentMessages: () => [] },
+      { getRecentMessages: () => [], getJournalSessionGroup: singleJournalSession },
       { complete: vi.fn(async () => refinementResponse()) },
       { now: () => NOW },
     );
@@ -330,7 +373,7 @@ describe('SleepCycleEpisodeConsolidator', () => {
     const complete = vi.fn(async () => refinementResponse());
     const consolidator = new SleepCycleEpisodeConsolidator(
       store,
-      { getRecentMessages: () => [] },
+      { getRecentMessages: () => [], getJournalSessionGroup: singleJournalSession },
       { complete },
       { now: () => NOW },
     );
@@ -357,6 +400,7 @@ describe('SleepCycleEpisodeConsolidator', () => {
     const consolidator = new SleepCycleEpisodeConsolidator(
       store,
       {
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessages: () => [
           entry(1, '2026-06-10T01:05:00.000Z', 'user', 'hello there'),
           entry(2, '2026-06-10T01:06:00.000Z', 'assistant', 'hi!'),
@@ -382,7 +426,7 @@ describe('SleepCycleEpisodeConsolidator', () => {
     const complete = vi.fn(async () => refinementResponse());
     const consolidator = new SleepCycleEpisodeConsolidator(
       store,
-      { getRecentMessages: () => [] },
+      { getRecentMessages: () => [], getJournalSessionGroup: singleJournalSession },
       { complete },
       { now: () => NOW },
     );
@@ -399,6 +443,7 @@ describe('SleepCycleEpisodeConsolidator', () => {
 
     const complete = vi.fn(async () => refinementResponse());
     const reader = {
+      getJournalSessionGroup: singleJournalSession,
       getRecentMessages: () => [
         entry(1, '2026-06-10T01:05:00.000Z', 'user', 'big news today'),
         entry(2, '2026-06-10T01:06:00.000Z', 'assistant', 'tell me everything'),
@@ -421,6 +466,7 @@ describe('SleepCycleEpisodeConsolidator', () => {
     await store.createEpisode(episodeInput('once', '2026-06-10T01:00:00.000Z', '2026-06-10T01:30:00.000Z'));
     const complete = vi.fn(async () => refinementResponse());
     const reader = {
+      getJournalSessionGroup: singleJournalSession,
       getRecentMessages: () => [
         entry(1, '2026-06-10T01:05:00.000Z', 'user', 'big news today'),
         entry(2, '2026-06-10T01:06:00.000Z', 'assistant', 'tell me everything'),
@@ -462,6 +508,7 @@ describe('SleepCycleEpisodeConsolidator', () => {
     const consolidator = new SleepCycleEpisodeConsolidator(
       store,
       {
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessages: () => [
           entry(1, '2026-06-10T05:05:30.000Z', 'user', 'you remember'),
           entry(2, '2026-06-10T05:06:00.000Z', 'assistant', 'of course I remember'),
@@ -499,6 +546,7 @@ describe('SleepCycleEpisodeConsolidator', () => {
     const consolidator = new SleepCycleEpisodeConsolidator(
       store,
       {
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessages: () => [
           entry(1, '2026-06-10T00:55:00.000Z', 'user', 'look at this one'),
           entry(2, '2026-06-10T01:30:00.000Z', 'assistant', 'I love it'),
@@ -537,6 +585,7 @@ describe('SleepCycleEpisodeConsolidator', () => {
     const consolidator = new SleepCycleEpisodeConsolidator(
       store,
       {
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessages: () => [
           entry(1, '2026-06-10T00:55:00.000Z', 'user', 'look at this one'),
           entry(2, '2026-06-10T01:30:00.000Z', 'assistant', 'I love it'),
@@ -569,6 +618,7 @@ describe('SleepCycleEpisodeConsolidator', () => {
     const consolidator = new SleepCycleEpisodeConsolidator(
       store,
       {
+        getJournalSessionGroup: singleJournalSession,
         getRecentMessages: () => [
           entry(1, '2026-06-10T05:05:30.000Z', 'user', 'look at this one'),
           entry(2, '2026-06-10T05:06:00.000Z', 'assistant', 'I love it'),
@@ -780,7 +830,7 @@ describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => 
         }),
       };
     });
-    const sessionReader = { getRecentMessages: () => entries };
+    const sessionReader = { getRecentMessages: () => entries, getJournalSessionGroup: singleJournalSession };
     const synthesis = await new EpisodicSynthesizer(store, sessionReader, {
       now: () => RUN_AT.getTime(),
       gapSplitMinutes: 45,
@@ -895,7 +945,7 @@ describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => 
     });
     const consolidator = new SleepCycleEpisodeConsolidator(
       store,
-      { getRecentMessages: () => [] },
+      { getRecentMessages: () => [], getJournalSessionGroup: singleJournalSession },
       { complete: llm },
       {
         now: () => RUN_AT,
@@ -1001,7 +1051,7 @@ describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => 
     }]));
     const consolidator = new SleepCycleEpisodeConsolidator(
       store,
-      { getRecentMessages: () => [] },
+      { getRecentMessages: () => [], getJournalSessionGroup: singleJournalSession },
       { complete: llm },
       {
         now: () => RUN_AT,
@@ -1062,7 +1112,7 @@ describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => 
     });
     const consolidator = new SleepCycleEpisodeConsolidator(
       store,
-      { getRecentMessages: () => [] },
+      { getRecentMessages: () => [], getJournalSessionGroup: singleJournalSession },
       { complete: llm },
       { now: () => RUN_AT, maxConsolidationsPerRun: 1 },
     );
@@ -1094,7 +1144,7 @@ describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => 
     });
     const consolidator = new SleepCycleEpisodeConsolidator(
       store,
-      { getRecentMessages: () => [] },
+      { getRecentMessages: () => [], getJournalSessionGroup: singleJournalSession },
       { complete: llm },
       { now: () => RUN_AT },
     );
@@ -1148,7 +1198,7 @@ describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => 
     });
     const consolidator = new SleepCycleEpisodeConsolidator(
       store,
-      { getRecentMessages: () => [] },
+      { getRecentMessages: () => [], getJournalSessionGroup: singleJournalSession },
       { complete: llm },
       { now: () => RUN_AT },
     );
@@ -1200,7 +1250,7 @@ describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => 
     const llm = complete(() => ({ content: 'not json at all' }));
     const consolidator = new SleepCycleEpisodeConsolidator(
       store,
-      { getRecentMessages: () => [] },
+      { getRecentMessages: () => [], getJournalSessionGroup: singleJournalSession },
       { complete: llm },
       { now: () => RUN_AT },
     );
@@ -1236,7 +1286,7 @@ describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => 
     const llm = complete(() => groupingResponse(grouping));
     const consolidator = new SleepCycleEpisodeConsolidator(
       store,
-      { getRecentMessages: () => [] },
+      { getRecentMessages: () => [], getJournalSessionGroup: singleJournalSession },
       { complete: llm },
       { now: () => RUN_AT },
     );
@@ -1301,7 +1351,7 @@ describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => 
     });
     const consolidator = new SleepCycleEpisodeConsolidator(
       store,
-      { getRecentMessages: () => [] },
+      { getRecentMessages: () => [], getJournalSessionGroup: singleJournalSession },
       { complete: llm },
       { now: () => RUN_AT },
     );

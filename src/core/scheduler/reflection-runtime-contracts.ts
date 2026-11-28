@@ -125,7 +125,7 @@ export interface ReflectionRuntimeOptions {
   memoryWriter?: Pick<MemoryWriter, 'write'>;
   promptRegistry?: PromptRegistryStatePort | null;
   reflectionStore?: ReflectionMetacognitionJournalStore;
-  sessionManager?: Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages' | 'getRecentMessagesAtOrBefore'> & Partial<Pick<
+  sessionManager?: Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages' | 'getRecentMessagesAtOrBefore' | 'getJournalSessionGroup'> & Partial<Pick<
     SessionManager,
     'getConversationEvidenceWindow' | 'recordSystemMessage' | 'recordAssistantMessage'
   >>;

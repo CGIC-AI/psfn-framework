@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { SessionEntry } from '../../../core/session/types.js';
+import type { JournalSessionGroup } from '../../../persistence/sessions/store/session-index-keys.js';
 import { isRuntimeAuthoredFallbackSessionEntry } from '../../../core/session/runtime-fallback-provenance.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import { isNonSubstantiveTheme } from './theme-classification.js';
@@ -46,6 +47,8 @@ const REFINEMENT_GATE: DeterministicGateDefinition = {
 
 export interface SleepConsolidationSessionReader {
   getRecentMessages(channelId: string, limit: number): SessionEntry[];
+  /** Journal sessions of one channel conversation (d5e0p.8). */
+  getJournalSessionGroup(sessionId: string): JournalSessionGroup;
 }
 
 /**
@@ -818,8 +821,9 @@ export class SleepCycleEpisodeConsolidator {
       // Scope to this run's session by real span-session identity (apq0
       // decoupled thread_id from sessionId): transcript grounding is pulled
       // only for input.sessionId, so refining other-session episodes would
-      // ground them against the wrong conversation (mlwk.7).
-      spanSessionId: input.sessionId,
+      // ground them against the wrong conversation (mlwk.7). Journal sessions
+      // of the same channel are one conversation (d5e0p.8).
+      spanSessionIds: this.sessionReader.getJournalSessionGroup(input.sessionId).sessionIds,
       // Newest first so an active session's recent episodes are always within
       // the cap instead of being starved behind an older backlog (mlwk.13).
       order: 'desc',
@@ -1033,8 +1037,8 @@ export class SleepCycleEpisodeConsolidator {
       // Scope to this run's session by real span-session identity (see stage 2;
       // apq0 decoupled thread_id from sessionId): candidates from other
       // sessions must not be consolidated against this session's transcript
-      // grounding (mlwk.7).
-      spanSessionId: input.sessionId,
+      // grounding (mlwk.7); journal sessions of one channel are one (d5e0p.8).
+      spanSessionIds: this.sessionReader.getJournalSessionGroup(input.sessionId).sessionIds,
       // Newest first so recent candidates are not starved behind an older
       // backlog under the cap (mlwk.13).
       order: 'desc',

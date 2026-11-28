@@ -154,6 +154,19 @@ export function createPostgresEpisodicStoreFromPool(
   return new PostgresEpisodicStore(pool, options);
 }
 
+function resolveSpanSessionScope(options: EpisodeTimeSearchOptions): string[] | undefined {
+  if (options.spanSessionId !== undefined && options.spanSessionIds !== undefined) {
+    throw new Error('spanSessionId and spanSessionIds are mutually exclusive');
+  }
+  if (options.spanSessionId !== undefined) {
+    return [parseRequiredText(options.spanSessionId, 'spanSessionId')];
+  }
+  if (options.spanSessionIds === undefined) return undefined;
+  const sessionIds = [...new Set(options.spanSessionIds.map(id => parseRequiredText(id, 'spanSessionIds')))];
+  if (sessionIds.length === 0) throw new Error('spanSessionIds must name at least one session');
+  return sessionIds;
+}
+
 export class PostgresEpisodicStore implements
   EpisodicStorePort,
   EpisodeEmbeddingRuntimeStorePort,
@@ -435,17 +448,20 @@ export class PostgresEpisodicStore implements
       params.push(to);
       where.push(`started_at <= $${params.length}`);
     }
-    if (options.spanSessionId !== undefined) {
+    const spanSessionIds = resolveSpanSessionScope(options);
+    if (spanSessionIds) {
       // Real session scope (apq0). An episode's session identity lives in its
       // span refs (episode_json.spanRefs[].sessionId), NOT thread_id — since
       // apq0 thread_id is a topic-thread id (arc connected-component
       // representative), decoupled from the session. Match any episode carrying
-      // a span in this session via jsonb containment, served by the existing
-      // episode_json GIN index (idx_l01_episodes_episode_json_gin).
-      params.push(json({
-        spanRefs: [{ sessionId: parseRequiredText(options.spanSessionId, 'spanSessionId') }],
-      }));
-      where.push(`episode_json @> $${params.length}::jsonb`);
+      // a span in one of these sessions via jsonb containment, served by the
+      // existing episode_json GIN index (idx_l01_episodes_episode_json_gin);
+      // several ids become a BitmapOr of the same indexed containment.
+      const containments = spanSessionIds.map((sessionId) => {
+        params.push(json({ spanRefs: [{ sessionId }] }));
+        return `episode_json @> $${params.length}::jsonb`;
+      });
+      where.push(containments.length === 1 ? containments[0]! : `(${containments.join(' OR ')})`);
     }
     params.push(normalizeLimit(options.limit));
     const limitIndex = params.length;

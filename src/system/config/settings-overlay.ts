@@ -68,6 +68,8 @@ export const COMPANION_SETTINGS_OVERLAY_WHITELIST = [
   'emotionScoping',
   'narrativeEmotionAppraisal',
   'cogSecPersonaConformance',
+  // Per-lane reasoning baseline is companion character config (psfn-framework-xzt46).
+  'reasoningEffort',
   'uiThemeId',
   // voice* — target guild/user/channel, cue text, and TTS/STT identity
   'voiceEnabled',

@@ -381,12 +381,19 @@ export class LLMClient {
    * mmo9.7.1: clamp a candidate's output token budget to the work spec's
    * declared `maxOutputTokens`. Only ever reduces the ceiling (fail closed);
    * absent cap leaves the candidate untouched.
+   *
+   * A work-spec cap sizes the visible answer. When the call carries a
+   * reasoning effort, reasoning tokens share the same max_tokens, so the cap
+   * would let the reasoning consume the answer: the candidate keeps its slot
+   * budget instead (owner tuning bounded by catalogue capability through
+   * resolveCompletionTokenBudget). psfn-framework-xzt46.
    */
   private applyWorkSpecOutputCap(
     candidate: RoutingCandidate,
     outputTokenCap: number | undefined,
   ): RoutingCandidate {
     if (outputTokenCap === undefined) return candidate;
+    if (this.requestCapability.sendsReasoning(candidate)) return candidate;
     const capped = Math.max(1, Math.min(candidate.maxTokens, Math.floor(outputTokenCap)));
     if (capped === candidate.maxTokens) return candidate;
     return { ...candidate, maxTokens: capped };

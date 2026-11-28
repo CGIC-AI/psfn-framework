@@ -35,6 +35,15 @@ import {
   type SelfAvailabilityAction,
 } from './self-availability.js';
 import {
+  executeSelfReasoningAction,
+  SELF_REASONING_ACTIONS,
+  type SelfReasoningAction,
+  type SelfReasoningParams,
+  type SelfReasoningPort,
+} from './self-reasoning.js';
+import { REASONING_OVERRIDE_SCOPES, type ReasoningOverrideScope } from '../agent/reasoning-effort/overrides.js';
+import { MODEL_THINKING_EFFORT_VALUES, type ModelThinkingEffort } from '../../shared/contracts/runtime.js';
+import {
   gateSessionSummariesForViewer,
   resolveViewerContextFromRequest,
 } from '../session/session-viewer-access.js';
@@ -85,10 +94,14 @@ export interface SelfStatusToolRuntime {
    */
   runConformance?: (trigger: 'manual') => Promise<ToolConformanceRunResult>;
   availability?: AgentFacingIcpAutonomyRuntime;
+  /** The companion's own reasoning-effort runtime (reasoning_* actions). */
+  reasoning?: SelfReasoningPort;
 }
 
 interface SelfStatusParams {
-  action?: 'capabilities' | 'snapshot' | 'diagnose' | 'logs' | 'conformance' | SelfAvailabilityAction;
+  action?: 'capabilities' | 'snapshot' | 'diagnose' | 'logs' | 'conformance' | SelfAvailabilityAction | SelfReasoningAction;
+  level?: ModelThinkingEffort;
+  scope?: ReasoningOverrideScope;
   state?: Parameters<AgentFacingIcpAutonomyRuntime['publishOwnAvailability']>[0]['state'];
   expires_at_ms?: number;
   revision?: number;
@@ -584,6 +597,7 @@ const SELF_STATUS_ACTIONS = [
   'logs',
   'conformance',
   ...SELF_AVAILABILITY_ACTIONS,
+  ...SELF_REASONING_ACTIONS,
 ] as const;
 
 export function createSelfStatusTool(runtime: SelfStatusToolRuntime): SubstrateAgentTool {
@@ -595,7 +609,7 @@ export function createSelfStatusTool(runtime: SelfStatusToolRuntime): SubstrateA
       action: Type.Union(
         SELF_STATUS_ACTIONS.map(action => Type.Literal(action)),
         {
-          description: 'Required self_status action: capabilities, snapshot, diagnose, logs, conformance, or availability_*.',
+          description: 'Required self_status action: capabilities, snapshot, diagnose, logs, conformance, availability_*, or reasoning_*.',
         },
       ),
       recentChannelLimit: Type.Optional(Type.Number({
@@ -639,6 +653,14 @@ export function createSelfStatusTool(runtime: SelfStatusToolRuntime): SubstrateA
         minimum: 1,
         description: 'Required current revision for availability_clear.',
       })),
+      level: Type.Optional(Type.Union(
+        MODEL_THINKING_EFFORT_VALUES.map(level => Type.Literal(level)),
+        { description: 'Required for reasoning_set: how much to think before answering; bounded to what the bound model supports.' },
+      )),
+      scope: Type.Optional(Type.Union(
+        REASONING_OVERRIDE_SCOPES.map(scope => Type.Literal(scope)),
+        { description: 'Required for reasoning_set and reasoning_clear: turn, session, or lane (until changed).' },
+      )),
     }),
     execute: async (
       _toolCallId: string,
@@ -669,6 +691,18 @@ export function createSelfStatusTool(runtime: SelfStatusToolRuntime): SubstrateA
           runtime: runtime.availability,
           params: { ...params, action } as Parameters<typeof executeSelfAvailabilityAction>[0]['params'],
           nowMs: runtime.now?.(),
+        });
+      }
+      if (SELF_REASONING_ACTIONS.includes(action as SelfReasoningAction)) {
+        if (!runtime.reasoning) {
+          return textResultWithError(
+            `self_status action="${action}" is unavailable: the reasoning-effort runtime is not wired.`,
+            true,
+          );
+        }
+        return executeSelfReasoningAction({
+          port: runtime.reasoning,
+          params: { ...params, action } as SelfReasoningParams,
         });
       }
       if (action === 'conformance') {

@@ -19,6 +19,7 @@ import { normalizeMemoryPresentationProfile } from '../config/memory-presentatio
 import { normalizeMemoryDeletionPolicy } from '../config/memory-deletion-policy.js';
 import { normalizeShellExecSettings } from '../config/shell-exec-config.js';
 import { normalizeDecisionBackendSettings } from '../config/decision-backend-config.js';
+import { normalizeReasoningEffortSettings } from '../config/reasoning-effort-config.js';
 import { normalizeCogSecPersonaConformanceSettings } from '../config/cogsec-persona-conformance-config.js';
 import {
   normalizeFalCreateModelSetting,
@@ -1325,6 +1326,12 @@ function normalizeCapabilityAndSessionSettings(
     normalized.decisionBackend = normalizeDecisionBackendSettings(
       settings.decisionBackend,
       'decisionBackend',
+    );
+  }
+  if ('reasoningEffort' in settings) {
+    normalized.reasoningEffort = normalizeReasoningEffortSettings(
+      settings.reasoningEffort,
+      'reasoningEffort',
     );
   }
 

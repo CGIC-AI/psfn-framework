@@ -1,3 +1,4 @@
+import type { ReasoningEffortRuntime } from '../agent/reasoning-effort/runtime.js';
 import type {
   PostTurnActionCandidate,
   SubstrateMessage,
@@ -117,6 +118,8 @@ export interface ReflectionRuntimeOptions {
    */
   automataClassLifecycle?: AutomataClassLifecycleRuntime | null;
   llmProvider?: LLMProviderPort;
+  /** The reflection lane's reasoning effort for deliberation calls (psfn-framework-xzt46). */
+  reasoningEffort?: Pick<ReasoningEffortRuntime, 'resolveModelHint'>;
   /** Typed decisions for opt-in post-turn pre-gates (epic 4lf3r). */
   decisionRuntime?: Pick<DecisionRuntime, 'decide' | 'siteSettings'>;
   capabilityTier?: CapabilityTier;

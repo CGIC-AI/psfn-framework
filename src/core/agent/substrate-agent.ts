@@ -80,6 +80,9 @@ import { TurnQueueIngressCoordinator } from './substrate-agent/turn-queue-ingres
 import { convertToLlm } from './messages.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { ReasoningEffortRuntime } from './reasoning-effort/runtime.js';
+import { isOwnTimeReasoningLane, resolveReasoningEffortLane } from './reasoning-effort/lanes.js';
+import { resolveRoutingCandidates } from '../../primitives/llm/routing.js';
 import type {
   ReflectionNudgePort,
   SkillsRuntimePromptPort,
@@ -355,6 +358,7 @@ export class SubstrateAgent {
   private eventBus: EventBus;
   private llmClient: LLMProviderPort;
   private runtime: ProviderRuntime;
+  private readonly reasoningEffortRuntime: ReasoningEffortRuntime;
   private sessionManager: SessionManager;
   private systemPrompt: string;
   private characterName: string;
@@ -658,6 +662,15 @@ export class SubstrateAgent {
     this.eventBus = eventBus;
     this.llmClient = llmClient;
     this.runtime = options.runtime ?? new PiProviderRuntime();
+    this.reasoningEffortRuntime = new ReasoningEffortRuntime({
+      getSettings: () => this.config.reasoningEffort,
+      catalogue: this.runtime,
+      resolvePurposeCandidate: (purpose) => resolveRoutingCandidates(this.config, purpose)[0],
+      logger: log,
+      onChange: (change) => {
+        void this.eventBus.emit('agent.reasoning_effort.changed', change);
+      },
+    });
     this.sessionManager = sessionManager;
     this.systemPrompt = systemPrompt;
     this.characterName = options.characterName?.trim()
@@ -796,6 +809,7 @@ export class SubstrateAgent {
           await this.eventBus.emit('agent.provider.payload_captured', event);
           await configuredProviderPayloadCaptured?.(event);
         },
+        reasoningEffort: this.reasoningEffortRuntime,
         transport: defaultStreamTransport,
       }),
       convertToLlm,
@@ -1203,6 +1217,7 @@ export class SubstrateAgent {
       channelType,
       meta: channelMeta,
       overrides: this.config.responseStyleOverrides,
+      ownTime: isOwnTimeReasoningLane(resolveReasoningEffortLane({ channelId: message.channelId })),
     });
   }
 
@@ -1292,6 +1307,11 @@ export class SubstrateAgent {
 
   getToolCatalog(): { core: readonly AgentTool<any>[]; extended: readonly AgentTool<any>[] } {
     return this.toolRuntimeFacade.getToolCatalog();
+  }
+
+  /** The companion's reasoning-effort runtime: lane baselines and its own choices. */
+  getReasoningEffortRuntime(): ReasoningEffortRuntime {
+    return this.reasoningEffortRuntime;
   }
 
   getGatedRegisteredTools(): readonly AgentTool<any>[] {

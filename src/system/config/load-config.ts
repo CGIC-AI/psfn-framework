@@ -33,6 +33,7 @@ import {
 import { FILESYSTEM_READ_PAGE_CONTRACT } from '../../shared/contracts/filesystem.js';
 import { createEmptySubagentRoleRegistryConfig } from '../../faculties/subagents/role-registry.js';
 import { createDefaultGroupMemorySettings } from './group-memory-config.js';
+import { createDefaultReasoningEffortSettings } from './reasoning-effort-config.js';
 import { createDefaultEmotionScopingSettings } from './emotion-scoping-config.js';
 import { createDefaultNarrativeEmotionAppraisalSettings } from './narrative-emotion-appraisal-config.js';
 import { createDefaultMemoryRetrievalPolicy } from './memory-retrieval-policy.js';
@@ -626,6 +627,7 @@ function loadConfigForMode(
     observerEvalSidecar: createDefaultObserverEvalSidecarSettings(),
     emosimProactivity: createDefaultEmoSimProactivitySettings(),
     sessionTailCache: createDefaultSessionTailCacheSettings(),
+    reasoningEffort: createDefaultReasoningEffortSettings(),
     webFetchAllowHttp: false,
     webFetchAllowInternalNetwork: false,
     homeAssistantEnabled: false,

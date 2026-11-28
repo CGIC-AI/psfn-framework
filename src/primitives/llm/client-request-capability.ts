@@ -42,6 +42,7 @@ import type {
   ExplicitToolContract,
 } from './explicit-tool-request.js';
 import { buildExactToolArgumentsModelSchema } from './explicit-tool-arguments.js';
+import { resolveCandidateReasoningSupport } from './reasoning-support.js';
 import { isRecord } from '../../shared/utils/types.js';
 
 const log = createComponentLogger('LLMClient');
@@ -79,8 +80,17 @@ export class LLMRequestCapability {
     apiKey: string | undefined;
   } {
     const modelId = candidate.model;
+    // A requested effort reaches the provider only on a reasoning model; an
+    // undeclared routed slot takes the catalogue's answer for the same model
+    // (psfn-framework-xzt46). Without a requested effort the routed model keeps
+    // the declared flag so the provider default is not switched off.
+    const reasoningSupport = this.resolveReasoningLevel(candidate)
+      ? resolveCandidateReasoningSupport(this.runtime, candidate)
+      : undefined;
     const routedModelOptions = {
-      reasoning: candidate.supportsReasoning ?? candidate.thinkingEnabled ?? false,
+      reasoning: reasoningSupport
+        ? reasoningSupport.reasoning
+        : candidate.supportsReasoning ?? candidate.thinkingEnabled ?? false,
       supportsVision: candidate.supportsVision ?? false,
     };
 
@@ -100,6 +110,9 @@ export class LLMRequestCapability {
           maxTokens: candidate.maxTokens,
           contextWindow: candidate.contextWindow,
           reasoning: routedModelOptions.reasoning,
+          ...(reasoningSupport?.thinkingLevelMap
+            ? { thinkingLevelMap: reasoningSupport.thinkingLevelMap }
+            : {}),
           supportsVision: routedModelOptions.supportsVision,
           api: this.resolveOpenAICompatibleApi(candidate),
         }),
@@ -339,6 +352,15 @@ export class LLMRequestCapability {
       }),
       providerWireMessages: this.toProviderWireMessages(context, systemRole),
     };
+  }
+
+  /**
+   * True when this call sends a reasoning effort to a model that reasons, so
+   * reasoning tokens will share the call's max_tokens with the answer.
+   */
+  sendsReasoning(candidate: RoutingCandidate): boolean {
+    return this.resolveReasoningLevel(candidate) !== undefined
+      && resolveCandidateReasoningSupport(this.runtime, candidate).reasoning;
   }
 
   private resolveReasoningLevel(candidate: RoutingCandidate): ThinkingLevel | undefined {

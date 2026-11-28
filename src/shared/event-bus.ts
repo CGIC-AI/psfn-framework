@@ -23,6 +23,7 @@ import type {
 } from '../core/agent/adaptive-tools-telemetry.js';
 import type { CompletionHandoffRecord } from './contracts/completion-handoff.js';
 import type { HumanAttentionPressureEvent } from '../core/agent/fatigue/human-attention-pressure.js';
+import type { ReasoningEffortChange } from '../core/agent/reasoning-effort/runtime.js';
 import type { PlaceKind } from './contracts/places-registry.js';
 import type { SatelliteTelemetryAuthContext } from './contracts/satellite-registry.js';
 import type { IcpAvailabilityState, IcpInitiationCandidateStatus } from './contracts/icp-autonomy.js';
@@ -664,6 +665,8 @@ export interface EventMap {
     model: string;
   } & EventCorrelationFields;
   'agent.turn.usage': { message: SubstrateMessage; usage: TurnUsage } & EventCorrelationFields;
+  /** The companion chose (or cleared) its own reasoning effort (psfn-framework-xzt46). Content-free. */
+  'agent.reasoning_effort.changed': ReasoningEffortChange;
   /** An optional prompt section was dropped because macros stayed unresolved (E2.5 no-silent-leak). */
   'agent.prompt.section_dropped': {
     channelId: string;

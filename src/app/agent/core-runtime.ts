@@ -895,6 +895,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     },
     runConformance: (trigger) => toolConformanceRunner.run(trigger),
     ...(icpAutonomyRuntime ? { availability: icpAutonomyRuntime } : {}),
+    reasoning: agentLoop.getReasoningEffortRuntime(),
   }), 'core');
 
   const skillAdmission = createArtifactAdmission('skill');

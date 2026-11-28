@@ -1,3 +1,4 @@
+import { withLaneReasoningEffort } from '../agent/reasoning-effort/provider.js';
 import { renderPendingConcernCandidatesSection } from '../intention/concern-candidate-prompt.js';
 import { compactMemoryTextForPrompt } from '../../faculties/memory/retrieval/formatting.js';
 import type { Scheduler } from './scheduler.js';
@@ -478,6 +479,13 @@ export function createReflectionTemplateRuntime(
     };
   };
 
+  // Deliberation is the companion thinking on its own time: its calls run on
+  // the reflection reasoning lane. Other reflection machinery keeps the plain
+  // provider.
+  const deliberationProvider = runtimeOptions.llmProvider && runtimeOptions.reasoningEffort
+    ? withLaneReasoningEffort(runtimeOptions.llmProvider, runtimeOptions.reasoningEffort)
+    : runtimeOptions.llmProvider;
+
   const buildReflectionDeliberationOptions = (
     template: ReflectionTemplate,
     source: ReflectionExecutionSource,
@@ -756,7 +764,7 @@ export function createReflectionTemplateRuntime(
 
     if (isExperientialDeliberationTemplate(template)) {
       return runExperientialTemplateDeliberation({
-        llmProvider: runtimeOptions.llmProvider,
+        ...(deliberationProvider ? { llmProvider: deliberationProvider } : {}),
         template,
         prompt,
         authoritativeSystemPrompt,
@@ -766,12 +774,11 @@ export function createReflectionTemplateRuntime(
       });
     }
 
-    const llmProvider = runtimeOptions.llmProvider;
-    if (!llmProvider) {
+    if (!deliberationProvider) {
       throw new Error('Deliberation mode requested without llmProvider');
     }
     const result = await runDeliberation(
-      llmProvider,
+      deliberationProvider,
       prompt,
       buildReflectionDeliberationOptions(
         template,

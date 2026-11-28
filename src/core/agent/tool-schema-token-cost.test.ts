@@ -122,13 +122,16 @@ describe('full callable catalog schema token cost', () => {
       // `tool_search` for progressive TypeScript SDK discovery; full catalog grows
       // slightly (+1525 bytes / +338 tokens) while the upfront Hybrid Code Mode
       // provider wire payload drops ~87% below the pre-Phase-3 baseline (measured below).
-      beforeTokens: 18_066,
-      afterTokens: 22_127,
-      deltaTokens: 4_061,
-      beforeBytes: 84_879,
-      afterBytes: 100_863,
-      providerSchemaHash: '2f15face55a151850cd49c78d9760415942007d85ef94eedd303f21ebe2f0ec4',
-      parameterSchemaHash: 'a5535ded768a6fb4f5c76c40f4b9d84fc857cdfd2323c66c7f2eb708328103be',
+      // psfn-framework-xzt46 added self_status reasoning_read / reasoning_set /
+      // reasoning_clear and their level / scope fields:
+      // +680 bytes / +154 tokens before, +933 bytes / +211 tokens after.
+      beforeTokens: 18_220,
+      afterTokens: 22_338,
+      deltaTokens: 4_118,
+      beforeBytes: 85_559,
+      afterBytes: 101_796,
+      providerSchemaHash: 'c31782ef2a779b5bc7413864cc89fe91ccebd912bebcffb1fb77dfe00304ecea',
+      parameterSchemaHash: 'd132b1d30febf76438ec5b66679875f4da829c01f8cc18cf2fe1e612457d90f1',
     });
 
     // The additional description tokens affect an uncached request. A stable

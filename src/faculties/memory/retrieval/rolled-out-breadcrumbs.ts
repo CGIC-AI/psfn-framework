@@ -40,14 +40,21 @@ export async function retrieveRolledOutBreadcrumbs(input: {
 }
 
 /**
- * Breadcrumbs have first claim on the bounded block, but an explicit semantic
- * match always retains one slot unless it already enriches a breadcrumb root.
+ * Without breadcrumbs the bounded block is the ranked chains up to the cap.
+ * With breadcrumbs, they have first claim on the block, but an explicit
+ * semantic match always retains one slot unless it already enriches a
+ * breadcrumb root.
  */
 export function mergePreferredBreadcrumbs(
   breadcrumbs: readonly EpisodicRetrievalChain[],
   rankedChains: readonly EpisodicRetrievalChain[],
   maxChains: number,
 ): EpisodicRetrievalChain[] {
+  // psfn-framework-ik47b.4: the merge below keeps one ranked chain, which
+  // collapsed every turn without a rolled-out boundary to a single chain.
+  if (breadcrumbs.length === 0) {
+    return rankedChains.slice(0, maxChains).map(chain => structuredClone(chain));
+  }
   let merged = breadcrumbs.map(chain => structuredClone(chain));
   const indexByRootId = new Map(merged.map((chain, index) => [chain.rootEpisodeId, index]));
   let usedEpisodeIds = new Set(merged.flatMap(chain => chain.episodes.map(episode => episode.id)));
@@ -73,17 +80,6 @@ export function mergePreferredBreadcrumbs(
     }
     merged.push(structuredClone(chain));
     break;
-  }
-
-  // Ranked chains then fill whatever capacity the breadcrumbs left. Without
-  // this, a turn with no (or few) breadcrumbs recalled only one ranked chain
-  // however many independent matches existed (psfn-framework-ik47b.4).
-  usedEpisodeIds = new Set(merged.flatMap(item => item.episodes.map(episode => episode.id)));
-  for (const chain of rankedChains) {
-    if (merged.length >= maxChains) break;
-    if (chain.episodes.some(episode => usedEpisodeIds.has(episode.id))) continue;
-    merged.push(structuredClone(chain));
-    for (const episode of chain.episodes) usedEpisodeIds.add(episode.id);
   }
 
   return merged.slice(0, maxChains);

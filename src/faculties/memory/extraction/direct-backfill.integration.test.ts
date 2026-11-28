@@ -197,7 +197,7 @@ function runtimeConfig(dataDir: string): SubstrateConfig {
     extractionThresholdPct: 30,
     compactionThresholdPct: 70,
     // The write-cap drop and its resume below depend on a cap of 2; pin it so
-    // the test does not follow the shipped default (raised to 12, d5e0p.14).
+    // the test does not follow the shipped default (d5e0p.14 raises it to 12).
     memoryExtractionMaxWrites: 2,
   } as SubstrateConfig;
 }

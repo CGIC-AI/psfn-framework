@@ -496,6 +496,12 @@ export interface ModelUsageBudgetPricingRate {
 export interface ModelUsageBudgetScope {
   companionId?: string;
   accountingStartMs?: number;
+  /**
+   * Restricts the projection to attempts recorded with exactly this
+   * attribution service and process, e.g. the remote decision backend's own
+   * ceiling (`decision` / `jev`). Absent means every attempt counts.
+   */
+  attribution?: { service: string; process: string };
 }
 
 /** Canonical budget projection over immutable PostgreSQL model attempts. */

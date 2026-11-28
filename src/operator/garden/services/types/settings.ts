@@ -9,7 +9,10 @@ import type {
 import type { ChannelClassificationSource } from '../../../../system/trust/policy.js';
 import type { CapabilityTierConfig } from '../../../../system/config/capability-tier-config.js';
 import type { ChargePolicyConfig } from '../../../../system/config/charge-policy-config.js';
-import type { SettingsContractData } from '../../../../system/config/settings-contract.js';
+import type {
+  RestartRequiredSettingsField,
+  SettingsContractData,
+} from '../../../../system/config/settings-contract.js';
 import type { SettingsDomainGardenProjection } from '../../../../system/config/settings-domain-registry.js';
 import type { BackupJsonConfig } from '../../../../system/config/backup-config.js';
 import type { ModelsRuntimeConfig } from '../../../../system/config/models-config.js';
@@ -53,9 +56,14 @@ export interface AdminVoiceProviderData {
 
 export type AdminSettingsStatusLevel = 'healthy' | 'degraded';
 
+/**
+ * `diverged`: the live refresh after a save failed. `restart_required`: the
+ * owner file on disk differs from what the gateway and agent processes loaded
+ * at startup, and they apply it only after a restart (bead y7mjg).
+ */
 export interface AdminSettingsDivergence {
-  key: 'models' | 'capabilities';
-  state: 'diverged';
+  key: 'models' | 'capabilities' | RestartRequiredSettingsField;
+  state: 'diverged' | 'restart_required';
   detail: string;
   updatedAt: number;
 }

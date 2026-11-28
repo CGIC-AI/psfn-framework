@@ -12,11 +12,19 @@
 // Backoff reuses the model fallback cooldowns: a 429/529 pauses remote calls
 // for the rate-limit cooldown and a network failure for the connectivity
 // cooldown; while paused, calls fail fast and the caller answers locally.
+//
+// With `decisionBackend.jev.dailyBudgetUsd` set, every call also passes the
+// per-companion daily spend ceiling (jev-decision-budget.ts) before dispatch.
+//
+// The service reads `config.decisionBackend` per call, but nothing reloads the
+// gateway's config after a settings.json write: a change applies when the
+// gateway restarts, and the Garden save response says so.
 
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_CONNECTIVITY_COOLDOWN_MS, DEFAULT_RATE_LIMIT_COOLDOWN_MS } from '../../primitives/llm/fallback.js';
 import { resolveConfiguredProviderCredential } from '../../primitives/llm/provider-runtime.js';
 import { jevDecisionRowCost, jevWorstCaseCostUsd } from './jev-decision-pricing.js';
+import { createJevDecisionBudgetGate, JEV_DECISION_USAGE_ATTRIBUTION } from './jev-decision-budget.js';
 import {
   buildJevDecisionsRequestBody,
   requestJevDecision,
@@ -31,7 +39,8 @@ import {
 } from '../../system/config/decision-backend-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { TelemetryVisibility } from '../../shared/contracts/runtime.js';
-import type { ModelUsageRecorder } from '../../shared/telemetry/model-usage.js';
+import type { HealthEventPublisher } from '../../shared/contracts/health-event.js';
+import type { ModelUsageBudgetQueryPort, ModelUsageRecorder } from '../../shared/telemetry/model-usage.js';
 import { createComponentLogger } from '../../shared/logger.js';
 
 const log = createComponentLogger('jev-decision-service');
@@ -74,9 +83,15 @@ export interface GatewayJevDecisionServiceOptions {
    */
   requireCompanionAttribution: boolean;
   usageRecorder?: ModelUsageRecorder;
+  /** Ledgered spend for the daily ceiling; with a ceiling set and none wired, calls refuse. */
+  budgetQuery?: ModelUsageBudgetQueryPort;
+  /** Health plane for the once-per-day ceiling signal. */
+  healthEvents?: HealthEventPublisher;
   fetch?: DecisionsFetch;
   now?: () => number;
 }
+
+type JevDecisionBackendSettings = NonNullable<JevServiceConfig['decisionBackend']>;
 
 const DECISIONS_PATH = '/api/alpha/decisions';
 
@@ -90,9 +105,13 @@ export function createGatewayJevDecisionService(
 ): GatewayJevDecisionService {
   const now = options.now ?? Date.now;
   const fetch = resolveFetch(options.fetch);
+  const budgetGate = createJevDecisionBudgetGate({
+    ...(options.budgetQuery ? { budgetQuery: options.budgetQuery } : {}),
+    ...(options.healthEvents ? { healthEvents: options.healthEvents } : {}),
+  });
   let pausedUntilMs = 0;
 
-  function assertRemoteAllowed(input: JevDecisionInput): NonNullable<JevServiceConfig['decisionBackend']> {
+  function assertRemoteAllowed(input: JevDecisionInput): JevDecisionBackendSettings {
     const settings = options.config.decisionBackend;
     if (!settings) throw new JevDecisionRefusedError('decision_backend_not_configured');
     if (decisionSitePrivacy(input.siteId) === 'companion_private') {
@@ -141,8 +160,7 @@ export function createGatewayJevDecisionService(
           purpose: 'decision',
           originType: 'background',
           originStage: `decision:${input.siteId}`,
-          service: 'decision',
-          process: 'jev',
+          ...JEV_DECISION_USAGE_ATTRIBUTION,
         },
         provider: 'openrouter',
         model: outcome.ok && outcome.model ? outcome.model : requestedModel,
@@ -165,6 +183,76 @@ export function createGatewayJevDecisionService(
     }
   }
 
+  /** Resolves to a release for the call's in-flight reservation, or refuses. */
+  async function admitWithinDailyBudget(
+    input: JevDecisionInput,
+    settings: JevDecisionBackendSettings,
+    worstCaseUsd: number | undefined,
+    nowMs: number,
+  ): Promise<() => void> {
+    const dailyBudgetUsd = settings.jev.dailyBudgetUsd;
+    if (dailyBudgetUsd === null) return () => {};
+    if (worstCaseUsd === undefined) throw new JevDecisionRefusedError('jev_pricing_unavailable');
+    const admission = await budgetGate.admit({
+      ...(input.companionId ? { companionId: input.companionId } : {}),
+      dailyBudgetUsd,
+      worstCaseUsd,
+      nowMs,
+    });
+    if (!admission.ok) throw new JevDecisionRefusedError(admission.reasonCode);
+    return admission.release;
+  }
+
+  async function dispatch(
+    input: JevDecisionInput,
+    settings: JevDecisionBackendSettings,
+    call: { apiKey: string; apiBaseUrl: string; worstCaseUsd: number | undefined; startedAtMs: number },
+    signal: AbortSignal | undefined,
+  ): Promise<DecisionOutcome> {
+    const controller = new AbortController();
+    const abortFromCaller = (): void => controller.abort();
+    signal?.addEventListener('abort', abortFromCaller, { once: true });
+    const timer = setTimeout(() => controller.abort(), settings.jev.timeoutMs);
+    let result: JevTransportResult;
+    try {
+      result = await requestJevDecision(
+        {
+          endpointUrl: new URL(DECISIONS_PATH, call.apiBaseUrl).toString(),
+          apiKey: call.apiKey,
+          model: settings.jev.model,
+          expectedSnapshot: settings.jev.expectedSnapshot,
+        },
+        { state: input.state, questions: input.questions },
+        { fetch, signal: controller.signal, now },
+      );
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abortFromCaller);
+    }
+
+    const status = result.httpStatus;
+    if (status === 429 || status === 529) {
+      pausedUntilMs = now() + DEFAULT_RATE_LIMIT_COOLDOWN_MS;
+    } else if (!result.outcome.ok && result.outcome.reason === 'error' && status === undefined) {
+      pausedUntilMs = now() + DEFAULT_CONNECTIVITY_COOLDOWN_MS;
+    }
+    if (!result.outcome.ok) {
+      log.warn('Jev decision failed; the caller answers locally', {
+        siteId: input.siteId,
+        reason: result.outcome.reason,
+        ...(status !== undefined ? { httpStatus: status } : {}),
+      });
+    }
+    await recordUsage(
+      input,
+      settings.jev.model,
+      call.startedAtMs,
+      result,
+      jevDecisionRowCost({ pricing: settings.jev.pricing, worstCaseUsd: call.worstCaseUsd, result }),
+    );
+    return result.outcome;
+  }
+
   return {
     async decide(input, signal) {
       const settings = assertRemoteAllowed(input);
@@ -184,48 +272,14 @@ export function createGatewayJevDecisionService(
           buildJevDecisionsRequestBody(settings.jev.model, input.state, input.questions),
         )
         : undefined;
-      const controller = new AbortController();
-      const abortFromCaller = (): void => controller.abort();
-      signal?.addEventListener('abort', abortFromCaller, { once: true });
-      const timer = setTimeout(() => controller.abort(), settings.jev.timeoutMs);
-      let result: JevTransportResult;
+      // The reservation is held until the call's usage row is written, so the
+      // next admission reads either the reservation or the row, never neither.
+      const releaseBudget = await admitWithinDailyBudget(input, settings, worstCaseUsd, startedAtMs);
       try {
-        result = await requestJevDecision(
-          {
-            endpointUrl: new URL(DECISIONS_PATH, apiBaseUrl).toString(),
-            apiKey,
-            model: settings.jev.model,
-            expectedSnapshot: settings.jev.expectedSnapshot,
-          },
-          { state: input.state, questions: input.questions },
-          { fetch, signal: controller.signal, now },
-        );
+        return await dispatch(input, settings, { apiKey, apiBaseUrl, worstCaseUsd, startedAtMs }, signal);
       } finally {
-        clearTimeout(timer);
-        signal?.removeEventListener('abort', abortFromCaller);
+        releaseBudget();
       }
-
-      const status = result.httpStatus;
-      if (status === 429 || status === 529) {
-        pausedUntilMs = now() + DEFAULT_RATE_LIMIT_COOLDOWN_MS;
-      } else if (!result.outcome.ok && result.outcome.reason === 'error' && status === undefined) {
-        pausedUntilMs = now() + DEFAULT_CONNECTIVITY_COOLDOWN_MS;
-      }
-      if (!result.outcome.ok) {
-        log.warn('Jev decision failed; the caller answers locally', {
-          siteId: input.siteId,
-          reason: result.outcome.reason,
-          ...(status !== undefined ? { httpStatus: status } : {}),
-        });
-      }
-      await recordUsage(
-        input,
-        settings.jev.model,
-        startedAtMs,
-        result,
-        jevDecisionRowCost({ pricing, worstCaseUsd, result }),
-      );
-      return result.outcome;
     },
   };
 }

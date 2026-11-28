@@ -2,6 +2,7 @@ import type { Contact } from '../../../core/contacts/types.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { LLMProviderPort, MemoryExtractionOutputs } from '../../../core/agent/contracts.js';
 import { buildLLMWorkSpec, completeWithWorkSpec } from '../../../primitives/llm/work-spec.js';
+import { findModelBudgetRefusal } from '../model-budget-deferral.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import {
   isExperientialSelfDirectedSessionId,
@@ -669,7 +670,10 @@ export async function runExtractionOrchestration(
         },
         failure,
       );
-    log.error('Extraction integrity failure', {
+    // A budget refusal is reported once per blocked window by the group
+    // scheduler (zwwo0), not on every refused probe.
+    const logLevel = findModelBudgetRefusal(wrapped) ? 'debug' : 'error';
+    log[logLevel]('Extraction integrity failure', {
       context: wrapped.context,
       error: toErrorMessage(wrapped),
       cause: toErrorMessage(wrapped.cause),

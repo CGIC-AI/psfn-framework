@@ -938,7 +938,7 @@ describe('EpisodicSynthesizer contextual topic cutting (E5.4)', () => {
       }),
     ]);
     // The validator's own message is carried to the lane's durable failure record.
-    expect(result.segmentationFailure).toContain('segmentation response contains no JSON object');
+    expect(result.segmentationFailure?.message).toContain('segmentation response contains no JSON object');
     expect(provider.callCount()).toBe(2);
   });
 

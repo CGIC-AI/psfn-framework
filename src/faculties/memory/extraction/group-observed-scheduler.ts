@@ -6,6 +6,7 @@ import {
 } from '../../../system/config/group-memory-config.js';
 import type { GroupMemoryExtractionFailureRetryConfig } from '../../../system/config/scheduler-config.js';
 import { formatErrorCauseChain } from '../../../shared/utils/errors.js';
+import { findModelBudgetRefusal, ModelRefusalDeferralWindow } from '../model-budget-deferral.js';
 import type { ObservedGroupExtractionOptions } from '../extraction.js';
 import type { ExtractionTriggerReason } from './types.js';
 import {
@@ -39,7 +40,12 @@ export type ObservedGroupMemorySkipReason =
   | 'extractor_rejected'
   | 'extraction_failed'
   /** A failed range is waiting out its bounded retry backoff (d5e0p.15). */
-  | 'failure_backoff';
+  | 'failure_backoff'
+  /**
+   * The model budget refused the extraction before dispatch (zwwo0): no attempt
+   * was consumed and the range is re-probed by the retry sweep.
+   */
+  | 'model_budget_deferred';
 
 export type ObservedGroupMemoryScheduleDecision =
   | {
@@ -109,6 +115,15 @@ export class ObservedGroupMemoryScheduler {
   private readonly estimateEntryTokens?: (entry: GroupMemoryRangeChunk['entries'][number]) => number;
   private readonly lastScheduledAtByChannel = new Map<string, number>();
   private readonly firstPendingObservedAtByChannel = new Map<string, number>();
+  /**
+   * Channels whose last attempt the model budget refused (zwwo0), mapped to
+   * when they may be probed again (`failureRetry.baseDelayMinutes`, never
+   * escalated, never counted). Nothing is written to their watermark, so the
+   * sweep re-probes them from here; after a restart they recover on their next
+   * traffic or recorded-failure retry.
+   */
+  private readonly budgetDeferredUntil = new Map<string, number>();
+  private readonly budgetDeferral: ModelRefusalDeferralWindow;
 
   constructor(options: ObservedGroupMemorySchedulerOptions) {
     this.groupMemory = options.groupMemory;
@@ -125,6 +140,7 @@ export class ObservedGroupMemoryScheduler {
     this.companionNames = options.companionNames ?? [];
     this.companionAuthorIds = options.companionAuthorIds ?? [];
     this.nowMs = options.nowMs ?? (() => Date.now());
+    this.budgetDeferral = new ModelRefusalDeferralWindow('group_extraction', this.nowMs);
     this.estimateEntryTokens = options.estimateEntryTokens;
   }
 
@@ -215,6 +231,16 @@ export class ObservedGroupMemoryScheduler {
     }
 
     const now = this.nowMs();
+    const deferralRemainingMs = this.budgetDeferralRemainingMs(message.channelId, now);
+    if (deferralRemainingMs > 0) {
+      return {
+        status: 'skipped',
+        channelId: message.channelId,
+        reason: 'model_budget_deferred',
+        watermarkLagMessageIds: plan.watermarkLagMessageIds,
+        cooldownRemainingMs: deferralRemainingMs,
+      };
+    }
     // A failing range honours its backoff for traffic-triggered attempts too,
     // so a busy room cannot hammer a persistently failing extraction.
     const backoffRemainingMs = plan.watermark.status === 'failed'
@@ -268,15 +294,20 @@ export class ObservedGroupMemoryScheduler {
   }
 
   /**
-   * Channels whose failed range is due for a bounded timed retry (d5e0p.15).
-   * Legacy failed records without retry state are due immediately.
+   * Channels whose failed range is due for a bounded timed retry (d5e0p.15),
+   * plus ranges the model budget deferred (zwwo0). Legacy failed records
+   * without retry state are due immediately.
    */
   listDueFailureRetries(): string[] {
     const now = this.nowMs();
-    return this.watermarkStore.listFailed()
+    const due = new Set(this.watermarkStore.listFailed()
       .filter(record => isGroupMemoryFailureRetryDue(record, now))
-      .filter(record => this.resolveSettingsForChannel(record.channelId).enabled)
-      .map(record => record.channelId);
+      .map(record => record.channelId));
+    for (const channelId of this.budgetDeferredUntil.keys()) due.add(channelId);
+    return [...due].filter(channelId => (
+      this.budgetDeferralRemainingMs(channelId, now) <= 0
+      && this.resolveSettingsForChannel(channelId).enabled
+    ));
   }
 
   /**
@@ -296,7 +327,20 @@ export class ObservedGroupMemoryScheduler {
     }
     const plan = this.planRange(channelId, settings);
     const now = this.nowMs();
-    if (!isGroupMemoryFailureRetryDue(plan.watermark, now)) {
+    const deferralRemainingMs = this.budgetDeferralRemainingMs(channelId, now);
+    if (deferralRemainingMs > 0) {
+      return {
+        status: 'skipped',
+        channelId,
+        reason: 'model_budget_deferred',
+        watermarkLagMessageIds: plan.watermarkLagMessageIds,
+        cooldownRemainingMs: deferralRemainingMs,
+      };
+    }
+    const budgetProbeDue = this.budgetDeferredUntil.has(channelId)
+      && plan.watermark.failureRetryExhaustedAt === undefined;
+    if (!budgetProbeDue && !isGroupMemoryFailureRetryDue(plan.watermark, now)) {
+      this.budgetDeferredUntil.delete(channelId);
       return {
         status: 'skipped',
         channelId,
@@ -306,6 +350,7 @@ export class ObservedGroupMemoryScheduler {
     }
     const chunk = plan.chunks[0];
     if (chunk === undefined) {
+      this.budgetDeferredUntil.delete(channelId);
       return {
         status: 'skipped',
         channelId,
@@ -314,6 +359,11 @@ export class ObservedGroupMemoryScheduler {
       };
     }
     return await this.extractChunk(channelId, 'backlog_lag', plan, chunk, settings, now);
+  }
+
+  /** Time until a budget-refused range may be probed again; 0 when due or not deferred. */
+  private budgetDeferralRemainingMs(channelId: string, now: number): number {
+    return Math.max(0, (this.budgetDeferredUntil.get(channelId) ?? now) - now);
   }
 
   private planRange(channelId: string, settings: GroupMemorySettings): GroupMemoryRangePlan {
@@ -350,6 +400,8 @@ export class ObservedGroupMemoryScheduler {
           watermarkLagMessageIds: plan.watermarkLagMessageIds,
         };
       }
+      this.budgetDeferredUntil.delete(channelId);
+      this.budgetDeferral.noteAdmitted();
       this.watermarkStore.markProcessed({
         channelId,
         startMessageId: chunk.spanStartMessageId,
@@ -370,6 +422,20 @@ export class ObservedGroupMemoryScheduler {
         hasDeferredBacklog: plan.hasDeferredBacklog,
       };
     } catch (error) {
+      const refusal = findModelBudgetRefusal(error);
+      if (refusal) {
+        // zwwo0: refused before dispatch, so no evidence against the range:
+        // nothing is recorded on its watermark and no attempt is consumed.
+        this.budgetDeferredUntil.set(channelId, now + this.failureRetry.baseDelayMinutes * MINUTE_MS);
+        this.budgetDeferral.noteRefusal(refusal, { channelId, triggerReason });
+        return {
+          status: 'skipped',
+          channelId,
+          reason: 'model_budget_deferred',
+          watermarkLagMessageIds: plan.watermarkLagMessageIds,
+        };
+      }
+      this.budgetDeferredUntil.delete(channelId);
       // The extractor wraps its root cause (ExtractionIntegrityError.cause);
       // keep the whole chain so the durable record outlives pod logs.
       const errorText = formatErrorCauseChain(error);

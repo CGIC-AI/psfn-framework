@@ -7,6 +7,7 @@ import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { createDefaultGroupMemorySettings, type GroupMemorySettings } from '../../system/config/group-memory-config.js';
 import type { ObservedGroupExtractionOptions } from '../../faculties/memory/extraction.js';
 import { ExtractionIntegrityError } from '../../faculties/memory/extraction/integrity-error.js';
+import { ModelBudgetExceededError } from '../../primitives/llm/model-budget.js';
 import {
   GROUP_MEMORY_POLICY_VERSION,
   JsonGroupMemoryWatermarkStore,
@@ -265,5 +266,99 @@ describe('observed group-memory failure retry (psfn-framework-d5e0p.15)', () => 
     expect(h.calls).toHaveLength(4);
     expect(h.failures.at(-1)).toMatchObject({ attemptCount: 4, terminal: false });
     expect(h.failures.filter(event => event.terminal)).toHaveLength(1);
+  });
+});
+
+// psfn-framework-zwwo0: a model-budget refusal is decided before any model call
+// is dispatched, so it must not consume the range's bounded attempts.
+function budgetRefusal(): ExtractionIntegrityError {
+  return new ExtractionIntegrityError(
+    'Extraction orchestration failed',
+    { stage: 'orchestration', channelId: CHANNEL, triggerReason: 'backlog_lag' },
+    new ModelBudgetExceededError({
+      timestampMs: START_MS,
+      reason: 'daily_budget_exceeded',
+      purpose: 'extraction',
+      provider: 'test-provider',
+      model: 'test-model',
+      service: 'extraction',
+      process: 'memory.extraction',
+      estimatedRequestCostUsd: 0.1,
+      budget: {
+        dayKey: '2026-05-04',
+        monthKey: '2026-05',
+        dailySpentUsd: 6,
+        dailyLimitUsd: 5,
+        monthlySpentUsd: 6,
+        monthlyLimitUsd: 5,
+        dailyUnknownCostAttempts: 0,
+        monthlyUnknownCostAttempts: 0,
+      },
+    }),
+  );
+}
+
+describe('observed group-memory retry under a model-budget block (psfn-framework-zwwo0)', () => {
+  it('defers a refused range in a quiet room without consuming attempts and extracts it once admitted', async () => {
+    let refusing = true;
+    const h = harness({ maxAttempts: 2, failWith: () => (refusing ? budgetRefusal() : null) });
+
+    await h.lane.enqueue(observed('m-1'));
+    // Traffic inside the un-escalated probe hold does not re-run the range.
+    h.clock.now = START_MS + MINUTE_MS;
+    await h.lane.enqueue(observed('m-2'));
+    expect(h.calls).toHaveLength(1);
+    for (let minute = 5; minute <= 120; minute += 5) {
+      h.clock.now = START_MS + minute * MINUTE_MS;
+      await h.sweep();
+    }
+
+    // The sweep re-probes the deferred range once per baseDelayMinutes (15),
+    // never escalating, and none of those refusals was recorded as a failure.
+    expect(h.calls).toHaveLength(1 + 120 / 15);
+    expect(h.failures).toEqual([]);
+    const deferred = h.reload();
+    expect(deferred.status).not.toBe('failed');
+    expect(deferred.consecutiveFailureCount).toBeUndefined();
+    expect(deferred.coveredUpToMessageId).toBe(0);
+
+    refusing = false;
+    h.clock.now += 15 * MINUTE_MS;
+    await h.sweep();
+
+    expect(h.reload()).toMatchObject({ status: 'processed', coveredUpToMessageId: 4 });
+    const callsAfterRecovery = h.calls.length;
+    h.clock.now += 60 * MINUTE_MS;
+    await h.sweep();
+    expect(h.calls).toHaveLength(callsAfterRecovery);
+  });
+
+  it('keeps a genuine failure count across refusals and stops at the cap', async () => {
+    const outcomes: Array<() => Error> = [
+      () => orchestrationFailure('schema rejected the extraction'),
+      budgetRefusal,
+      budgetRefusal,
+      budgetRefusal,
+      () => orchestrationFailure('schema rejected the extraction'),
+    ];
+    const h = harness({ maxAttempts: 2, failWith: () => (outcomes.shift() ?? budgetRefusal)() });
+
+    await h.lane.enqueue(observed('m-1'));
+    for (let minute = 5; minute <= 600; minute += 5) {
+      h.clock.now = START_MS + minute * MINUTE_MS;
+      await h.sweep();
+      if (h.failures.some(event => event.terminal)) break;
+    }
+
+    expect(h.failures.map(event => [event.attemptCount, event.terminal])).toEqual([
+      [1, false],
+      [2, true],
+    ]);
+    expect(h.reload()).toMatchObject({
+      status: 'failed',
+      consecutiveFailureCount: 2,
+      lastFailure: { error: 'Extraction orchestration failed <- caused by: schema rejected the extraction' },
+    });
+    expect(h.reload().failureRetryExhaustedAt).toBeDefined();
   });
 });

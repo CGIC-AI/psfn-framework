@@ -224,6 +224,8 @@ import {
   type RoutingPurpose,
 } from '../../primitives/llm/routing.js';
 import { parseModelBudgetBlockedEvent } from '../../shared/contracts/model-budget.js';
+import { ModelBudgetExceededError } from '../../primitives/llm/model-budget.js';
+import { markErrorAsNonRetryable } from '../../primitives/llm/retry.js';
 import { parseIcpConversationCostBreakerEvent } from '../../shared/contracts/icp-conversation-cost.js';
 import { IcpConversationCostBreakerError } from '../../primitives/llm/icp-conversation-cost-breaker.js';
 import {
@@ -276,15 +278,25 @@ export interface GatewayClientOptions extends OptionalCompanionRoutingBinding {
   modelPurposeSelection?: ModelPurposeSelection;
 }
 
-function modelBudgetBlockedEventFromError(error: unknown): ModelBudgetBlockedEvent | undefined {
+/**
+ * zwwo0: rebuild the gateway's pre-dispatch budget refusal as the typed error
+ * the gateway raised (non-retryable there too), so agent-side lanes can tell a
+ * refused call from a failed one. An event that fails the strict parse stays
+ * the raw RPC error and fires no budget telemetry.
+ */
+function modelBudgetExceededErrorFromRpc(error: unknown): ModelBudgetExceededError | undefined {
   if (!(error instanceof JSONRPCErrorException) || error.code !== GatewayErrors.MODEL_BUDGET_BLOCKED) {
     return undefined;
   }
+  let event: ModelBudgetBlockedEvent;
   try {
-    return parseModelBudgetBlockedEvent(error.data);
+    event = parseModelBudgetBlockedEvent(error.data);
   } catch {
     return undefined;
   }
+  const refusal = new ModelBudgetExceededError(event, error);
+  markErrorAsNonRetryable(refusal);
+  return refusal;
 }
 
 /**
@@ -790,8 +802,12 @@ export class GatewayClient implements
         callbacks?.onError?.(icpCostBlock);
         throw icpCostBlock;
       }
-      const budgetBlock = modelBudgetBlockedEventFromError(error);
-      if (budgetBlock) this.onModelBudgetBlocked?.(budgetBlock);
+      const budgetBlock = modelBudgetExceededErrorFromRpc(error);
+      if (budgetBlock) {
+        this.onModelBudgetBlocked?.(budgetBlock.event);
+        callbacks?.onError?.(budgetBlock);
+        throw budgetBlock;
+      }
       const err = error instanceof Error ? error : new Error(String(error));
       callbacks?.onError?.(err);
       throw err;
@@ -883,8 +899,11 @@ export class GatewayClient implements
       if (preemptBlock) throw preemptBlock;
       const icpCostBlock = icpConversationCostBreakerErrorFromRpc(error);
       if (icpCostBlock) throw icpCostBlock;
-      const budgetBlock = modelBudgetBlockedEventFromError(error);
-      if (budgetBlock) this.onModelBudgetBlocked?.(budgetBlock);
+      const budgetBlock = modelBudgetExceededErrorFromRpc(error);
+      if (budgetBlock) {
+        this.onModelBudgetBlocked?.(budgetBlock.event);
+        throw budgetBlock;
+      }
       throw error;
     }
 

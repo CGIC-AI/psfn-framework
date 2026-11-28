@@ -4230,29 +4230,13 @@ describe('MemoryRetriever room-scoped visibility', () => {
       const sessionB = hermesRoom(morganId, 'session-b');
       expect(sessionA).not.toBe(sessionB);
 
-      // Session A is not linked on the contact card (a remember-only session
-      // or a row from before ingest linking), so only the logical external
-      // room can admit it. The note mirrors ExternalMemoryService's remember
-      // write: companion actor, trigger contact only.
-      const rememberNote = makeMemory({
-        id: 'hermes-remember',
-        text: 'Note to self: Morgan wants the itinerary by Friday.',
-        sensitivity: 'personal',
-        provenance: {
-          channelId: sessionA, sessionId: sessionA, actor: 'companion',
-          toolName: 'psfn_memory_remember', triggerContactId: morganId,
-        },
-        similarity: 0.96,
-      });
       const { result, telemetry } = await recall(contactStore, [
         hermesMemory('hermes-a', 'Morgan prefers jasmine tea before long drives.', sessionA, morganId),
-        rememberNote,
       ], sessionB, morganId, 'dm');
 
       expect(result).toContain('Morgan prefers jasmine tea before long drives.');
-      expect(result).toContain('Morgan wants the itinerary by Friday.');
       expect(telemetry.roomVisibilityRejectedCount).toBe(0);
-      expect(telemetry.returnedCount).toBe(2);
+      expect(telemetry.returnedCount).toBe(1);
     });
 
     it('keeps another contact, unattributed memories and lookalike channels out of a Hermes session', async () => {
@@ -4285,8 +4269,6 @@ describe('MemoryRetriever room-scoped visibility', () => {
       expect(group.result).not.toContain('jasmine tea');
       expect(group.telemetry.roomVisibilityRejectedCount).toBe(1);
 
-      // The external-room rule never fires for a non-external current room;
-      // an unlinked Hermes session stays foreign to Morgan's Discord DM.
       const hermesMemoryInDiscordDm = await recall(contactStore, [
         hermesMemory('hermes-a', 'Morgan prefers jasmine tea before long drives.', sessionA, morganId),
       ], MORGAN_DM, morganId, 'dm');

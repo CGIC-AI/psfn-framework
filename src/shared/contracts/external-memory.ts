@@ -124,6 +124,19 @@ export function parseExternalMemoryExecuteParams(input: unknown): ExternalMemory
   };
 }
 
+/** Durable provenance shape of an explicit Hermes `remember` note. */
+export const EXTERNAL_MEMORY_REMEMBER_TOOL = 'psfn_memory_remember';
+const EXTERNAL_MEMORY_NOTE_SOURCE_NAMESPACE = 'external:hermes:';
+
+export function externalMemoryNoteSourceRef(receiptId: string): string {
+  return `${EXTERNAL_MEMORY_NOTE_SOURCE_NAMESPACE}${receiptId}`;
+}
+
+/** SQL LIKE pattern matching every {@link externalMemoryNoteSourceRef}. */
+export function externalMemoryNoteSourceRefPattern(): string {
+  return `${EXTERNAL_MEMORY_NOTE_SOURCE_NAMESPACE}%`;
+}
+
 /** Hash components so foreign IDs cannot escape a path or inject namespace markers. */
 export function externalMemorySessionId(binding: ExternalMemoryBinding, sessionId: string): string {
   const digest = createHash('sha256').update(JSON.stringify([

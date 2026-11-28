@@ -117,8 +117,21 @@ function jevCeilingWorstCaseUsd(): number {
   ).worstCaseUsd;
 }
 
-/** A Jev-enabled config whose daily ceiling is `worstCaseMultiple` call worst cases. */
-function makeJevCeilingConfig(dataDir: string, worstCaseMultiple: number): SubstrateConfig {
+/**
+ * What one answered tutorial call books against the ceiling: OpenRouter's
+ * billed cost wins over the local estimate (lomm1), so the fixture reply's
+ * `usage.cost` is the spend the next admission reads.
+ */
+const JEV_TUTORIAL_BILLED_USD = (TUTORIAL_RESPONSE_BODY as { usage: { cost: number } }).usage.cost;
+
+/**
+ * A daily ceiling that admits exactly one answered call: one worst case fits,
+ * one billed answer plus the next worst case does not.
+ */
+const ONE_ANSWER_CEILING = (): number => jevCeilingWorstCaseUsd() + JEV_TUTORIAL_BILLED_USD / 2;
+
+/** A Jev-enabled config whose daily ceiling is `ceiling` USD, or `ceiling` call worst cases when a multiple. */
+function makeJevCeilingConfig(dataDir: string, ceiling: number | (() => number)): SubstrateConfig {
   const config = makeBudgetConfig(dataDir);
   const defaults = createDefaultDecisionBackendSettings();
   config.decisionBackend = {
@@ -127,7 +140,7 @@ function makeJevCeilingConfig(dataDir: string, worstCaseMultiple: number): Subst
     jev: {
       ...defaults.jev,
       pricing: JEV_CEILING_PRICING,
-      dailyBudgetUsd: jevCeilingWorstCaseUsd() * worstCaseMultiple,
+      dailyBudgetUsd: typeof ceiling === 'function' ? ceiling() : jevCeilingWorstCaseUsd() * ceiling,
     },
   };
   config.openRouterApiBaseUrl = 'https://openrouter.test/api/v1';
@@ -322,7 +335,7 @@ describe('Postgres model-usage budget projection', () => {
       max: 2,
     });
     const dataDir = mkdtempSync(join(tmpdir(), 'model-usage-jev-daily-ceiling-'));
-    const config = makeJevCeilingConfig(dataDir, 1.2);
+    const config = makeJevCeilingConfig(dataDir, ONE_ANSWER_CEILING);
     try {
       const store = new PostgresModelUsageStore(pool, { companionId: 'companion-a' });
       // Chat spend far above the Jev ceiling: the ceiling counts only Jev rows.
@@ -438,7 +451,7 @@ describe('Postgres model-usage budget projection', () => {
       max: 2,
     });
     const dataDir = mkdtempSync(join(tmpdir(), 'model-usage-jev-ceiling-fleet-'));
-    const config = makeJevCeilingConfig(dataDir, 1.2);
+    const config = makeJevCeilingConfig(dataDir, ONE_ANSWER_CEILING);
     const companionA = '11111111-1111-4111-8111-111111111111';
     const companionB = '22222222-2222-4222-8222-222222222222';
     try {

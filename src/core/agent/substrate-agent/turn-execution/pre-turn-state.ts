@@ -765,7 +765,11 @@ export async function computePreTurnState(input: {
   perceptionCue?: TurnPerceptionCue | null;
   observability: Pick<
     TurnExecutionObservability,
-    'emitObservedTurnStage' | 'emitPerformanceStage' | 'emitTurnSnapshotInBackground'
+    | 'emitObservedTurnStage'
+    | 'emitPerformanceStage'
+    | 'emitTurnSnapshotInBackground'
+    | 'ignoreActiveMemoryRefreshTelemetry'
+    | 'recordRenderedActiveMemoryProvenance'
   >;
 }): Promise<PreTurnComputationResult> {
   const {
@@ -907,13 +911,16 @@ export async function computePreTurnState(input: {
     const selfRetrievalPurpose = reflectionRefresh
       ? COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE
       : COMPANION_SELF_CREATION_RETRIEVAL_PURPOSE;
+    const refreshOriginStage = companionSelfCallerContext
+      ? selfRetrievalPurpose
+      : 'memory.active_context.refresh';
     const refreshCorrelation: CorrelationMetadata = companionSelfCallerContext
       ? {
           ...turnCorrelationBase,
           channelId: message.channelId,
           callType: 'background',
           originType: 'background',
-          originStage: selfRetrievalPurpose,
+          originStage: refreshOriginStage,
           purpose: selfRetrievalPurpose,
           runtimeLaneClass: reflectionRefresh
             ? RUNTIME_LANE_CLASSES.maintenanceReflection
@@ -926,10 +933,13 @@ export async function computePreTurnState(input: {
           channelId: message.channelId,
           callType: 'memory',
           originType: 'memory',
-          originStage: 'memory.active_context.refresh',
+          originStage: refreshOriginStage,
           purpose: 'memory.active_context.refresh',
           runtimeLaneClass: RUNTIME_LANE_CLASSES.maintenanceReflection,
         };
+    // s889d: this refresh's telemetry describes the snapshot a LATER read
+    // sees, so it must not stand in for what this turn's prompt rendered.
+    observability.ignoreActiveMemoryRefreshTelemetry(refreshOriginStage);
     const refreshPromise = runWithRequestContext(refreshCorrelation, refresh);
     void refreshPromise.catch((error: unknown) => {
       const errorText = toErrorMessage(error);
@@ -980,6 +990,7 @@ export async function computePreTurnState(input: {
   activeMemoryContext = activeMemorySurface
     ? activeMemorySurface.getActiveMemoryContext(activeMemoryRequest)
     : null;
+  observability.recordRenderedActiveMemoryProvenance(activeMemoryContext?.manifestSeed?.provenanceRefs ?? []);
   // E5.5: degraded state is explicit, never silent. When the turn proceeds
   // without a fresh active context (cold start, failed refresh, or a refresh
   // still in flight from an earlier pass) a typed event records why. The turn

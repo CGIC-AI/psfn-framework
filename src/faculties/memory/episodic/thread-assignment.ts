@@ -1,4 +1,4 @@
-import type { Episode } from '../../../shared/contracts/episodic-memory.js';
+import type { Episode, EpisodeArcKind } from '../../../shared/contracts/episodic-memory.js';
 import type { EpisodicStorePort } from './store-port.js';
 
 /**
@@ -10,16 +10,19 @@ import type { EpisodicStorePort } from './store-port.js';
  * mega-thread the operator found). Threads were meant to track long-term
  * progression per TOPIC, not per channel.
  *
- * Thread identity is now the connected component of the episode ARC graph —
- * the only cross-time semantic weaving in the system (arcs are explicitly
- * "threads about ONE subject across time"). Each new episode starts as its own
- * singleton thread (`threadId = episode.id`); whenever an arc links two
- * episodes their threads are unioned. The component representative is the
- * lexicographically-smallest episode id in the component, which makes the
- * assignment DETERMINISTIC and order-independent: incremental min-merge and a
- * global union-find over the same arc set converge on the same representative,
- * so a later full recompute (historical repair, bead h4fp.7) reproduces the
- * live result exactly.
+ * Thread identity is the connected component of the episode ARC graph,
+ * restricted to THREAD-FORMING arcs (d5e0p.1): arcs asserting one effort
+ * progressing (continuation, causal, resolution, contrast, operator-defined).
+ * `same_theme` and `recurrence` arcs record a subject that keeps coming back;
+ * they stay in the arc graph for retrieval but never merge threads, or one
+ * companion's recurring everyday conversation becomes one mega-thread. Each
+ * new episode starts as its own singleton thread (`threadId = episode.id`);
+ * a thread-forming arc unions the two threads unless the MERGED thread would
+ * exceed the cap. The representative is the lexicographically-smallest
+ * episode id in the component. Because the cap refuses unions, the result
+ * depends on arc order: `computeThreadComponents` replays arcs in a fixed
+ * order (the recompute repair uses arc creation order), which approximates —
+ * but is not guaranteed to equal — the incremental live assignment.
  *
  * The identity is MATERIALIZED into the existing `l01_episodes.thread_id`
  * column (no schema change): every consumer that groups by `thread_id`
@@ -40,25 +43,61 @@ import type { EpisodicStorePort } from './store-port.js';
  * reproduces the same assignment.
  */
 
+/**
+ * Arc kinds that assert one effort progressing across episodes — the only
+ * arcs that merge topic threads (d5e0p.1). A pure function of the persisted
+ * arc kind, so the live union, the replay of persisted arcs, and the
+ * recompute repair all apply the same gate.
+ */
+export const THREAD_FORMING_ARC_KINDS: readonly EpisodeArcKind[] = [
+  'continuation',
+  'causal',
+  'resolution',
+  'contrast',
+  'operator_defined',
+];
+
+export function arcFormsTopicThread(arcKind: EpisodeArcKind): boolean {
+  return THREAD_FORMING_ARC_KINDS.includes(arcKind);
+}
+
 /** The component representative is the lexicographically-smaller thread id. */
 export function chooseThreadRepresentative(a: string, b: string): string {
   return a <= b ? a : b;
 }
 
+export interface ThreadComponentOptions {
+  /**
+   * Refuse a union whose merged component would exceed this many episodes.
+   * With a cap the result depends on edge order, so callers pass edges in a
+   * fixed order.
+   */
+  maxThreadEpisodes?: number;
+  onRefusedEdge?: (edge: readonly [string, string]) => void;
+}
+
 /**
  * Pure union-find over an arc edge set. Returns a map from every referenced
  * episode id to its component representative (the component's minimum id).
- * Deterministic and independent of edge order. Used by tests and by any
- * global recompute (e.g. historical repair) that needs the same assignment
- * the incremental live path produces.
+ * Without a cap it is independent of edge order; with one, edges are applied
+ * in the given order and a union that would exceed the cap is refused.
  */
 export function computeThreadComponents(
   episodeIds: readonly string[],
   edges: readonly (readonly [string, string])[],
+  options: ThreadComponentOptions = {},
 ): Map<string, string> {
+  const maxThreadEpisodes = options.maxThreadEpisodes;
+  if (maxThreadEpisodes !== undefined && (!Number.isInteger(maxThreadEpisodes) || maxThreadEpisodes < 1)) {
+    throw new Error('computeThreadComponents maxThreadEpisodes must be a positive integer');
+  }
   const parent = new Map<string, string>();
+  const size = new Map<string, number>();
   const ensure = (id: string): void => {
-    if (!parent.has(id)) parent.set(id, id);
+    if (!parent.has(id)) {
+      parent.set(id, id);
+      size.set(id, 1);
+    }
   };
   const find = (id: string): string => {
     ensure(id);
@@ -75,17 +114,23 @@ export function computeThreadComponents(
     }
     return root;
   };
-  const union = (a: string, b: string): void => {
-    const rootA = find(a);
-    const rootB = find(b);
+  const union = (edge: readonly [string, string]): void => {
+    const rootA = find(edge[0]);
+    const rootB = find(edge[1]);
     if (rootA === rootB) return;
+    const mergedSize = (size.get(rootA) ?? 1) + (size.get(rootB) ?? 1);
+    if (maxThreadEpisodes !== undefined && mergedSize > maxThreadEpisodes) {
+      options.onRefusedEdge?.(edge);
+      return;
+    }
     const representative = chooseThreadRepresentative(rootA, rootB);
     const other = representative === rootA ? rootB : rootA;
     parent.set(other, representative);
+    size.set(representative, mergedSize);
   };
 
   for (const id of episodeIds) ensure(id);
-  for (const [a, b] of edges) union(a, b);
+  for (const edge of edges) union(edge);
 
   const assignments = new Map<string, string>();
   for (const id of parent.keys()) {
@@ -118,11 +163,13 @@ export interface ThreadAssignmentEvent {
 }
 
 export interface ThreadUnionOptions {
+  /** Kind of the arc linking the two episodes; only thread-forming kinds union. */
+  arcKind: EpisodeArcKind;
   /**
-   * Safety bound on a single merge's write amplification. When the losing
-   * thread already carries more than this many live episodes the merge is
-   * skipped fail-safe (the two threads stay distinct) and an oversize event is
-   * emitted — never silently mis-threaded, never an unbounded rewrite.
+   * Topic-thread cap. When the MERGED thread would carry more than this many
+   * live episodes the merge is skipped fail-safe (the two threads stay
+   * distinct) and a `merge_skipped_oversize` event is emitted — never silently
+   * mis-threaded, never an unbounded thread.
    */
   maxThreadEpisodes: number;
   now?: () => Date;
@@ -191,7 +238,8 @@ async function normalizeLegacyEndpoint(
  * Union the topic threads of two arc-linked episodes. The higher-id thread's
  * live episodes are re-pointed onto the lexicographically-smaller thread id.
  * The passed `source`/`target` objects are mutated in place so a caller
- * chaining several arcs in one pass observes the converged thread id.
+ * chaining several arcs in one pass observes the converged thread id. An arc
+ * that is not thread-forming changes nothing.
  *
  * A legacy session-keyed endpoint (pre-apq0 `threadId = sessionId`) is first
  * extracted into its own singleton topic thread so the per-channel mega-thread
@@ -209,6 +257,10 @@ export async function applyThreadUnionForArc(
 ): Promise<ThreadUnionResult> {
   if (!Number.isInteger(options.maxThreadEpisodes) || options.maxThreadEpisodes < 1) {
     throw new Error('applyThreadUnionForArc requires a positive integer maxThreadEpisodes');
+  }
+  if (!arcFormsTopicThread(options.arcKind)) {
+    // A recurring subject is linked by the arc itself; it is not one topic.
+    return { threadId: source.threadId ?? source.id, updatedEpisodeIds: [], skippedOversize: false };
   }
   const now = options.now ?? (() => new Date());
   await normalizeUnassignedEndpoint(store, source);
@@ -235,6 +287,7 @@ export async function applyThreadUnionForArc(
     fromThreadId: losingThreadId,
     toThreadId: winningThreadId,
     maxEpisodes: options.maxThreadEpisodes,
+    maxMergedEpisodes: options.maxThreadEpisodes,
   });
 
   if (outcome.skippedOversize) {

@@ -96,6 +96,7 @@
     "memory:repair:participant-names": "tsx src/app/maintenance/backfill-memory-participant-names.ts",
     "memory:repair:provenance": "tsx src/app/maintenance/backfill-memory-provenance.ts",
     "memory:repair:subject-attribution": "node --import tsx src/app/maintenance/reattribute-memory-subjects.ts",
+    "memory:repair:episode-threads": "tsx src/app/maintenance/recompute-episode-threads.ts",
     "migrate:prompt-layer-identifiers": "tsx src/app/maintenance/backfill-prompt-layer-identifiers.ts",
     "audit:core-memory-scopes": "tsx src/app/maintenance/audit-core-memory-scopes.ts",
     "audit:companion-memory-tenancy": "tsx src/app/maintenance/audit-companion-memory-tenancy.ts",

@@ -414,6 +414,23 @@ export class FakeEpisodicPool {
       return queryResult(row ? [{ id: row.id }] : []);
     }
 
+    if (normalized.startsWith('select pg_advisory_xact_lock(')) {
+      // d5e0p.1: per-thread union serialization; the fake runs queries serially.
+      return queryResult([]);
+    }
+
+    if (normalized.startsWith('select count(*)::int as member_count from l01_episodes where (thread_id =')) {
+      // d5e0p.1: the winning thread's live members, excluding the movers.
+      const threadId = String(values[0] ?? '');
+      const excluded = new Set(Array.isArray(values[1]) ? values[1].map(String) : []);
+      const memberCount = [...this.episodes.values()]
+        .filter(isActiveEpisode)
+        .filter(row => row.thread_id === threadId || (row.thread_id === null && row.id === threadId))
+        .filter(row => !excluded.has(row.id))
+        .length;
+      return queryResult([{ member_count: memberCount }]);
+    }
+
     if (normalized.startsWith('select id from l01_episodes where (thread_id =')) {
       // apq0 atomic thread union: the losing thread's live members, capped.
       // The `id = any` variant restricts to specific members (legacy
@@ -499,6 +516,7 @@ export class FakeEpisodicPool {
 
     if (normalized.startsWith('select arcs.id, arcs.arc_json from l01_episode_arcs arcs')) {
       const limit = Number(values[0] ?? this.arcs.size);
+      const threadFormingKinds = new Set(Array.isArray(values[1]) ? values[1].map(String) : []);
       const hasLegacySessionThread = (row: StoredEpisodeRow): boolean => {
         if (row.thread_id === null || row.thread_id === row.id) return false;
         const episode = parseEpisodeJson(row.episode_json);
@@ -511,6 +529,7 @@ export class FakeEpisodicPool {
       };
       const rows = [...this.arcs.values()]
         .filter(isActiveArc)
+        .filter(arc => threadFormingKinds.has(arc.arc_kind))
         .filter((arc) => {
           const source = this.episodes.get(arc.source_episode_id);
           const target = this.episodes.get(arc.target_episode_id);

@@ -45,6 +45,7 @@ import type {
   TurnRecord,
 } from '../../../shared/contracts/runtime.js';
 import { createEventBusCostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
+import { emitRetrievalTelemetry } from '../../../faculties/memory/retrieval/telemetry-emission.js';
 import { notePendingPaidDeliverable } from '../../../shared/paid-deliverable-tracking.js';
 import { createActiveEmanationSatellitePresencePort } from '../satellite-adapter-port.js';
 import type { FatigueBudgetEvent } from '../../../shared/contracts/runtime.js';
@@ -7725,6 +7726,135 @@ describe('handleMessageForTurn pre-response concurrency', () => {
         activeMemoryInlineOutcome: 'not_requested',
         activeMemoryInlineWaitMs: 0,
       });
+    });
+
+    // psfn-framework-s889d AC1: a refresh scheduled by this turn lands while
+    // the model is answering. The custody manifest and the turn's provenance
+    // must describe the snapshot rendered into the prompt, not the one that
+    // landed afterwards.
+    it.each([
+      { mode: 'background' as const, configOverrides: { activeMemoryRetrievalMode: 'background' as const } },
+      {
+        mode: 'inline (budget exhausted)' as const,
+        configOverrides: { activeMemoryRetrievalMode: 'inline' as const, activeMemoryInlineBudgetMs: 5 },
+      },
+    ])('$mode: records the consumed snapshot when a refresh lands mid-turn', async ({ configOverrides }) => {
+      const eventBus = new EventBus();
+      const withSources = (memoryId: string, provenanceRef: string) => ({
+        ...makeActiveSnapshot(`Remembered: ${memoryId} detail`, 'ready'),
+        selectedMemoryIds: [memoryId],
+        manifestSeed: { reason: 'ok', returnedCount: 1, provenanceRefs: [provenanceRef] },
+        disclosureMemorySources: [{
+          ref: `memory:${memoryId}`,
+          sensitivity: 'personal',
+          sourceChannelId: 'ch1',
+          provenanceRefs: [provenanceRef],
+        }],
+      });
+      const consumed = withSources('mem-consumed', 'session:ch1:entry-consumed');
+      const landed = withSources('mem-landed', 'session:ch1:entry-landed');
+      const costTelemetry = createEventBusCostTelemetryPort(eventBus);
+      const emitRefreshTelemetry = (provenanceRef: string) => emitRetrievalTelemetry({
+        runtimeConfig: null,
+        telemetryEnabled: false,
+        costTelemetry,
+        telemetry: fromAny({
+          channelId: 'ch1',
+          count: 1,
+          candidateCount: 1,
+          rankedCount: 1,
+          returnedCount: 1,
+          provenanceRefs: [provenanceRef],
+        }),
+      });
+      let current = consumed;
+      const releaseRefresh = createDeferred<void>();
+      const refreshActiveMemoryContext = vi.fn(async () => {
+        await releaseRefresh.promise;
+        current = landed;
+        // The real refresh emits retrieval telemetry under the correlation the
+        // turn scheduled it with (emitRetrievalTelemetry reads the request
+        // context), so the turn's observability listener receives it.
+        await emitRefreshTelemetry('session:ch1:entry-landed');
+        return structuredClone(landed);
+      });
+      const getActiveMemoryContext = vi.fn(() => structuredClone(current));
+      const buildContext = vi.fn(async (...args: unknown[]) => ({
+        systemPrompt: 'System prompt',
+        sessionPromptBlocks: [{ id: 'memory.retrieval', content: String(args[2] ?? '') }],
+        messages: [],
+        manifest: makeContextManifestFixture(),
+      }));
+      const runtime = createModeRuntime({
+        eventBus,
+        buildContext,
+        getActiveMemoryContext,
+        refreshActiveMemoryContext,
+        configOverrides,
+      });
+      const answer = runtime.agent.prompt.bind(runtime.agent);
+      runtime.agent.prompt = vi.fn(async (...args: Parameters<typeof answer>) => {
+        releaseRefresh.resolve();
+        await refreshActiveMemoryContext.mock.results[0]?.value;
+        expect(getActiveMemoryContext()).toMatchObject({ selectedMemoryIds: ['mem-landed'] });
+        return answer(...args);
+      }) as typeof runtime.agent.prompt;
+
+      const response = await handleMessageForTurn(runtime, createMessage('msg-s889d-mid-turn-refresh'));
+      await flushAsyncWork();
+
+      expect(refreshActiveMemoryContext).toHaveBeenCalledTimes(1);
+      expect(buildContext.mock.calls[0]?.[2]).toBe('Remembered: mem-consumed detail');
+
+      const manifestInput = vi.mocked(runtime.recordTurnContextManifest).mock.calls[0]?.[0];
+      const memoryBlock = manifestInput?.blocks.find(block => block.id === 'memory.retrieval');
+      expect(memoryBlock?.renderedText).toBe('Remembered: mem-consumed detail');
+      expect(memoryBlock?.sources).toEqual([{ kind: 'memory', refId: 'mem-consumed' }]);
+
+      // The turn's provenance names what the prompt rendered; the landed
+      // refresh belongs to the next turn.
+      const recordInput = vi.mocked(runtime.buildTurnRecord).mock.calls.at(-1)?.[0];
+      expect(recordInput?.retrievalProvenanceRefs).toEqual(['session:ch1:entry-consumed']);
+      expect(response.metadata.retrievalProvenanceRefs).toEqual(['session:ch1:entry-consumed']);
+    });
+
+    it('keeps provenance from a non-refresh retrieval made during the turn', async () => {
+      const eventBus = new EventBus();
+      const consumed = {
+        ...makeActiveSnapshot('Remembered: consumed detail', 'ready'),
+        manifestSeed: { reason: 'ok', returnedCount: 1, provenanceRefs: ['session:ch1:entry-consumed'] },
+      };
+      const runtime = createModeRuntime({
+        eventBus,
+        buildContext: newBuildContext(),
+        getActiveMemoryContext: vi.fn(() => structuredClone(consumed)),
+        refreshActiveMemoryContext: vi.fn(async () => null),
+        configOverrides: { activeMemoryRetrievalMode: 'background' },
+      });
+      const answer = runtime.agent.prompt.bind(runtime.agent);
+      runtime.agent.prompt = vi.fn(async (...args: Parameters<typeof answer>) => {
+        // A memory tool call inside the turn retrieves under the turn's own
+        // correlation, not the refresh's, so its provenance is the turn's.
+        await emitRetrievalTelemetry({
+          runtimeConfig: null,
+          telemetryEnabled: false,
+          costTelemetry: createEventBusCostTelemetryPort(eventBus),
+          telemetry: fromAny({
+            channelId: 'ch1',
+            requestId: 'msg-s889d-tool-retrieval',
+            count: 1,
+            provenanceRefs: ['session:ch1:entry-tool'],
+          }),
+        });
+        return answer(...args);
+      }) as typeof runtime.agent.prompt;
+
+      const response = await handleMessageForTurn(runtime, createMessage('msg-s889d-tool-retrieval'));
+
+      expect(response.metadata.retrievalProvenanceRefs).toEqual([
+        'session:ch1:entry-consumed',
+        'session:ch1:entry-tool',
+      ]);
     });
   });
 

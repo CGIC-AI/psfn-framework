@@ -112,6 +112,7 @@ import {
   type PostgresEpisodeRow,
   type PostgresProcessingWatermarkRow,
 } from './postgres-store/rows.js';
+import { THREAD_FORMING_ARC_KINDS } from './thread-assignment.js';
 import { PostgresEpisodeFirstPersonWriter } from './postgres-store/first-person-writer.js';
 import { PostgresEpisodeEmbeddingIndex } from './postgres-store/embedding-index.js';
 import {
@@ -515,9 +516,24 @@ export class PostgresEpisodicStore implements
     if (fromThreadId === toThreadId && memberEpisodeIds === undefined) {
       throw new Error('thread members cannot be re-pointed onto the same thread');
     }
+    const maxMergedEpisodes = input.maxMergedEpisodes;
+    if (maxMergedEpisodes !== undefined && (!Number.isInteger(maxMergedEpisodes) || maxMergedEpisodes < 1)) {
+      throw new Error('repointThreadMembers maxMergedEpisodes must be a positive integer when provided');
+    }
     const nowIso = this.now().toISOString();
 
     return withPostgresClient(this.pool, async (client) => {
+      if (maxMergedEpisodes !== undefined) {
+        // d5e0p.1: serialize every bounded union touching either thread, in
+        // one global order, so two unions into the same winner cannot both
+        // count it below the cap. Each later statement reads a fresh snapshot.
+        for (const threadId of [...new Set([fromThreadId, toThreadId])].sort()) {
+          await client.query(
+            'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+            [`l01-episode-thread:${threadId}`],
+          );
+        }
+      }
       // Lock the losing thread's live members and detect oversize in one shot:
       // fetching one row past the cap lets us refuse without a separate count.
       // With memberEpisodeIds the scan is further restricted to those specific
@@ -543,6 +559,18 @@ export class PostgresEpisodicStore implements
       }
 
       const ids = members.map(row => row.id);
+      if (maxMergedEpisodes !== undefined) {
+        const winning = await client.query<{ member_count: number }>(`
+          SELECT count(*)::int AS member_count
+          FROM l01_episodes
+          WHERE (thread_id = $1 OR (thread_id IS NULL AND id = $1))
+            AND ${ACTIVE_CANONICAL_EPISODE_FILTER}
+            AND NOT (id = ANY($2::text[]))
+        `, [toThreadId, ids]);
+        if ((winning.rows[0]?.member_count ?? 0) + ids.length > maxMergedEpisodes) {
+          return { updatedEpisodeIds: [], skippedOversize: true };
+        }
+      }
       // One naturally-atomic statement re-points every locked member and keeps
       // the materialized episode_json.threadId consistent with the thread_id
       // column. There is no per-row loop, so a crash cannot leave the thread
@@ -947,6 +975,7 @@ export class PostgresEpisodicStore implements
         AND (arcs.canonical_arc_id IS NULL OR arcs.canonical_arc_id = arcs.id)
         AND arcs.merged_into_arc_id IS NULL
         AND arcs.superseded_by_arc_id IS NULL
+        AND arcs.arc_kind = ANY($2::text[])
         AND (source.status IS NULL OR source.status IN ('canonical', 'candidate'))
         AND (source.canonical_episode_id IS NULL OR source.canonical_episode_id = source.id)
         AND source.merged_into_episode_id IS NULL
@@ -990,7 +1019,7 @@ export class PostgresEpisodicStore implements
         )
       ORDER BY arcs.updated_at DESC, arcs.id ASC
       LIMIT $1
-    `, [normalizeLimit(options.limit)]);
+    `, [normalizeLimit(options.limit), [...THREAD_FORMING_ARC_KINDS]]);
     return rows.map(mapArcRow);
   }
 

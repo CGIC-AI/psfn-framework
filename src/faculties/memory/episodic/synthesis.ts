@@ -1082,19 +1082,20 @@ export class EpisodicSynthesizer {
       const priorCandidates = await this.resolvePriorCandidates(episode, state.createdEpisodes);
       const related = findRelatedSource(episode, priorCandidates);
       if (!related) return;
-      state.linkedArcs.push(await this.store.writeEpisodeArc(
-        buildArcInput(related.episode, episode, related.overlap, stableId),
-      ));
+      const arc = await this.store.writeEpisodeArc(buildArcInput(related, episode, stableId));
+      state.linkedArcs.push(arc);
       // If the process dies after the durable arc write but before the union,
       // EpisodeArcWeaver replays every persisted arc's thread assignment before
       // judging or writing new arcs. The two-step write is therefore retryable
       // even though this candidate's source turns are already claimed.
-      // apq0: an arc links two episodes into one topic thread. Union their
-      // threads (deterministic min-id representative) so the related prior
-      // episode and this one share a bounded topic thread instead of one
-      // per-channel mega-thread. Mutates the endpoints so a chained run
-      // converges within the pass.
+      // apq0: a thread-forming arc links two episodes into one topic thread.
+      // Union their threads (deterministic min-id representative) so the
+      // related prior episode and this one share a bounded topic thread; a
+      // same_theme arc (shared broad themes only, d5e0p.1) leaves both
+      // threads alone. Mutates the endpoints so a chained run converges
+      // within the pass.
       await applyThreadUnionForArc(this.store, related.episode, episode, {
+        arcKind: arc.arcKind,
         maxThreadEpisodes: this.maxThreadEpisodes,
         ...(this.onThreadAssignment ? { onEvent: this.onThreadAssignment } : {}),
       });

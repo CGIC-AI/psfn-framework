@@ -177,12 +177,22 @@ export interface RepointThreadMembersInput {
    * live member of the losing thread moves. An empty array is rejected.
    */
   memberEpisodeIds?: readonly string[];
+  /**
+   * d5e0p.1: bound on the MERGED thread. When the winning thread's live
+   * members plus the moving members would exceed this, nothing moves. The
+   * check runs under per-thread transaction locks, so concurrent unions into
+   * one winner cannot both pass it. Omitted for single-episode extraction.
+   */
+  maxMergedEpisodes?: number;
 }
 
 export interface RepointThreadMembersResult {
   /** Live episode ids re-pointed onto the winning thread (empty when skipped). */
   updatedEpisodeIds: string[];
-  /** True when the losing thread exceeded maxEpisodes and nothing was moved. */
+  /**
+   * True when nothing was moved because the losing thread exceeded
+   * maxEpisodes or the merged thread would exceed maxMergedEpisodes.
+   */
   skippedOversize: boolean;
 }
 

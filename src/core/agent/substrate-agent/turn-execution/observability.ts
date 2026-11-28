@@ -55,6 +55,15 @@ export interface TurnExecutionObservability {
   getObservedTurnSnapshot: () => TurnObservabilityRecord['snapshot'] | undefined;
   getMemoryManifestSeed: () => ContextManifestMemorySeed | undefined;
   getRetrievalProvenanceRefs: () => string[];
+  /**
+   * s889d: retrieval telemetry emitted under this origin stage comes from the
+   * turn's active-memory refresh. It describes the snapshot the NEXT read will
+   * see (background mode, or an inline wait that ran out), so it is still
+   * observed but never seeds this turn's manifest or provenance.
+   */
+  ignoreActiveMemoryRefreshTelemetry: (originStage: string) => void;
+  /** s889d: provenance of the active-memory snapshot rendered into the prompt. */
+  recordRenderedActiveMemoryProvenance: (provenanceRefs: readonly string[]) => void;
   unsubscribe: () => void;
 }
 
@@ -81,6 +90,8 @@ export function createTurnExecutionObservability(input: {
   let observedTurnSnapshot: TurnObservabilityRecord['snapshot'] | undefined;
   let memoryManifestSeed: ContextManifestMemorySeed | undefined;
   let retrievalProvenanceRefs: string[] = [];
+  let renderedActiveMemoryProvenanceRefs: string[] = [];
+  let activeMemoryRefreshOriginStage: string | undefined;
   const performanceCompanionId = turnCorrelationBase.companionId
     ?? runtime.config.companionId?.trim();
 
@@ -159,6 +170,12 @@ export function createTurnExecutionObservability(input: {
     if (observedRetrieval) {
       observedTurnRetrievals.push(observedRetrieval);
     }
+    if (
+      activeMemoryRefreshOriginStage !== undefined
+      && telemetry.originStage === activeMemoryRefreshOriginStage
+    ) {
+      return;
+    }
 
     memoryManifestSeed = {
       ...(telemetry.reason ? { reason: telemetry.reason } : {}),
@@ -213,7 +230,17 @@ export function createTurnExecutionObservability(input: {
     getObservedTurnRetrievals: () => [...observedTurnRetrievals],
     getObservedTurnSnapshot: () => observedTurnSnapshot,
     getMemoryManifestSeed: () => memoryManifestSeed,
-    getRetrievalProvenanceRefs: () => [...retrievalProvenanceRefs],
+    getRetrievalProvenanceRefs: () => [
+      ...new Set([...renderedActiveMemoryProvenanceRefs, ...retrievalProvenanceRefs]),
+    ],
+    ignoreActiveMemoryRefreshTelemetry: (originStage) => {
+      activeMemoryRefreshOriginStage = originStage;
+    },
+    recordRenderedActiveMemoryProvenance: (provenanceRefs) => {
+      renderedActiveMemoryProvenanceRefs = [
+        ...new Set(provenanceRefs.map(ref => ref.trim()).filter(Boolean)),
+      ];
+    },
     unsubscribe,
   };
 }

@@ -26,7 +26,9 @@ import { persistMemorySubjectProjection } from '../../faculties/memory/postgres-
  * reclassifies only the touched rows. Every other unattributed memory is left
  * alone: the selector requires the full server-written remember provenance,
  * a Hermes session room, no existing subject evidence, a current
- * `unattributed` classification and a live trigger contact.
+ * `unattributed` classification and a live trigger contact. Only active rows
+ * are touched: soft-deleted and superseded notes are never recalled, and their
+ * authorization revision (which deletion proposals bind to) stays unchanged.
  */
 
 export interface HermesRememberAttributionOptions {
@@ -57,6 +59,8 @@ const CANDIDATE_PREDICATE = `
   memory.source_ref LIKE $1
   AND memory.source_type = 'tool_write'
   AND memory.contact_id IS NULL
+  AND memory.deleted_at IS NULL
+  AND memory.superseded_by IS NULL
   AND memory.provenance_json->>'toolName' = $2
   AND memory.provenance_json->>'actor' = 'companion'
   AND memory.provenance_json->>'channelId' LIKE $3

@@ -21,15 +21,12 @@ import {
   type ExternalMemoryExecuteResult,
 } from '../../../shared/contracts/external-memory.js';
 import {
-  resetRuntimeChannelEnvelopeLabels,
-  setRuntimeChannelEnvelopeLabels,
-} from '../../../system/trust/runtime-channel-labels.js';
-import {
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../../test-support/postgres-test-harness.js';
 import type { IntakeScreeningInput } from '../../../core/cogsec/intake/screening.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
+import { createCompanionRoomMembershipAuthority } from '../companion-provenance.js';
 import { createPostgresMemoryStoreFromPool } from '../postgres-store.js';
 import { MemoryRetriever } from '../retrieval.js';
 import type { PurrMemory } from '../types.js';
@@ -75,7 +72,6 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
-  resetRuntimeChannelEnvelopeLabels();
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
@@ -109,10 +105,11 @@ async function stack() {
   // The agent's composition: a raw-store writer for background producers
   // (src/app/agent/main.ts memoryWriter) and a subject-enforcing retriever
   // over the raw store (wireMemoryRuntime).
-  const writer = new MemoryWriter(memoryStore, embeddings, { companionId: COMPANION_ID });
+  const roomMembershipAuthority = createCompanionRoomMembershipAuthority(sessions);
+  const writer = new MemoryWriter(memoryStore, embeddings, { companionId: COMPANION_ID, roomMembershipAuthority });
   const retriever = new MemoryRetriever(
     memoryStore, embeddings, { retrievalThreshold: 0.5, telemetryEnabled: false, contextWindow: 32_000 },
-    undefined, contactStore, null, null, quarantine, true,
+    undefined, contactStore, null, null, quarantine, true, null, roomMembershipAuthority,
   );
 
   const queued: InferredPostTurnAction[] = [];
@@ -133,7 +130,8 @@ async function stack() {
   }));
   const makeService = () => new ExternalMemoryService(fromAny({
     companionId: COMPANION_ID, companionName: 'Lyra',
-    refreshChannelPolicy: () => setRuntimeChannelEnvelopeLabels({ 'api:hermes': { privacy: 'private' } }),
+    // No channel label override: the Hermes channel's default disclosure.
+    refreshChannelPolicy: () => undefined,
     intakeStore: new ExternalMemoryIntakeStore(intakeDirectory),
     sessions, contacts: contactStore, memoryStore, memoryProvider: retriever, writer,
     screening: { screen }, quarantine, actions, retryDelayMs: 100,
@@ -362,6 +360,8 @@ describe('Hermes remember note attribution repair (1meuc)', () => {
     await insertDirect(h.memoryStore, legacyNote(morganA, h.morganId, 'other-tool',
       'Other tool: the bike chain needs oil.', {}, { toolName: 'memory' }));
     await insertDirect(h.memoryStore, { id: 'plain-unattributed', text: 'Plain: someone left a bike outside.' });
+    await insertDirect(h.memoryStore, legacyNote(morganA, h.morganId, 'deleted-note',
+      'Deleted: the bike helmet is on the hook.', { deletedAt: Date.now(), deletedBy: 'test', deleteReason: 'test' }));
 
     const dryRun = await repairHermesRememberAttribution(h.pool, { dryRun: true, embeddingDims: 4 });
     expect(dryRun).toEqual({
@@ -384,7 +384,9 @@ describe('Hermes remember note attribution repair (1meuc)', () => {
     expect(await h.context(h.morganId, 'session-b')).toContain('boiler');
     expect(await h.context(h.robinId, 'robin-b')).not.toContain('boiler');
 
-    for (const id of ['legacy-archived', 'lookalike-room', 'named-subject', 'other-tool', 'plain-unattributed']) {
+    for (const id of [
+      'legacy-archived', 'lookalike-room', 'named-subject', 'other-tool', 'plain-unattributed', 'deleted-note',
+    ]) {
       const classification = await h.memoryStore.getMemorySubjectClassification(id);
       expect(classification?.subjectContactIds, id).toEqual([]);
     }

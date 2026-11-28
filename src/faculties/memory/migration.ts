@@ -189,6 +189,24 @@ export async function inspectMemoryEmbeddingCoverage(pool: Pool): Promise<Memory
 }
 
 /**
+ * Maintenance runs against an existing companion corpus. A mistyped or absent
+ * schema would otherwise fall through the pinned search path, create the memory
+ * tables in whichever schema resolves first, and report an empty, clean corpus.
+ */
+async function assertMemoryCorpusExists(pool: Pool): Promise<void> {
+  const rows = await queryRows<{ schema: string | null; memory_table: string | null }>(pool, `
+    SELECT current_schema() AS schema,
+      to_regclass(format('%I.l2_memories', current_schema()))::text AS memory_table
+  `);
+  if (!rows[0]?.memory_table) {
+    throw new Error(
+      `PostgreSQL embedding migration found no l2_memories table in schema ${rows[0]?.schema ?? '<none>'}; `
+      + 'check the companion schema',
+    );
+  }
+}
+
+/**
  * A missing-only backfill embeds rows beside the existing ones, so it must
  * produce vectors in their space; a provider whose dimension differs needs
  * the full re-embed instead.
@@ -401,6 +419,7 @@ export async function migratePostgresMemoryEmbeddings(
   });
 
   try {
+    await assertMemoryCorpusExists(pool);
     await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
     const coverageBefore = await inspectMemoryEmbeddingCoverage(pool);
     if (missingOnly && !dryRun) {

@@ -234,6 +234,18 @@ describe('missing-embedding backfill (psfn-framework-d5e0p.23)', () => {
       .toMatchObject({ missingCurrentClassificationCount: 0 });
   });
 
+  it('refuses a schema without a memory corpus instead of reporting it clean', async () => {
+    const memorySchemas = async () => (await tenantPool.query<{ table_schema: string }>(`
+      SELECT DISTINCT table_schema FROM information_schema.tables
+      WHERE table_name = 'l2_memories' ORDER BY table_schema
+    `)).rows.map(row => row.table_schema);
+    const before = await memorySchemas();
+    await expect(migratePostgresMemoryEmbeddings(databaseUrl, createProvider(), {
+      schema: 'companion_mistyped', missingOnly: true, dryRun: true,
+    })).rejects.toThrow(/no l2_memories table in schema/);
+    expect(await memorySchemas()).toEqual(before);
+  });
+
   it('never overwrites a row another writer embedded first', async () => {
     const before = await embeddingState(tenantPool, [ALREADY_EMBEDDED.id]);
     const outcome = await withPostgresClient(tenantPool, async client => (

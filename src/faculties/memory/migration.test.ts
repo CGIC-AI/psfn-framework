@@ -62,9 +62,11 @@ vi.mock('./postgres-store/memory-embedding-write.js', () => ({
 }));
 
 function mockMemoryTextRows(rows: Array<{ id: string; text: string }>): void {
-  postgresMocks.queryRows.mockImplementation(async (_pool: unknown, sql: string) => (
-    sql.includes('SELECT id, text') ? rows : [{ active_count: String(rows.length), active_missing_count: '0' }]
-  ));
+  postgresMocks.queryRows.mockImplementation(async (_pool: unknown, sql: string) => {
+    if (sql.includes('to_regclass')) return [{ schema: 'public', memory_table: 'l2_memories' }];
+    if (sql.includes('SELECT id, text')) return rows;
+    return [{ active_count: String(rows.length), active_missing_count: '0' }];
+  });
 }
 
 function memoryTextQuery(): string | undefined {

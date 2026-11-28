@@ -400,6 +400,22 @@ describe('direct-session memory backfill (psfn-framework-d5e0p.17)', () => {
       .toMatchObject({ status: 'skipped', skipReason: 'no_unprocessed_entries' });
   });
 
+  it('replays only the requested message range', async () => {
+    const runtime = await createRuntime();
+    seedMorganDm(runtime.sessionStore);
+    const model = createModel();
+    const runner = createRunner(runtime, createExtractor(runtime, model));
+    const range = { startMessageId: 31, endMessageId: 40 };
+
+    const dryRun = await runner.run(DM_CHANNEL_ID, { mode: 'dry_run', ...range });
+    expect(dryRun.chunks.flatMap(chunk => chunk.candidateSourceMessageIds))
+      .toEqual(Array.from({ length: 10 }, (_unused, index) => 31 + index));
+    const live = await runner.run(DM_CHANNEL_ID, { mode: 'live', ...range });
+    expect(live.chunks.map(chunk => chunk.extraction?.writeCount)).toEqual([1]);
+    expect(model.promptedMessageIds).toEqual([dryRun.chunks[0]!.candidateSourceMessageIds]);
+    expect((await activeMemoryRows(runtime.pool)).map(row => row.text)).toEqual([MORGAN_FACTS[2]!.fact]);
+  });
+
   it('refuses to guess a counterparty it cannot resolve', async () => {
     const runtime = await createRuntime();
     const channelId = 'discord:dm-unknown-fixture';

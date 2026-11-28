@@ -75,5 +75,16 @@ export function mergePreferredBreadcrumbs(
     break;
   }
 
+  // Ranked chains then fill whatever capacity the breadcrumbs left. Without
+  // this, a turn with no (or few) breadcrumbs recalled only one ranked chain
+  // however many independent matches existed (psfn-framework-ik47b.4).
+  usedEpisodeIds = new Set(merged.flatMap(item => item.episodes.map(episode => episode.id)));
+  for (const chain of rankedChains) {
+    if (merged.length >= maxChains) break;
+    if (chain.episodes.some(episode => usedEpisodeIds.has(episode.id))) continue;
+    merged.push(structuredClone(chain));
+    for (const episode of chain.episodes) usedEpisodeIds.add(episode.id);
+  }
+
   return merged.slice(0, maxChains);
 }

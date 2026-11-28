@@ -8,7 +8,7 @@ import {
   type MemoryWithheldSummary,
 } from '../withheld-summary.js';
 import { cloneEpisodicRetrievalChain } from './episodic-cloning.js';
-import type { EpisodicRetrievalChain } from './episodic-types.js';
+import type { EpisodicQuarantineWithheld, EpisodicRetrievalChain } from './episodic-types.js';
 
 export interface MemorySessionQuarantineFilter {
   isSessionRetiredOrQuarantined(logicalSessionId: string): boolean;
@@ -92,6 +92,31 @@ export function filterQuarantinedMemories<T extends MemoryQuarantineCandidate>(
     memories: filtered,
     ...(summary.totalCount > 0 ? { summary } : {}),
     withheldIds: [...withheldIds],
+  };
+}
+
+/**
+ * Counts the episodes a quarantine removed during episodic recall as
+ * `session_quarantine.blocked` withheld material (psfn-framework-ik47b.4).
+ * Arcs are relationships, not recallable memories, so only episodes count.
+ */
+export function createEpisodicQuarantineWithheldCollector(): {
+  record(withheld: EpisodicQuarantineWithheld): void;
+  summary(): MemoryWithheldSummary | undefined;
+} {
+  const episodeIds = new Set<string>();
+  return {
+    record(withheld) {
+      if (withheld.kind === 'episode') episodeIds.add(withheld.id);
+    },
+    summary() {
+      if (episodeIds.size === 0) return undefined;
+      const summary = createEmptyMemoryWithheldSummary();
+      for (let index = 0; index < episodeIds.size; index += 1) {
+        incrementMemoryWithheldReason(summary, 'session_quarantine.blocked');
+      }
+      return summary;
+    },
   };
 }
 

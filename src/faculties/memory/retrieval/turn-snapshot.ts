@@ -49,7 +49,11 @@ import {
   summarizeWithheldMemories,
   type RetrievalRoomVisibilityContext,
 } from './access.js';
-import type { MemoryQuarantineCandidate } from './session-quarantine.js';
+import {
+  createEpisodicQuarantineWithheldCollector,
+  type MemoryQuarantineCandidate,
+} from './session-quarantine.js';
+import type { EpisodicQuarantineWithheld } from './episodic-types.js';
 import type {
   RetrievalQueryEmbeddingProvenance,
   TurnRetrievalQueryEmbedding,
@@ -123,6 +127,7 @@ export interface CaptureTurnMemorySnapshotDeps {
     channelDisclosure: ReturnType<typeof classifyChannelDisclosure>;
     canonicalContactId?: string;
     scopeQuery?: MemoryScopeQuery;
+    onQuarantineWithheld?: (withheld: EpisodicQuarantineWithheld) => void;
   }): Promise<EpisodicRetrievalChain[]>;
   filterQuarantinedMemories<T extends MemoryQuarantineCandidate>(
     memories: readonly T[],
@@ -281,6 +286,7 @@ export async function captureTurnMemorySnapshot(
     canonicalContactId,
   )))
     .map(cloneMemory);
+  const episodicQuarantine = createEpisodicQuarantineWithheldCollector();
   const episodicChains = deps.filterQuarantinedEpisodicChains(await deps.resolveEpisodicChains({
     contextText,
     channelId,
@@ -289,6 +295,7 @@ export async function captureTurnMemorySnapshot(
     channelDisclosure,
     canonicalContactId,
     scopeQuery: normalizedScopeQuery,
+    onQuarantineWithheld: withheld => episodicQuarantine.record(withheld),
   }));
   const retrievalCandidatesById = new Map<string, PurrMemory & { similarity: number }>();
   for (const candidate of [...semanticCandidates, ...lexicalCandidates]) {
@@ -315,6 +322,7 @@ export async function captureTurnMemorySnapshot(
   );
   const withheldSummary = mergeMemoryWithheldSummaries(
     quarantineWithheldSummary,
+    episodicQuarantine.summary(),
     candidateWithheldSummary,
     shapeAccess.withheldSummary,
   );

@@ -9,6 +9,7 @@ import {
   type EpisodicRetrievalChain,
   type EpisodicRetrievalStore,
 } from './episodic.js';
+import type { EpisodicQuarantineWithheld } from './episodic-types.js';
 import {
   filterQuarantinedEpisodicChains,
   type MemorySessionQuarantineFilter,
@@ -26,6 +27,7 @@ export async function resolveEpisodicChains(input: {
     canonicalContactId?: string;
     scopeQuery?: MemoryScopeQuery;
     memoryRetrievalPolicy?: MemoryRetrievalPolicy;
+    onQuarantineWithheld?: (withheld: EpisodicQuarantineWithheld) => void;
   };
   wrapError(error: unknown): Error;
 }): Promise<EpisodicRetrievalChain[]> {

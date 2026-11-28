@@ -75,12 +75,16 @@ transcript restoration. Those product capabilities are tracked as
 authentication exercises one owner; it does not certify multiple OAuth accounts
 or an external identity provider's session revocation.
 
-Approval effects are exercised through the dedicated gateway operator endpoint,
-`/v1/operator/confirmations/resolve`, with an explicit companion. Ordinary chat
-credentials must be rejected. The fleet Garden resolver currently omits the
-gateway-owned queue client in operator startup and returns `not_found` for
-those entries; its separately scoped wiring repair is `psfn-framework-wi8z6`.
-The passing operator-endpoint journey does not certify Garden's approve button.
+Approval effects are exercised through the canonical Fleet Garden route,
+`/companions/<id>/garden/api/admin/confirmations/resolve`, entered through the
+gateway's audited `ADMIN_TOKEN` door. The operator presents its admitted parent
+capability to the gateway's `/v1/internal/fleet-auth/confirmations/resolve`,
+which consumes that parent once, reauthorizes SSO principals, and resolves only
+the signed body against the capability's own companion with the principal as
+resolver. Ordinary chat credentials must be rejected at both the Garden and the
+ADMIN_TOKEN operator endpoint. The journey drives the Garden API, not the
+rendered approve button, and exercises one key-authenticated owner rather than
+an OAuth session.
 
 ## Evidence and failure diagnosis
 

@@ -54,6 +54,7 @@ import type {
   ConfirmationQueueHistoryEntry,
   ConfirmationApprovalOwner,
   ConfirmationResolveResult,
+  ConfirmationResolverIdentity,
 } from '../../system/capabilities/confirmation-queue.js';
 import type { AuditSummaryEntry } from './audit-port.js';
 import type { GatewayIcpAutonomyBroker } from './icp-autonomy-broker.js';
@@ -451,11 +452,12 @@ export class GatewayServer {
       decision: 'approve' | 'deny' | 'modify';
       modifiedParams?: Record<string, unknown>;
     },
-  ): Promise<ConfirmationResolveResult> {
-    return this.approvalBoundary.resolveConfirmationForOwner(companionId, params, {
+    resolver: ConfirmationResolverIdentity = {
       kind: 'operator',
       id: `garden-admin:${companionId}`,
-    });
+    },
+  ): Promise<ConfirmationResolveResult> {
+    return this.approvalBoundary.resolveConfirmationForOwner(companionId, params, resolver);
   }
 
   resolveCompanionUiApproval(

@@ -2,7 +2,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { GatewayFleetAuthChildAssertionBroker } from '../../../boundary/gateway/fleet-auth-child-assertions.js';
 import {
   GatewayChildAssertionDeniedError,
+  type AuthenticatedChildAssertionControlIdentity,
   type GatewayChildAssertionExchangeInput,
+  type GatewayOperatorEffectInput,
 } from '../../../boundary/gateway/fleet-auth-child-assertions.js';
 import {
   compileGatewayGardenRequestTarget,
@@ -17,7 +19,7 @@ import { normalizeTestingHarnessApiPrincipalId } from '../../backplane/http/auth
 
 export const FLEET_AUTH_CHILD_ASSERTION_EXCHANGE_PATH =
   '/v1/internal/fleet-auth/child-assertions';
-const MAX_EXCHANGE_BODY_BYTES = 256 * 1024;
+export const MAX_EXCHANGE_BODY_BYTES = 256 * 1024;
 const MAX_TARGET_BODY_BYTES = 128 * 1024;
 
 function parseVersions(value: unknown): RequestCapabilityAuthorityVersions {
@@ -97,39 +99,44 @@ function parseTarget(
   });
 }
 
-export function parseChildAssertionExchangeRequest(
-  value: unknown,
-): GatewayChildAssertionExchangeInput {
-  const hasProviderIdentity = isRecord(value) && Object.hasOwn(value, 'providerIdentity');
-  if (!isRecord(value)
-    || !hasExactKeys(
-      value,
-      hasProviderIdentity
-        ? ['schemaVersion', 'companionId', 'providerIdentity', 'parent', 'child']
-        : ['schemaVersion', 'companionId', 'parent', 'child'],
-    )
-    || value.schemaVersion !== 1
-    || (hasProviderIdentity
-      && (!isRecord(value.providerIdentity)
-        || !hasExactKeys(value.providerIdentity, ['provider', 'audience'])
-        || value.providerIdentity.provider !== 'testing_harness'
-        || typeof value.providerIdentity.audience !== 'string'))
-    || !isRecord(value.parent)
-    || !hasExactKeys(value.parent, ['token', 'target', 'requestId', 'decisionId', 'versions'])
-    || typeof value.parent.token !== 'string'
-    || value.parent.token.length < 1
-    || value.parent.token.length > 65_536
-    || !isRfc4122Uuid(value.parent.requestId)
-    || !isRfc4122Uuid(value.parent.decisionId)
-    || !isRecord(value.child)
-    || !hasExactKeys(value.child, ['target', 'requestId'])
-    || !isRfc4122Uuid(value.child.requestId)) {
-    throw new Error('invalid child assertion exchange');
-  }
-  const companionId = createCompanionId(value.companionId);
-  const parentTarget = parseTarget(value.parent.target, companionId);
-  const childTarget = parseTarget(value.child.target, companionId);
-  const operator = hasProviderIdentity
+const PARENT_KEYS = ['token', 'target', 'requestId', 'decisionId', 'versions'] as const;
+
+// The capability verifier owns the compact-token size bound.
+function parentKeysValid(value: unknown): value is Record<string, unknown> {
+  return isRecord(value)
+    && hasExactKeys(value, PARENT_KEYS)
+    && typeof value.token === 'string'
+    && value.token.length >= 1
+    && isRfc4122Uuid(value.requestId)
+    && isRfc4122Uuid(value.decisionId);
+}
+
+function parseParent(
+  value: Record<string, unknown>,
+  companionId: ReturnType<typeof createCompanionId>,
+): GatewayChildAssertionExchangeInput['parent'] {
+  return Object.freeze({
+    token: value.token as string,
+    target: parseTarget(value.target, companionId),
+    requestId: value.requestId as string,
+    decisionId: value.decisionId as string,
+    versions: parseVersions(value.versions),
+  });
+}
+
+function providerIdentityValid(value: Record<string, unknown>): boolean {
+  return !Object.hasOwn(value, 'providerIdentity')
+    || (isRecord(value.providerIdentity)
+      && hasExactKeys(value.providerIdentity, ['provider', 'audience'])
+      && value.providerIdentity.provider === 'testing_harness'
+      && typeof value.providerIdentity.audience === 'string');
+}
+
+function controlIdentity(
+  value: Record<string, unknown>,
+  companionId: ReturnType<typeof createCompanionId>,
+): AuthenticatedChildAssertionControlIdentity {
+  return Object.hasOwn(value, 'providerIdentity')
     ? Object.freeze({
         kind: 'testing_harness_provider' as const,
         provider: 'testing_harness' as const,
@@ -143,15 +150,61 @@ export function parseChildAssertionExchangeRequest(
         operatorId: `operator:${companionId}` as const,
         companionId,
       });
+}
+
+/**
+ * Wire form for a gateway-executed effect authorized by the operator's exact
+ * admitted parent capability. Only the operator process presents parents.
+ */
+export function parseOperatorParentEffectRequest(
+  value: unknown,
+): GatewayOperatorEffectInput {
+  const hasProviderIdentity = isRecord(value) && Object.hasOwn(value, 'providerIdentity');
+  if (!isRecord(value)
+    || !hasExactKeys(
+      value,
+      hasProviderIdentity
+        ? ['schemaVersion', 'companionId', 'providerIdentity', 'parent']
+        : ['schemaVersion', 'companionId', 'parent'],
+    )
+    || value.schemaVersion !== 1
+    || !providerIdentityValid(value)
+    || !parentKeysValid(value.parent)) {
+    throw new Error('invalid operator parent effect request');
+  }
+  const companionId = createCompanionId(value.companionId);
   return Object.freeze({
-    operator,
-    parent: Object.freeze({
-      token: value.parent.token,
-      target: parentTarget,
-      requestId: value.parent.requestId,
-      decisionId: value.parent.decisionId,
-      versions: parseVersions(value.parent.versions),
-    }),
+    operator: controlIdentity(value, companionId),
+    parent: parseParent(value.parent, companionId),
+  });
+}
+
+export function parseChildAssertionExchangeRequest(
+  value: unknown,
+): GatewayChildAssertionExchangeInput {
+  const hasProviderIdentity = isRecord(value) && Object.hasOwn(value, 'providerIdentity');
+  if (!isRecord(value)
+    || !hasExactKeys(
+      value,
+      hasProviderIdentity
+        ? ['schemaVersion', 'companionId', 'providerIdentity', 'parent', 'child']
+        : ['schemaVersion', 'companionId', 'parent', 'child'],
+    )
+    || value.schemaVersion !== 1
+    || !providerIdentityValid(value)
+    || !parentKeysValid(value.parent)
+    || (value.parent.token as string).length > 65_536
+    || !isRecord(value.child)
+    || !hasExactKeys(value.child, ['target', 'requestId'])
+    || !isRfc4122Uuid(value.child.requestId)) {
+    throw new Error('invalid child assertion exchange');
+  }
+  const companionId = createCompanionId(value.companionId);
+  const parent = parseParent(value.parent, companionId);
+  const childTarget = parseTarget(value.child.target, companionId);
+  return Object.freeze({
+    operator: controlIdentity(value, companionId),
+    parent,
     child: Object.freeze({
       target: childTarget,
       requestId: value.child.requestId,

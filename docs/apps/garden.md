@@ -161,7 +161,9 @@ it resolves the fixed admin transport endpoint from
 `ADMIN_TRANSPORT_MODE`/`ADMIN_TRANSPORT_SOCKET`/`ADMIN_TRANSPORT_TLS_*`. It
 seals Postgres store readiness before marking the surface ready, and wires the
 operator confirmation resolver and child-assertion client from
-`GATEWAY_OPERATOR_API_BASE_URL` (`gatewayAuthPlan`).
+`GATEWAY_OPERATOR_API_BASE_URL` through `createOperatorGatewayClients`
+(`gateway-auth-plan.ts`): Fleet Garden presents admitted parent capabilities
+and holds no gateway credential; standalone Garden carries `ADMIN_TOKEN`.
 
 ## Authentication and admission
 
@@ -244,7 +246,12 @@ resolved roster and Fleet Auth configuration.
 `FleetGardenOperatorRouter` dispatches an admitted request in a fixed order:
 public and non-`/api/admin` targets dispatch locally; `POST
 /api/admin/confirmations/resolve` is resolved by the direct operator→gateway
-confirmation resolver when present; `FleetGardenDirectDatabase` handles the
+confirmation resolver when present, which presents the admitted parent to the
+gateway's `POST /internal/fleet-auth/confirmations/resolve` (the parent is
+consumed once there, SSO principals are reauthorized, and only the signed body
+is resolved against the parent's companion with the principal recorded as
+resolver); a gateway `not_found` or unreadable body falls through to the
+agent, a denial does not; `FleetGardenDirectDatabase` handles the
 invariant-11 routes served from companion-bound Garden DB services
 (`/api/admin/model-usage*` and the observer-eval-sidecar read routes); intake
 quarantine reads are served from companion-bound mounted snapshots; the

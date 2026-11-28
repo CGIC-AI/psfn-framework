@@ -2,10 +2,13 @@ import type {
   ConfirmationResolveRequest,
   ConfirmationResolveResult,
 } from '../../../system/capabilities/confirmation-queue.js';
-import { createCompanionId } from '../../../shared/routing/companion-id.js';
+import type { CompiledGardenRequestTarget } from '../../../boundary/fleet-auth/request-capability-target.js';
+import type { RequestCapabilityAuthorityVersions } from '../../../boundary/fleet-auth/request-capability.js';
 import { isRecord } from '../../../shared/utils/types.js';
 
+// GATEWAY_OPERATOR_API_BASE_URL already ends in /v1; route paths omit it.
 const OPERATOR_CONFIRMATION_PATH = '/operator/confirmations/resolve';
+const FLEET_CONFIRMATION_PATH = '/internal/fleet-auth/confirmations/resolve';
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const MAX_AUTHORIZATION_LENGTH = 1_024;
 const MAX_COOKIE_LENGTH = 2_048;
@@ -25,6 +28,17 @@ export interface GatewayOperatorConfirmationClient {
   ): Promise<ConfirmationResolveResult>;
 }
 
+/** Exact admitted Fleet Garden parent capability for the canonical resolve route. */
+export interface FleetConfirmationParentCapability {
+  readonly token: string;
+  readonly target: CompiledGardenRequestTarget<Buffer>;
+  readonly requestId: string;
+  readonly decisionId: string;
+  readonly versions: RequestCapabilityAuthorityVersions;
+  /** Present only for testing-harness parents, as on the child exchange. */
+  readonly providerIdentity?: Readonly<{ provider: 'testing_harness'; audience: string }>;
+}
+
 type GatewayOperatorConfirmationAuthority =
   | Readonly<{
       kind: 'standalone_operator';
@@ -33,10 +47,27 @@ type GatewayOperatorConfirmationAuthority =
     }>
   | Readonly<{
       kind: 'fleet_principal';
-      companionId: string;
-      requestId: string;
-      decisionId: string;
+      parent: FleetConfirmationParentCapability;
     }>;
+
+/**
+ * The gateway could not read the request as one of its resolutions; nothing
+ * was resolved, so an agent-local confirmation may still own it.
+ */
+export class GatewayOperatorConfirmationInvalidError extends Error {
+  constructor() {
+    super('Gateway operator confirmation request was invalid.');
+    this.name = 'GatewayOperatorConfirmationInvalidError';
+  }
+}
+
+/** The gateway refused the presented authority; no resolution happened. */
+export class GatewayOperatorConfirmationDeniedError extends Error {
+  constructor() {
+    super('Gateway operator confirmation authority was denied.');
+    this.name = 'GatewayOperatorConfirmationDeniedError';
+  }
+}
 
 interface GatewayOperatorConfirmationClientDeps {
   operatorToken: string;
@@ -44,7 +75,12 @@ interface GatewayOperatorConfirmationClientDeps {
   fetchImpl?: typeof fetch;
 }
 
-function resolveEndpoint(baseUrl: string): URL {
+interface GatewayFleetConfirmationClientDeps {
+  requestTimeoutMs: number;
+  fetchImpl?: typeof fetch;
+}
+
+function resolveEndpoint(baseUrl: string, path: string): URL {
   let base: URL;
   try {
     base = new URL(baseUrl);
@@ -59,7 +95,7 @@ function resolveEndpoint(baseUrl: string): URL {
     throw new Error('GATEWAY_OPERATOR_API_BASE_URL must be an HTTP(S) URL without credentials, query, or fragment.');
   }
   const basePath = base.pathname.replace(/\/+$/u, '');
-  base.pathname = `${basePath}${OPERATOR_CONFIRMATION_PATH}`;
+  base.pathname = `${basePath}${path}`;
   return base;
 }
 
@@ -128,73 +164,136 @@ function parseResolveResult(value: unknown, expectedId: string): ConfirmationRes
   };
 }
 
+function assertPositiveTimeout(requestTimeoutMs: number): void {
+  if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs <= 0) {
+    throw new Error('Gateway operator confirmation request timeout must be a positive integer.');
+  }
+}
+
+async function postResolution(input: {
+  readonly fetchImpl: typeof fetch;
+  readonly endpoint: URL;
+  readonly requestTimeoutMs: number;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly body: unknown;
+  readonly expectedId: string;
+}): Promise<ConfirmationResolveResult> {
+  const response = await input.fetchImpl(input.endpoint, {
+    method: 'POST',
+    redirect: 'error',
+    signal: AbortSignal.timeout(input.requestTimeoutMs),
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      ...input.headers,
+    },
+    body: JSON.stringify(input.body),
+  });
+  const responseText = await readBoundedText(response);
+  if (response.status === 400) throw new GatewayOperatorConfirmationInvalidError();
+  if (response.status === 403) throw new GatewayOperatorConfirmationDeniedError();
+  if (!response.ok) {
+    throw new Error(`Gateway operator confirmation failed with HTTP ${response.status}.`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(responseText) as unknown;
+  } catch {
+    throw new Error('Gateway operator confirmation returned invalid JSON.');
+  }
+  return parseResolveResult(parsed, input.expectedId);
+}
+
+function assertNoCompanionAssertion(params: ConfirmationResolveRequest): void {
+  if (isRecord(params) && 'companionId' in params) {
+    throw new Error('Confirmation params cannot assert companion authority.');
+  }
+}
+
+/**
+ * Standalone Garden: the independently authenticated operator process carries
+ * the internal ADMIN_TOKEN straight to the gateway operator endpoint.
+ */
 export function createGatewayOperatorConfirmationClient(
   baseUrl: string,
   deps: GatewayOperatorConfirmationClientDeps,
 ): GatewayOperatorConfirmationClient {
-  if (!Number.isSafeInteger(deps.requestTimeoutMs) || deps.requestTimeoutMs <= 0) {
-    throw new Error('Gateway operator confirmation request timeout must be a positive integer.');
-  }
+  assertPositiveTimeout(deps.requestTimeoutMs);
   const operatorToken = boundedCredential(deps.operatorToken, MAX_AUTHORIZATION_LENGTH);
   if (!operatorToken) {
     throw new Error('Internal gateway operator token is required for confirmation resolution.');
   }
-  const endpoint = resolveEndpoint(baseUrl);
+  const endpoint = resolveEndpoint(baseUrl, OPERATOR_CONFIRMATION_PATH);
   const fetchImpl = deps.fetchImpl ?? fetch;
   return {
     resolve: async (params, authority) => {
-      if (isRecord(params) && 'companionId' in params) {
-        throw new Error('Confirmation params cannot assert companion authority.');
+      assertNoCompanionAssertion(params);
+      if (authority.kind !== 'standalone_operator') {
+        throw new Error('Token confirmation routing accepts only standalone Garden operators.');
       }
-      let companionId: string | undefined;
-      if (authority.kind === 'standalone_operator') {
-        const authorization = boundedCredential(
-          authority.authorization,
-          MAX_AUTHORIZATION_LENGTH,
-        );
-        const cookie = boundedCredential(authority.cookie, MAX_COOKIE_LENGTH);
-        if (!authorization && !cookie) {
-          throw new Error('Authenticated Garden operator credentials are required for gateway resolution.');
-        }
-      } else if (typeof authority.companionId !== 'string'
-        || typeof authority.requestId !== 'string'
-        || typeof authority.decisionId !== 'string'
-        || !authority.companionId.trim()
-        || !authority.requestId.trim()
-        || !authority.decisionId.trim()) {
-        throw new Error('Admitted Fleet Garden authority is required for gateway resolution.');
-      } else {
-        companionId = createCompanionId(
-          authority.companionId,
-          'Fleet Garden confirmation companionId',
-        );
+      const authorization = boundedCredential(
+        authority.authorization,
+        MAX_AUTHORIZATION_LENGTH,
+      );
+      const cookie = boundedCredential(authority.cookie, MAX_COOKIE_LENGTH);
+      if (!authorization && !cookie) {
+        throw new Error('Authenticated Garden operator credentials are required for gateway resolution.');
       }
-
-      const response = await fetchImpl(endpoint, {
-        method: 'POST',
-        redirect: 'error',
-        signal: AbortSignal.timeout(deps.requestTimeoutMs),
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${operatorToken}`,
-        },
-        body: JSON.stringify({
-          ...params,
-          ...(companionId ? { companionId } : {}),
-        }),
+      return await postResolution({
+        fetchImpl,
+        endpoint,
+        requestTimeoutMs: deps.requestTimeoutMs,
+        headers: { Authorization: `Bearer ${operatorToken}` },
+        body: params,
+        expectedId: params.id,
       });
-      const responseText = await readBoundedText(response);
-      if (!response.ok) {
-        throw new Error(`Gateway operator confirmation failed with HTTP ${response.status}.`);
+    },
+  };
+}
+
+/**
+ * Fleet Garden: the operator holds no gateway credential. It presents the
+ * exact admitted parent capability; the gateway resolves only that signed
+ * body, for that capability's companion and principal.
+ */
+export function createGatewayFleetConfirmationClient(
+  baseUrl: string,
+  deps: GatewayFleetConfirmationClientDeps,
+): GatewayOperatorConfirmationClient {
+  assertPositiveTimeout(deps.requestTimeoutMs);
+  const endpoint = resolveEndpoint(baseUrl, FLEET_CONFIRMATION_PATH);
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  return {
+    resolve: async (params, authority) => {
+      assertNoCompanionAssertion(params);
+      if (authority.kind !== 'fleet_principal') {
+        throw new Error('Fleet confirmation routing requires an admitted Fleet Garden parent.');
       }
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(responseText) as unknown;
-      } catch {
-        throw new Error('Gateway operator confirmation returned invalid JSON.');
-      }
-      return parseResolveResult(parsed, params.id);
+      const { parent } = authority;
+      return await postResolution({
+        fetchImpl,
+        endpoint,
+        requestTimeoutMs: deps.requestTimeoutMs,
+        headers: {},
+        body: {
+          schemaVersion: 1,
+          companionId: parent.target.companionId,
+          ...(parent.providerIdentity ? { providerIdentity: parent.providerIdentity } : {}),
+          parent: {
+            token: parent.token,
+            target: {
+              rawTarget: parent.target.canonicalRequestTarget,
+              method: parent.target.method,
+              bodyBase64: parent.target.body.toString('base64url'),
+              headers: null,
+            },
+            requestId: parent.requestId,
+            decisionId: parent.decisionId,
+            versions: parent.versions,
+          },
+        },
+        expectedId: params.id,
+      });
     },
   };
 }

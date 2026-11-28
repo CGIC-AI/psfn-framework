@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { PromptLayer } from '../identity/prompt-types.js';
-import { renderAppraiserOperatorGuidance, selectAppraiserOperatorGuidance } from './operator-guidance.js';
+import {
+  renderAppraiserOperatorGuidance,
+  selectAppraiserOperatorGuidance,
+  selectRemoteShareableOperatorGuidance,
+} from './operator-guidance.js';
 import { TEMPORAL_RULES_LAYER_CONTENT, TEMPORAL_RULES_LAYER_IDENTIFIER } from '../identity/temporal-rules-layer.js';
 
 function layer(overrides: Partial<PromptLayer>): PromptLayer {
@@ -30,9 +34,23 @@ describe('selectAppraiserOperatorGuidance (9iooo)', () => {
       layer({ id: 'task', taskKind: 'reflection' }),
       layer({ id: 'base', type: 'base', content: 'the whole character card' }),
     ])).toEqual([
-      { name: 'first', content: 'one' },
-      { name: 'second', content: 'two' },
+      { name: 'first', content: 'one', remoteAppraisalShareable: false },
+      { name: 'second', content: 'two', remoteAppraisalShareable: false },
     ]);
+  });
+});
+
+describe('remote-shareable operator guidance (1oqg1)', () => {
+  it('carries only the operator declaration, so undeclared layers stay private', () => {
+    const guidance = selectAppraiserOperatorGuidance([
+      layer({ id: 'shared', name: 'room policy', content: 'shared text', priority: 1, remoteAppraisalShareable: true }),
+      layer({ id: 'private', name: 'private notes', content: 'private text', priority: 2 }),
+    ]);
+    expect(guidance).toEqual([
+      { name: 'room policy', content: 'shared text', remoteAppraisalShareable: true },
+      { name: 'private notes', content: 'private text', remoteAppraisalShareable: false },
+    ]);
+    expect(selectRemoteShareableOperatorGuidance(guidance)).toEqual([guidance[0]]);
   });
 });
 
@@ -60,7 +78,7 @@ describe('appraiser operator guidance budget (8huns)', () => {
   });
 
   it('marks truncation explicitly with how much was cut', () => {
-    const rendered = renderAppraiserOperatorGuidance([{ name: 'Long', content: 'x'.repeat(300) }], 100);
+    const rendered = renderAppraiserOperatorGuidance([{ name: 'Long', content: 'x'.repeat(300), remoteAppraisalShareable: false }], 100);
     expect(rendered).toMatch(/\[operator guidance truncated: \d+ of \d+ characters not shown\]$/);
   });
 

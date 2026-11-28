@@ -130,17 +130,45 @@ describe('ParticipationAppraiser on decide()', () => {
     expect(JSON.stringify(request?.state)).toContain('I wonder what Persephone thinks about that');
   });
 
-  it('keeps operator guidance out of the remote decision state (9iooo)', async () => {
+  it('keeps undeclared (private) operator guidance out of the remote decision request (9iooo, 1oqg1)', async () => {
     const { provider } = recordingProvider();
     const { decisions, jevSpy } = runtime(settingsFor('jev'));
     await new ParticipationAppraiser({
       llmProvider: provider,
       companionName: COMPANION_NAME,
       decisions,
-      operatorGuidance: () => [{ name: 'tester briefing', content: 'OPERATOR-ONLY-BRIEFING-TEXT' }],
+      operatorGuidance: () => [{
+        name: 'tester briefing', content: 'OPERATOR-ONLY-BRIEFING-TEXT', remoteAppraisalShareable: false,
+      }],
     }).appraise(makeCandidate());
 
-    expect(JSON.stringify(jevSpy.mock.calls[0]?.[0])).not.toContain('OPERATOR-ONLY-BRIEFING-TEXT');
+    const request = jevSpy.mock.calls[0]?.[0];
+    expect(JSON.stringify(request)).not.toContain('OPERATOR-ONLY-BRIEFING-TEXT');
+    expect(request?.state).not.toHaveProperty('operator_guidance');
+    expect(JSON.stringify(request?.questions)).not.toContain('operator_guidance');
+  });
+
+  it('sends only operator-declared shareable guidance to the remote decision request (1oqg1)', async () => {
+    const { provider } = recordingProvider();
+    const { decisions, jevSpy } = runtime(settingsFor('jev'));
+    await new ParticipationAppraiser({
+      llmProvider: provider,
+      companionName: COMPANION_NAME,
+      decisions,
+      settings: { ...createDefaultParticipationAppraiserSettings(), operatorGuidanceMaxChars: 80 },
+      operatorGuidance: () => [
+        { name: 'room policy', content: 'SHARED-ROOM-POLICY-TEXT', remoteAppraisalShareable: true },
+        { name: 'private notes', content: 'PRIVATE-NOTES-TEXT', remoteAppraisalShareable: false },
+        { name: 'long shared note', content: 'y'.repeat(200), remoteAppraisalShareable: true },
+      ],
+    }).appraise(makeCandidate());
+
+    const request = jevSpy.mock.calls[0]?.[0];
+    const sharedGuidance = String((request?.state as Record<string, unknown>).operator_guidance);
+    expect(sharedGuidance).toContain('[room policy]\nSHARED-ROOM-POLICY-TEXT');
+    expect(sharedGuidance).toMatch(/\[operator guidance truncated: \d+ of \d+ characters not shown\]$/u);
+    expect(JSON.stringify(request)).not.toContain('PRIVATE-NOTES-TEXT');
+    expect(JSON.stringify(request?.questions)).toContain('`operator_guidance` is written by the operator');
   });
 
   it('maps a jev react to the reaction class question', async () => {
@@ -221,7 +249,8 @@ describe('ParticipationAppraiser on decide()', () => {
   });
 
   it('refuses to build remote questions for the private companion surface', () => {
-    expect(() => buildAppraisalDecisionQuestions('companion_dm')).toThrow('companion_private');
+    expect(() => buildAppraisalDecisionQuestions('companion_dm', { withOperatorGuidance: false }))
+      .toThrow('companion_private');
   });
 
   it('falls back to the exact local appraisal when jev fails', async () => {

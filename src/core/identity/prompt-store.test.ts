@@ -757,3 +757,54 @@ describe('PromptLayerStore', () => {
     });
   });
 });
+
+describe('PromptLayerStore remote appraisal privacy class (psfn-framework-1oqg1)', () => {
+  let tmpDir: string;
+  let filePath: string;
+  let historyPath: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'psfn-prompt-sharing-'));
+    filePath = join(tmpDir, 'prompt-layers.json');
+    historyPath = join(tmpDir, 'prompt-history.jsonl');
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('defaults an operator layer to private and persists an explicit share across a reload', () => {
+    const store = new PromptLayerStore(filePath, historyPath);
+    const layer = store.create({ type: 'operator', name: 'Room policy', content: 'Let humans finish first.' });
+    expect(layer.remoteAppraisalShareable).toBeUndefined();
+
+    store.setRemoteAppraisalShareable(layer.id, true);
+    const reloaded = new PromptLayerStore(filePath, historyPath);
+    expect(reloaded.getById(layer.id)?.remoteAppraisalShareable).toBe(true);
+
+    reloaded.setRemoteAppraisalShareable(layer.id, false);
+    const reloadedAgain = new PromptLayerStore(filePath, historyPath);
+    expect(reloadedAgain.getById(layer.id)).not.toHaveProperty('remoteAppraisalShareable');
+    expect(JSON.parse(readFileSync(filePath, 'utf8'))[0]).not.toHaveProperty('remoteAppraisalShareable');
+  });
+
+  it('refuses the class on non-operator layers', () => {
+    const store = new PromptLayerStore(filePath, historyPath);
+    const runtime = store.create({ type: 'runtime', name: 'Runtime note', content: 'private runtime content' });
+    expect(() => store.setRemoteAppraisalShareable(runtime.id, true)).toThrow('Only operator prompt layers');
+    expect(store.getById(runtime.id)?.remoteAppraisalShareable).toBeUndefined();
+  });
+
+  it('fails the load closed on a malformed or misplaced stored class', () => {
+    const store = new PromptLayerStore(filePath, historyPath);
+    const operator = store.create({ type: 'operator', name: 'Room policy', content: 'Let humans finish first.' });
+    const stored = JSON.parse(readFileSync(filePath, 'utf8')) as Array<Record<string, unknown>>;
+
+    writeFileSync(filePath, JSON.stringify([{ ...stored[0], remoteAppraisalShareable: 'yes' }]));
+    expect(() => new PromptLayerStore(filePath, historyPath)).toThrow('remoteAppraisalShareable must be a boolean');
+
+    writeFileSync(filePath, JSON.stringify([{ ...stored[0], type: 'runtime', remoteAppraisalShareable: true }]));
+    expect(() => new PromptLayerStore(filePath, historyPath)).toThrow('only valid on operator layers');
+    expect(operator.type).toBe('operator');
+  });
+});

@@ -9,6 +9,20 @@ import {
   resolveOperatorLayerWriter,
 } from './prompt-operator-layer-authority.js';
 
+/**
+ * psfn-framework-1oqg1: the operator's privacy declaration for an operator
+ * layer. Only an explicit JSON boolean is accepted; anything else rejects.
+ */
+function resolveRemoteAppraisalSharing(
+  params: URLSearchParams,
+): { shareable: boolean | undefined } | { error: string } {
+  const raw = params.get('remoteAppraisalShareable');
+  if (raw === null) return { shareable: undefined };
+  if (raw === 'true') return { shareable: true };
+  if (raw === 'false') return { shareable: false };
+  return { error: 'remoteAppraisalShareable must be a boolean' };
+}
+
 export class PromptsLayerService {
   constructor(private readonly context: AdminPromptsServiceContext) {}
 
@@ -129,12 +143,18 @@ export class PromptsLayerService {
       return { ok: false, message: resolvedPriority.error };
     }
 
+    const resolvedSharing = resolveRemoteAppraisalSharing(params);
+    if ('error' in resolvedSharing) {
+      return { ok: false, message: resolvedSharing.error };
+    }
+
     const hasMetadata = Object.keys(resolvedMetadata.metadata).length > 0;
     const hasContent = resolved.content !== undefined;
     const hasName = Boolean(name);
     const hasPriority = resolvedPriority.priority !== undefined;
     const hasIdentifier = Object.prototype.hasOwnProperty.call(resolvedMetadata.metadata, 'identifier');
-    if (!hasName && !hasContent && !hasMetadata && !hasPriority) {
+    const hasSharing = resolvedSharing.shareable !== undefined;
+    if (!hasName && !hasContent && !hasMetadata && !hasPriority && !hasSharing) {
       return { ok: false, message: 'No prompt update fields provided' };
     }
 
@@ -145,6 +165,9 @@ export class PromptsLayerService {
 
     const operatorActor = this.operatorLayerActor(existingLayer.type, requestContext);
     if (operatorActor && !operatorActor.ok) return { ok: false, message: operatorActor.message };
+    if (hasSharing && existingLayer.type !== 'operator') {
+      return { ok: false, message: 'remoteAppraisalShareable applies only to operator prompt layers' };
+    }
     if (existingLayer.type === 'operator' && hasIdentifier) {
       const identifierError = operatorLayerIdentifierError(
         resolvedMetadata.metadata.identifier ?? undefined,
@@ -174,12 +197,18 @@ export class PromptsLayerService {
     if (hasPriority) patch.priority = resolvedPriority.priority;
 
     try {
-      const layer = this.context.deps.promptStore.update(
-        layerId,
-        patch,
-        'admin',
-        'Admin prompt-layer edit via Garden API',
-      );
+      const promptStore = this.context.deps.promptStore;
+      let layer = Object.keys(patch).length > 0
+        ? promptStore.update(
+          layerId,
+          patch,
+          'admin',
+          'Admin prompt-layer edit via Garden API',
+        )
+        : existingLayer;
+      if (resolvedSharing.shareable !== undefined) {
+        layer = promptStore.setRemoteAppraisalShareable(layerId, resolvedSharing.shareable);
+      }
       this.context.injectPromptEditSystemNote(
         `Admin updated ${layer.type} prompt layer "${layer.name}" (v${layer.version}).`,
       );
@@ -191,6 +220,7 @@ export class PromptsLayerService {
           `layerId=${layer.id}`,
           `version=${layer.version}`,
           operatorActor?.ok ? `operatorActor=${operatorActor.actor}` : null,
+          hasSharing ? `remoteAppraisalShareable=${String(resolvedSharing.shareable)}` : null,
         ],
         requestContext,
       );

@@ -98,8 +98,8 @@ describe('ParticipationAppraiser', () => {
       companionName: COMPANION_NAME,
       settings: { ...createDefaultParticipationAppraiserSettings(), operatorGuidanceMaxChars: 120 },
       operatorGuidance: () => [
-        { name: 'shakedown tester briefing', content: briefing },
-        { name: 'long note', content: 'x'.repeat(500) },
+        { name: 'shakedown tester briefing', content: briefing, remoteAppraisalShareable: false },
+        { name: 'long note', content: 'x'.repeat(500), remoteAppraisalShareable: false },
       ],
     });
 

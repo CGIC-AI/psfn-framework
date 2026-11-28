@@ -8,6 +8,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PromptLayerStore } from '../../../core/identity/prompt-store.js';
 import { ensureTemporalRulesPromptLayer } from '../../../core/identity/temporal-rules-layer.js';
+import { ParticipationAppraiser } from '../../../core/participation/appraiser.js';
+import { selectAppraiserOperatorGuidance } from '../../../core/participation/operator-guidance.js';
+import type { ParticipationCandidate } from '../../../core/participation/types.js';
+import { createDecisionRuntime, type RemoteDecisionBackend } from '../../../primitives/llm/decision/decide.js';
+import { createDefaultDecisionBackendSettings } from '../../../system/config/decision-backend-config.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
 import { AdminPromptsDataService } from './prompts-service.js';
 
@@ -184,5 +189,113 @@ describe('operator-type prompt layers through the Garden prompt API', () => {
     // The read route's action does not grant write; the list flag reflects the principal.
     expect(service.listPrompts(fleetContext({ provider: 'discord', role: 'owner' }, 'prompts.read'))
       .canWriteOperatorLayers).toBe(true);
+  });
+});
+
+// psfn-framework-1oqg1: the operator declares which operator layers a remote
+// participation-appraisal backend may see. Undeclared layers fail closed.
+describe('operator layer remote-appraisal sharing through the Garden prompt API', () => {
+  const candidate: ParticipationCandidate = {
+    schemaVersion: 1,
+    channelId: 'room-demo',
+    channelType: 'discord',
+    sourceMessageId: 'msg-demo',
+    trigger: 'passive_name',
+    triggerAuthorId: 'human-demo',
+    triggerAuthorIsMachine: false,
+    triggerAuthorName: 'Robin',
+    triggerContent: 'curious what the companion makes of this',
+    triggerTimestampMs: 2_000_000,
+    matchedName: true,
+    matchedDirectAddress: false,
+    precedingContext: [],
+    createdAtMs: 2_000_001,
+  };
+
+  function remoteRequestFor(promptStore: ReturnType<typeof harness>['promptStore']) {
+    const jev = vi.fn<RemoteDecisionBackend['decide']>(async () => ({
+      ok: true,
+      answers: { action: { type: 'choice', choice: 'ignore', probabilities: { ignore: 0.9, react: 0.05, reply: 0.05 } } },
+      backend: 'jev',
+      probabilitySource: 'jev',
+      latencyMs: 1,
+      model: 'remote-demo',
+    }));
+    const decisions = createDecisionRuntime({
+      local: { decide: vi.fn(async () => { throw new Error('local backend must not run'); }) },
+      jev: { decide: jev },
+      resolveSettings: () => ({
+        ...createDefaultDecisionBackendSettings(),
+        sites: { 'participation.appraise': { mode: 'jev' } },
+      }),
+      shadowSink: { record: () => undefined },
+    });
+    const appraiser = new ParticipationAppraiser({
+      llmProvider: { complete: vi.fn(async () => { throw new Error('local model must not run'); }) },
+      companionName: 'Demo Companion',
+      decisions,
+      // The same selector the speaking-arbiter lane wires to the live store.
+      operatorGuidance: () => selectAppraiserOperatorGuidance(promptStore.getByType('operator')),
+    });
+    return { appraiser, jev };
+  }
+
+  it('keeps a new operator layer private until the operator shares it, and can unshare it', async () => {
+    const { service, promptStore, appendAuditTimelineEntry } = harness();
+    const shared = service.createPromptLayer(createBody('operator.room_policy', 'SHAREABLE-ROOM-POLICY'), ADMIN_TOKEN).layer!;
+    service.createPromptLayer(createBody('operator.private_notes', 'PRIVATE-OPERATOR-NOTES'), ADMIN_TOKEN);
+
+    const before = remoteRequestFor(promptStore);
+    await before.appraiser.appraise(candidate);
+    expect(JSON.stringify(before.jev.mock.calls[0]?.[0])).not.toContain('SHAREABLE-ROOM-POLICY');
+    expect(JSON.stringify(before.jev.mock.calls[0]?.[0])).not.toContain('PRIVATE-OPERATOR-NOTES');
+
+    expect(service.updatePromptLayer(
+      JSON.stringify({ layerId: shared.id, remoteAppraisalShareable: true }),
+      ADMIN_TOKEN,
+    )).toMatchObject({ ok: true, layer: { remoteAppraisalShareable: true } });
+    expect(appendAuditTimelineEntry).toHaveBeenLastCalledWith(
+      'identity_edit',
+      'allowed',
+      expect.any(String),
+      expect.arrayContaining(['remoteAppraisalShareable=true']),
+      ADMIN_TOKEN,
+    );
+
+    const after = remoteRequestFor(promptStore);
+    await after.appraiser.appraise(candidate);
+    const request = JSON.stringify(after.jev.mock.calls[0]?.[0]);
+    expect(request).toContain('SHAREABLE-ROOM-POLICY');
+    expect(request).not.toContain('PRIVATE-OPERATOR-NOTES');
+
+    expect(service.updatePromptLayer(
+      JSON.stringify({ layerId: shared.id, remoteAppraisalShareable: false }),
+      ADMIN_TOKEN,
+    )).toMatchObject({ ok: true });
+    const unshared = remoteRequestFor(promptStore);
+    await unshared.appraiser.appraise(candidate);
+    expect(JSON.stringify(unshared.jev.mock.calls[0]?.[0])).not.toContain('SHAREABLE-ROOM-POLICY');
+  });
+
+  it('refuses the declaration from non-operator writers, on non-operator layers, and when malformed', () => {
+    const { service, promptStore } = harness();
+    const layer = service.createPromptLayer(createBody('operator.room_policy'), ADMIN_TOKEN).layer!;
+    const sharing = JSON.stringify({ layerId: layer.id, remoteAppraisalShareable: true });
+    expect(service.updatePromptLayer(sharing, fleetContext({ provider: 'testing_harness', role: 'owner' })))
+      .toMatchObject({ ok: false, message: expect.stringMatching(/testing-harness/u) });
+    expect(service.updatePromptLayer(sharing, fleetContext({ provider: 'discord', role: 'member' })))
+      .toMatchObject({ ok: false });
+    expect(service.updatePromptLayer(
+      JSON.stringify({ layerId: layer.id, remoteAppraisalShareable: 'yes' }),
+      ADMIN_TOKEN,
+    )).toMatchObject({ ok: false, message: expect.stringMatching(/must be a boolean/u) });
+    expect(promptStore.getById(layer.id)?.remoteAppraisalShareable).toBeUndefined();
+
+    const base = promptStore.getByType('base')[0]!;
+    expect(service.updatePromptLayer(
+      JSON.stringify({ layerId: base.id, remoteAppraisalShareable: true }),
+      ADMIN_TOKEN,
+    )).toMatchObject({ ok: false, message: expect.stringMatching(/only to operator/u) });
+    expect(promptStore.getById(base.id)?.remoteAppraisalShareable).toBeUndefined();
   });
 });

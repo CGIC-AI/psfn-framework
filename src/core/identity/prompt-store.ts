@@ -229,6 +229,12 @@ export function validateStoredPromptLayer(layer: unknown, index: number): Prompt
   if (candidate.taskKind !== undefined && typeof candidate.taskKind !== 'string') {
     throw new Error(`layers[${String(index)}].taskKind must be a string when provided`);
   }
+  if (candidate.remoteAppraisalShareable !== undefined && typeof candidate.remoteAppraisalShareable !== 'boolean') {
+    throw new Error(`layers[${String(index)}].remoteAppraisalShareable must be a boolean when provided`);
+  }
+  if (candidate.remoteAppraisalShareable === true && candidate.type !== 'operator') {
+    throw new Error(`layers[${String(index)}].remoteAppraisalShareable is only valid on operator layers`);
+  }
 
   return {
     id: candidate.id,
@@ -242,6 +248,7 @@ export function validateStoredPromptLayer(layer: unknown, index: number): Prompt
     priority: candidate.priority,
     ...(typeof candidate.channelType === 'string' ? { channelType: candidate.channelType } : {}),
     ...(typeof candidate.taskKind === 'string' ? { taskKind: candidate.taskKind } : {}),
+    ...(candidate.remoteAppraisalShareable === true ? { remoteAppraisalShareable: true as const } : {}),
     updatedAt: new Date(candidate.updatedAt).toISOString(),
     updatedBy: candidate.updatedBy.trim(),
     checksum: candidate.checksum,
@@ -804,6 +811,27 @@ export class PromptLayerStore {
     this.save();
     this.notifyMutation(`prompt-layer-toggle:${layer.type}`);
     log.info(`Toggled prompt layer: ${layer.name} -> ${layer.enabled ? 'enabled' : 'disabled'}`);
+    return layer;
+  }
+
+  /**
+   * Operator declaration of an operator layer's privacy class
+   * (psfn-framework-1oqg1). Shareable layers may be sent to a remote
+   * participation-appraisal backend; clearing the flag returns the layer to
+   * companion-private.
+   */
+  setRemoteAppraisalShareable(id: string, shareable: boolean): PromptLayer {
+    const layer = this.layers.find(l => l.id === id);
+    if (!layer) throw new Error(`Prompt layer not found: ${id}`);
+    if (layer.type !== 'operator') {
+      throw new Error('Only operator prompt layers can be shared with remote appraisal');
+    }
+    if (shareable) layer.remoteAppraisalShareable = true;
+    else delete layer.remoteAppraisalShareable;
+    layer.updatedAt = new Date().toISOString();
+    this.save();
+    this.notifyMutation(`prompt-layer-sharing:${layer.type}`);
+    log.info(`Set prompt layer remote appraisal sharing: ${layer.name} -> ${shareable ? 'shareable' : 'private'}`);
     return layer;
   }
 

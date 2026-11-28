@@ -29,6 +29,7 @@ import type { BiographicalCandidatePolicy } from './biographical-candidate-polic
 import type { ShellExecSettings } from './shell-exec-config.js';
 import type { DecisionBackendSettings } from './decision-backend-config.js';
 import type { RuntimeCompanionId } from '../../shared/routing/companion-id.js';
+import type { ModelPriceBookPort } from '../../primitives/llm/model-pricing/slot-price.js';
 import type {
   FleetAuthConfig,
   FleetAuthVerifierConfig,
@@ -424,6 +425,11 @@ export interface SubstrateConfig {
   modelPurposeSelection?: ModelPurposeSelection;
   providerRegistry?: CanonicalProviderRegistry;
   credentialVault?: CredentialVaultPort;
+  /**
+   * Gateway-owned current model prices (lomm1). Absent outside the gateway:
+   * prices then come from the owner `cost` in models.json only.
+   */
+  modelPriceBook?: ModelPriceBookPort;
   openRouterApiBaseUrl?: string;
   openRouterApiKeyRef?: CredentialReference;
   /**

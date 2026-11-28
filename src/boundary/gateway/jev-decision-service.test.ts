@@ -175,15 +175,23 @@ describe('Jev decision pricing (worst case before dispatch)', () => {
     init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
   }));
 
-  it('charges an aborted call its worst-case estimate instead of unknown cost', async () => {
+  it('charges an aborted call the request it sent, never its output bound or unknown cost (lomm1)', async () => {
     const { svc, usage } = service(pricedConfig(), hanging());
     await expect(svc.decide(INPUT)).resolves.toMatchObject({ ok: false, reason: 'aborted' });
     expect(usage).toHaveLength(1);
     const row = usage[0]!;
     expect(row).toMatchObject({ status: 'failure', costSource: 'estimate' });
-    // Worst case: request bytes as input tokens at $0.5/M plus 400 output tokens at $2/M.
-    expect(row.estimatedCostUsd).toBeGreaterThan((400 / 1_000_000) * 2);
-    expect(row.estimatedCostUsd).toBeLessThan(0.01);
+    // Request bytes as input tokens at $0.5/M; the 400-token output bound
+    // ($0.0008 at $2/M) is never booked: nothing was received.
+    expect(row.estimatedCostUsd).toBeGreaterThan(0);
+    expect(row.estimatedCostUsd).toBeLessThan((400 / 1_000_000) * 2);
+  });
+
+  it('charges a 2xx reply it could not read its worst case: output was produced, its size unknown', async () => {
+    const unreadable = vi.fn<DecisionsFetch>(async () => new Response('not json', { status: 200 }));
+    const { svc, usage } = service(pricedConfig(), unreadable);
+    await expect(svc.decide(INPUT)).resolves.toMatchObject({ ok: false, reason: 'invalid_output' });
+    expect(usage[0]!.estimatedCostUsd).toBeGreaterThan((400 / 1_000_000) * 2);
   });
 
   it('charges a completed call its reported tokens and keeps the provider cost', async () => {

@@ -73,6 +73,7 @@ describe('subsystem config round-trip', () => {
         monthlyUsdLimit: 60,
         currency: 'USD',
       },
+      pricing: { catalogRefresh: { enabled: true, intervalMinutes: 360, maxAgeMinutes: 2880 } },
       // Stated explicitly: this test is about drift, not about the absent-key
       // caching default (covered by the promptCaching round-trip test below).
       promptCaching: { enabled: true },

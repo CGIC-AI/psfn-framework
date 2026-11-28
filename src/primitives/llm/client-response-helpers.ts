@@ -209,6 +209,25 @@ function findMalformedUsageCostFields(value: unknown): string[] {
   return malformed;
 }
 
+/**
+ * Token counts of a pi-ai assistant message. pi-ai fills `usage.cost` itself
+ * with calculateCost() over the routed model's `cost` (the bundled catalogue
+ * snapshot or the owner rates, zeros when unpriced); it never carries what the
+ * provider billed, so it is dropped here and provider cost comes only from the
+ * gateway's wire capture (lomm1).
+ */
+export function normalizePiUsageDetails(
+  value: unknown,
+  fallbackInputTokens: number,
+  fallbackOutputTokens: number,
+): LLMUsageDetails {
+  if (!isRecord(value) || !Object.hasOwn(value, 'cost')) {
+    return normalizeLLMUsageDetails(value, fallbackInputTokens, fallbackOutputTokens);
+  }
+  const { cost: _calculatedLocally, ...counts } = value;
+  return normalizeLLMUsageDetails(counts, fallbackInputTokens, fallbackOutputTokens);
+}
+
 export function normalizeLLMUsageDetails(
   value: unknown,
   fallbackInputTokens: number,

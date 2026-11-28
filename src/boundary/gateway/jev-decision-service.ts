@@ -23,7 +23,7 @@
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_CONNECTIVITY_COOLDOWN_MS, DEFAULT_RATE_LIMIT_COOLDOWN_MS } from '../../primitives/llm/fallback.js';
 import { resolveConfiguredProviderCredential } from '../../primitives/llm/provider-runtime.js';
-import { jevDecisionRowCost, jevWorstCaseCostUsd } from './jev-decision-pricing.js';
+import { jevDecisionRowCost, jevRequestCostBoundsUsd } from './jev-decision-pricing.js';
 import { createJevDecisionBudgetGate, JEV_DECISION_USAGE_ATTRIBUTION } from './jev-decision-budget.js';
 import {
   buildJevDecisionsRequestBody,
@@ -206,7 +206,12 @@ export function createGatewayJevDecisionService(
   async function dispatch(
     input: JevDecisionInput,
     settings: JevDecisionBackendSettings,
-    call: { apiKey: string; apiBaseUrl: string; worstCaseUsd: number | undefined; startedAtMs: number },
+    call: {
+      apiKey: string;
+      apiBaseUrl: string;
+      bounds: ReturnType<typeof jevRequestCostBoundsUsd> | undefined;
+      startedAtMs: number;
+    },
     signal: AbortSignal | undefined,
   ): Promise<DecisionOutcome> {
     const controller = new AbortController();
@@ -248,7 +253,7 @@ export function createGatewayJevDecisionService(
       settings.jev.model,
       call.startedAtMs,
       result,
-      jevDecisionRowCost({ pricing: settings.jev.pricing, worstCaseUsd: call.worstCaseUsd, result }),
+      jevDecisionRowCost({ pricing: settings.jev.pricing, bounds: call.bounds, result }),
     );
     return result.outcome;
   }
@@ -264,19 +269,20 @@ export function createGatewayJevDecisionService(
       const apiBaseUrl = options.config.openRouterApiBaseUrl?.trim();
       if (!apiKey || !apiBaseUrl) throw new JevDecisionRefusedError('openrouter_credentials_unavailable');
 
-      // Priced before dispatch: an abort or timeout is charged this worst case.
+      // Priced before dispatch: admission reserves the worst case; an abort or
+      // timeout books the request it sent (lomm1).
       const pricing = settings.jev.pricing;
-      const worstCaseUsd = pricing
-        ? jevWorstCaseCostUsd(
+      const bounds = pricing
+        ? jevRequestCostBoundsUsd(
           pricing,
           buildJevDecisionsRequestBody(settings.jev.model, input.state, input.questions),
         )
         : undefined;
       // The reservation is held until the call's usage row is written, so the
       // next admission reads either the reservation or the row, never neither.
-      const releaseBudget = await admitWithinDailyBudget(input, settings, worstCaseUsd, startedAtMs);
+      const releaseBudget = await admitWithinDailyBudget(input, settings, bounds?.worstCaseUsd, startedAtMs);
       try {
-        return await dispatch(input, settings, { apiKey, apiBaseUrl, worstCaseUsd, startedAtMs }, signal);
+        return await dispatch(input, settings, { apiKey, apiBaseUrl, bounds, startedAtMs }, signal);
       } finally {
         releaseBudget();
       }

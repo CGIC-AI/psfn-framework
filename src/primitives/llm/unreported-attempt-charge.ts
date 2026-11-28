@@ -1,9 +1,9 @@
 // ── Unreported attempt charge (ge9w7, after 21c4v) ──
 // A failed provider attempt that reports no usage still has to land in the
 // ledger as a cost the budget guard can trust. What the provider bills depends
-// on how far the request got and who stopped it, so this module observes the
-// dispatch boundary of each physical attempt and owns the single decision of
-// how many tokens such an attempt is charged.
+// on how far the request got, so this module observes the dispatch boundary of
+// each physical attempt and owns the single decision of how many tokens such an
+// attempt is charged: what it sent and what was observed coming back (lomm1).
 
 import type { LLMUsageDetails } from '../../shared/contracts/runtime.js';
 import type { LLMRequestOptions } from './client-request-capability.js';
@@ -60,18 +60,14 @@ export function trackAttemptDispatch(
 
 /** What is known about a failed attempt's end when it reported no usage. */
 export interface UnreportedAttemptOutcome {
-  /** The attempt's own transport signal fired: its owner cancelled it (caller abort or gate preemption). */
-  ownerCancelled: boolean;
   dispatch: AttemptDispatchEvidence;
 }
 
 export type UnreportedAttemptChargeBasis =
   /** Never sent: the provider cannot bill it. */
   | 'not_dispatched'
-  /** Sent, then cancelled by its owner before any output: prompt processing may be billed, output was never generated. */
-  | 'input_bound'
-  /** End not observed (timeout or an abort the owner did not initiate): the request bound. */
-  | 'worst_case';
+  /** Sent, no output observed before it ended: the prompt it carried, no output. */
+  | 'input_bound';
 
 export interface UnreportedAttemptCharge {
   basis: UnreportedAttemptChargeBasis;
@@ -85,33 +81,33 @@ export interface UnreportedAttemptCharge {
  * reported, output was observed, or the failure is a provider answer such as an
  * HTTP error, which bills nothing).
  *
- * An owner-cancelled attempt is settled from the evidence: the provider stops
- * when the connection closes, so before the first output token it can at most
- * have billed the prompt, and before dispatch nothing. Only an attempt whose end
- * the owner did not observe keeps the request's worst case (21c4v).
+ * The attempt is booked at what it actually sent and received (lomm1): a
+ * request that never left is nothing, and a request that did is its prompt
+ * with no output, whoever ended it — the owner (caller abort, gate
+ * preemption) or a timeout. The output budget is an admission reservation,
+ * never a booked amount: only output that was observed is charged, through
+ * the partial-output path. When no dispatch evidence was collected the request
+ * is taken as sent.
  */
 export function resolveUnreportedAttemptCharge(input: {
   status: 'success' | 'failure';
   error: Error | undefined;
   reportedTokens: number;
-  worstCaseTokens: { input: number; output: number } | undefined;
+  /** The request's input token estimate, already capped to the context window. */
+  requestInputTokens: number | undefined;
   outcome: UnreportedAttemptOutcome | undefined;
 }): UnreportedAttemptCharge | undefined {
-  if (input.status !== 'failure' || !input.error || !input.worstCaseTokens) return undefined;
+  if (input.status !== 'failure' || !input.error || input.requestInputTokens === undefined) return undefined;
   if (input.reportedTokens > 0) return undefined;
   const category = classifyLLMError(input.error).category;
   if (category !== 'abort' && category !== 'timeout') return undefined;
-  const inputBound = Math.max(0, Math.ceil(input.worstCaseTokens.input));
-  if (input.outcome?.ownerCancelled === true) {
-    if (!input.outcome.dispatch.dispatched) {
-      return { basis: 'not_dispatched', inputTokens: 0, outputTokens: 0 };
-    }
-    return { basis: 'input_bound', inputTokens: inputBound, outputTokens: 0 };
+  if (input.outcome && !input.outcome.dispatch.dispatched) {
+    return { basis: 'not_dispatched', inputTokens: 0, outputTokens: 0 };
   }
   return {
-    basis: 'worst_case',
-    inputTokens: inputBound,
-    outputTokens: Math.max(0, Math.ceil(input.worstCaseTokens.output)),
+    basis: 'input_bound',
+    inputTokens: Math.max(0, Math.ceil(input.requestInputTokens)),
+    outputTokens: 0,
   };
 }
 

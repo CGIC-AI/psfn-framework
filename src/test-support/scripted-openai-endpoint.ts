@@ -22,21 +22,31 @@ export interface ScriptedOpenAIEndpoint {
   readonly baseUrl: string;
   /** Requests that reached the endpoint. */
   readonly requests: number;
-  /** Script the next request; `delayMs` holds a `complete` answer that long after its role chunk. */
-  enqueue(answer: ScriptedEndpointAnswer, options?: { delayMs?: number }): void;
+  /**
+   * Script the next request; `delayMs` holds a `complete` answer that long
+   * after its role chunk, and `usage` replaces its final usage chunk (cached
+   * prompt tokens, a provider-billed `cost`).
+   */
+  enqueue(answer: ScriptedEndpointAnswer, options?: ScriptedAnswerOptions): void;
   /** Resolves once the next request has received its scripted opening. */
   nextArrival(): Promise<void>;
   close(): Promise<void>;
 }
 
+export interface ScriptedAnswerOptions {
+  delayMs?: number;
+  usage?: Record<string, unknown>;
+}
+
 const SCRIPTED_REPLY = 'done';
+const SCRIPTED_USAGE = { prompt_tokens: 40, completion_tokens: 2, total_tokens: 42 };
 
 function sse(res: ServerResponse, chunk: unknown): void {
   res.write(`data: ${JSON.stringify(chunk)}\n\n`);
 }
 
 export async function startScriptedOpenAIEndpoint(): Promise<ScriptedOpenAIEndpoint> {
-  const queue: Array<{ answer: ScriptedEndpointAnswer; delayMs: number | undefined }> = [];
+  const queue: Array<{ answer: ScriptedEndpointAnswer } & ScriptedAnswerOptions> = [];
   const waiters: Array<() => void> = [];
   const open = new Set<ServerResponse>();
   let requests = 0;
@@ -76,7 +86,7 @@ export async function startScriptedOpenAIEndpoint(): Promise<ScriptedOpenAIEndpo
       setTimeout(() => {
         if (res.destroyed) return;
         sse(res, { id, choices: [{ index: 0, delta: { content: SCRIPTED_REPLY }, finish_reason: 'stop' }] });
-        sse(res, { id, choices: [], usage: { prompt_tokens: 40, completion_tokens: 2, total_tokens: 42 } });
+        sse(res, { id, choices: [], usage: next?.usage ?? SCRIPTED_USAGE });
         res.end('data: [DONE]\n\n');
       }, next?.delayMs);
     });
@@ -86,7 +96,7 @@ export async function startScriptedOpenAIEndpoint(): Promise<ScriptedOpenAIEndpo
   return {
     baseUrl: `http://127.0.0.1:${String(port)}/v1`,
     get requests() { return requests; },
-    enqueue(answer, options) { queue.push({ answer, delayMs: options?.delayMs }); },
+    enqueue(answer, options) { queue.push({ answer, ...options }); },
     nextArrival: () => new Promise<void>(resolve => waiters.push(resolve)),
     async close() {
       for (const res of open) res.destroy();

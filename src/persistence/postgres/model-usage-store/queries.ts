@@ -437,12 +437,14 @@ export class PostgresModelUsageQueries {
       ), budget_events AS (
         SELECT
           event.recorded_at_ms,
-          -- 21c4v: provider-reported actual cost is known cost when a row
-          -- has no registry estimate (e.g. a Jev decision priced by the
-          -- provider). Rows with neither stay unknown and fail closed.
+          -- lomm1: what the provider billed wins over the local estimate, as
+          -- it does for the row's effective cost; a row without either is
+          -- repriced at the slot's current rate on success (21c4v: a Jev
+          -- decision priced only by the provider is known cost). Rows with
+          -- none of these stay unknown and fail closed.
           COALESCE(
-            event.estimated_cost_usd,
             event.provider_cost_usd,
+            event.estimated_cost_usd,
             CASE WHEN event.status = 'success' AND rate.slot_key IS NOT NULL THEN
               (
                 event.input_tokens * rate.input_per_1m_usd

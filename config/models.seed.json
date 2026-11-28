@@ -1,5 +1,6 @@
 {
   "schemaVersion": 1,
+  "pricing": { "catalogRefresh": { "enabled": true, "intervalMinutes": 360, "maxAgeMinutes": 2880 } },
   "promptCaching": {
     "enabled": true
   },
@@ -105,13 +106,14 @@
       "tuning": { "maxOutputTokens": 32768 }
     },
     {
-      "id": "gemini-3.1-flash",
+      "id": "gemini-3.1-flash-lite",
       "rank": 98,
       "identity": {
         "provider": "openrouter",
-        "model": "google/gemini-3.1-flash",
+        "model": "google/gemini-3.1-flash-lite",
         "source": { "type": "openrouter" }
       },
+      "pricing": { "upstreamProvider": "google-ai-studio" },
       "purposes": [
         { "purpose": "chat", "primary": false },
         { "purpose": "vision", "primary": true }
@@ -148,11 +150,11 @@
       "tuning": { "maxOutputTokens": 32768 }
     },
     {
-      "id": "mimo-v2-pro",
+      "id": "mimo-v2.6-pro",
       "rank": 95,
       "identity": {
         "provider": "openrouter",
-        "model": "mimo/mimo-v2-pro",
+        "model": "xiaomi/mimo-v2.6-pro",
         "source": { "type": "openrouter" }
       },
       "purposes": [{ "purpose": "chat", "primary": false }],
@@ -167,6 +169,7 @@
         "model": "qwen/qwen3.5-27b",
         "source": { "type": "openrouter" }
       },
+      "pricing": { "upstreamProvider": "alibaba" },
       "purposes": [{ "purpose": "chat", "primary": false }],
       "capabilities": { "maxOutputTokens": 81920, "contextWindow": 131072 },
       "tuning": { "maxOutputTokens": 32768 }

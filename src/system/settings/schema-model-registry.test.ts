@@ -133,6 +133,35 @@ describe('normalizeCanonicalModelRegistry endpoint metadata', () => {
     expect(normalizeCanonicalModelRegistry(complete).models[0]?.cost).toEqual(model.cost);
   });
 
+  it('accepts a catalogue-priced slot under an enforced budget only while the owner refresh is on (lomm1)', () => {
+    const registry = makeRegistry();
+    registry.budgetPolicy = { enabled: true, dailyUsdLimit: 1, monthlyUsdLimit: 10, currency: 'USD' };
+    const model = (registry.models as Array<Record<string, unknown>>)[0]!;
+    model.pricing = { catalogModel: 'acme/model-7', upstreamProvider: 'ACME' };
+    expect(() => normalizeCanonicalModelRegistry(registry)).toThrow('or a refreshed catalogue price');
+
+    registry.pricing = { catalogRefresh: { enabled: true, intervalMinutes: 30, maxAgeMinutes: 120 } };
+    const normalized = normalizeCanonicalModelRegistry(registry);
+    expect(normalized.pricing).toEqual(registry.pricing);
+    expect(normalized.models[0]?.pricing).toEqual({ catalogModel: 'acme/model-7', upstreamProvider: 'acme' });
+
+    registry.pricing = { catalogRefresh: { enabled: false, intervalMinutes: 30, maxAgeMinutes: 120 } };
+    expect(() => normalizeCanonicalModelRegistry(registry)).toThrow('or a refreshed catalogue price');
+  });
+
+  it('keeps a registry without a refresh policy without one, and rejects a malformed policy (lomm1)', () => {
+    expect(normalizeCanonicalModelRegistry(makeRegistry())).not.toHaveProperty('pricing');
+    const tooYoung = makeRegistry();
+    tooYoung.pricing = { catalogRefresh: { enabled: true, intervalMinutes: 60, maxAgeMinutes: 30 } };
+    expect(() => normalizeCanonicalModelRegistry(tooYoung)).toThrow('maxAgeMinutes: expected a positive integer of at least intervalMinutes');
+    const extra = makeRegistry();
+    extra.pricing = { catalogRefresh: { enabled: true, intervalMinutes: 60, maxAgeMinutes: 60 }, source: 'x' };
+    expect(() => normalizeCanonicalModelRegistry(extra)).toThrow('pricing.source: unsupported key');
+    const badReference = makeRegistry();
+    (badReference.models as Array<Record<string, unknown>>)[0]!.pricing = { catalogModel: 'acme/model-7', price: 1 };
+    expect(() => normalizeCanonicalModelRegistry(badReference)).toThrow(/pricing\.price/u);
+  });
+
   it('preserves a reviewed budget accounting cutover and rejects invalid timestamps', () => {
     const valid = makeRegistry();
     valid.budgetPolicy = {

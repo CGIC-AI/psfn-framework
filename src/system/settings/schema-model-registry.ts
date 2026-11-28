@@ -8,6 +8,8 @@ import {
   type ModelApiKind,
   type ModelRegistryRoutingMetadata,
   type ModelRegistryPromptCachingPolicy,
+  type ModelRegistryPricingPolicy,
+  type ModelRegistryPricingReference,
   type PromptCacheRetention,
   type PromptCacheScope,
   type ModelCatalogEntry,
@@ -526,6 +528,9 @@ function normalizeModelRegistryEntry(value: unknown, fieldPath: string): ModelRe
     ? normalizeModelRegistryTuning({ ...value.tuning }, `${fieldPath}.tuning`)
     : undefined;
   const cost = isRecord(value.cost) ? { ...value.cost } : undefined;
+  const pricing = value.pricing !== undefined
+    ? normalizeModelRegistryPricingReference(value.pricing, `${fieldPath}.pricing`)
+    : undefined;
   const metadata = isRecord(value.metadata) ? { ...value.metadata } : undefined;
   let routing: ModelRegistryRoutingMetadata | undefined;
   if (value.routing !== undefined) {
@@ -633,8 +638,85 @@ function normalizeModelRegistryEntry(value: unknown, fieldPath: string): ModelRe
     ...(tuning ? { tuning } : {}),
     ...(routing ? { routing } : {}),
     ...(cost ? { cost } : {}),
+    ...(pricing ? { pricing } : {}),
     ...(metadata ? { metadata } : {}),
   };
+}
+
+const CATALOG_MODEL_ID_PATTERN = /^[a-z0-9][a-z0-9._~:-]*\/[a-z0-9][a-z0-9._~:-]*$/iu;
+const UPSTREAM_PROVIDER_TAG_PATTERN = /^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)*$/iu;
+
+/** A slot's catalogue reference (lomm1): both fields optional, both checked. */
+function normalizeModelRegistryPricingReference(
+  value: unknown,
+  fieldPath: string,
+): ModelRegistryPricingReference {
+  if (!isRecord(value)) {
+    throw new Error(`Invalid model registry at ${fieldPath}: expected object`);
+  }
+  const unknownKey = Object.keys(value).find(key => key !== 'catalogModel' && key !== 'upstreamProvider');
+  if (unknownKey) {
+    throw new Error(`Invalid model registry at ${fieldPath}.${unknownKey}: unsupported key`);
+  }
+  const catalogModel = value.catalogModel === undefined ? undefined : nonEmptyStringOrUndefined(value.catalogModel);
+  if (value.catalogModel !== undefined && (!catalogModel || !CATALOG_MODEL_ID_PATTERN.test(catalogModel))) {
+    throw new Error(`Invalid model registry at ${fieldPath}.catalogModel: expected a catalogue id such as "vendor/model"`);
+  }
+  const upstreamProvider = value.upstreamProvider === undefined
+    ? undefined
+    : nonEmptyStringOrUndefined(value.upstreamProvider)?.toLowerCase();
+  if (value.upstreamProvider !== undefined
+    && (!upstreamProvider || !UPSTREAM_PROVIDER_TAG_PATTERN.test(upstreamProvider))) {
+    throw new Error(`Invalid model registry at ${fieldPath}.upstreamProvider: expected a provider endpoint tag`);
+  }
+  return {
+    ...(catalogModel ? { catalogModel } : {}),
+    ...(upstreamProvider ? { upstreamProvider } : {}),
+  };
+}
+
+/**
+ * The owner's price-refresh policy (lomm1). There is no code default: the
+ * cadence and the age past which a catalogue price is no longer trusted are
+ * the owner's to choose, and the seed ships them. A registry without the
+ * block keeps owner prices only, and the gateway says so at startup.
+ */
+function normalizeModelRegistryPricingPolicy(
+  value: unknown,
+  fieldPath: string,
+): ModelRegistryPricingPolicy {
+  if (!isRecord(value)) {
+    throw new Error(`Invalid model registry at ${fieldPath}: expected object`);
+  }
+  const unknownKey = Object.keys(value).find(key => key !== 'catalogRefresh');
+  if (unknownKey) {
+    throw new Error(`Invalid model registry at ${fieldPath}.${unknownKey}: unsupported key`);
+  }
+  const refresh = value.catalogRefresh;
+  if (!isRecord(refresh)) {
+    throw new Error(`Invalid model registry at ${fieldPath}.catalogRefresh: expected object`);
+  }
+  const enabled = toBoolean(refresh.enabled);
+  if (enabled === undefined) {
+    throw new Error(`Invalid model registry at ${fieldPath}.catalogRefresh.enabled: expected boolean`);
+  }
+  const intervalMinutes = toPositiveInteger(refresh.intervalMinutes);
+  if (intervalMinutes === undefined) {
+    throw new Error(`Invalid model registry at ${fieldPath}.catalogRefresh.intervalMinutes: expected a positive integer`);
+  }
+  const maxAgeMinutes = toPositiveInteger(refresh.maxAgeMinutes);
+  if (maxAgeMinutes === undefined || maxAgeMinutes < intervalMinutes) {
+    throw new Error(
+      `Invalid model registry at ${fieldPath}.catalogRefresh.maxAgeMinutes: expected a positive integer of at least intervalMinutes`,
+    );
+  }
+  return { catalogRefresh: { enabled, intervalMinutes, maxAgeMinutes } };
+}
+
+/** True when the slot's price can come from the provider catalogue (lomm1). */
+function hasCatalogPricingReference(entry: ModelRegistryEntry): boolean {
+  return entry.identity.provider.trim().toLowerCase() === 'openrouter'
+    || entry.pricing?.catalogModel !== undefined;
 }
 
 function hasCompleteUsdCostMetadata(entry: ModelRegistryEntry): boolean {
@@ -675,6 +757,9 @@ export function normalizeCanonicalModelRegistry(
   const promptCaching = value.promptCaching !== undefined
     ? normalizeModelRegistryPromptCachingPolicy(value.promptCaching, `${sourcePath}.promptCaching`)
     : defaultModelRegistryPromptCachingPolicy();
+  const pricing = value.pricing !== undefined
+    ? normalizeModelRegistryPricingPolicy(value.pricing, `${sourcePath}.pricing`)
+    : undefined;
 
   const seenIds = new Set<string>();
   const models = value.models.map((entry, index) => {
@@ -688,13 +773,19 @@ export function normalizeCanonicalModelRegistry(
   backfillPrimaryMemoryPurpose(models);
 
   if (budgetPolicy?.enabled) {
+    // A slot is priceable from its owner cost or, while the catalogue refresh
+    // runs, from the provider catalogue; a catalogue price that is missing at
+    // runtime is unknown cost and the budget gate refuses it (lomm1).
     const incompleteModel = models.find(model => (
-      model.enabled !== false && !hasCompleteUsdCostMetadata(model)
+      model.enabled !== false
+      && !hasCompleteUsdCostMetadata(model)
+      && !(pricing?.catalogRefresh.enabled === true && hasCatalogPricingReference(model))
     ));
     if (incompleteModel) {
       throw new Error(
         `Invalid model registry at ${sourcePath}: budgetPolicy.enabled requires complete USD cost rates `
-        + `(inputPer1MUsd, outputPer1MUsd, cacheReadPer1MUsd, cacheWritePer1MUsd) for enabled model "${incompleteModel.id}"`,
+        + `(inputPer1MUsd, outputPer1MUsd, cacheReadPer1MUsd, cacheWritePer1MUsd) or a refreshed catalogue `
+        + `price (pricing.catalogModel) for enabled model "${incompleteModel.id}"`,
       );
     }
   }
@@ -727,6 +818,7 @@ export function normalizeCanonicalModelRegistry(
     // Always present: absent input is defaulted above, so the normalized
     // registry states the effective caching policy rather than implying it.
     promptCaching,
+    ...(pricing ? { pricing } : {}),
     ...(imageModels ? { imageModels } : {}),
   };
 }

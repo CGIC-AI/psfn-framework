@@ -5,9 +5,12 @@
 // Every call is therefore priced BEFORE dispatch at its worst case — the
 // request's UTF-8 byte length as input tokens (a byte-level tokenizer never
 // emits more tokens than bytes) plus the configured output bound — and that
-// worst case is what an aborted, timed-out or unreadable call is charged. A
-// completed call is charged its reported tokens; an HTTP error answer
-// generated nothing and is a known $0.
+// worst case is what admission reserves. What is BOOKED is what was sent and
+// received (lomm1): a completed call its reported tokens; an aborted or
+// timed-out call, or one whose connection failed, the request it sent and no
+// output (none was received); a 2xx reply that could not be read the worst
+// case, since output was produced but its size is unknown; an HTTP error
+// answer generated nothing and is a known $0.
 
 import type { JevTransportResult } from '../../primitives/llm/decision/jev-transport.js';
 import type { JevDecisionPricing } from '../../system/config/decision-backend-config.js';
@@ -23,13 +26,16 @@ function priceTokens(pricing: JevDecisionPricing, inputTokens: number, outputTok
   );
 }
 
-/** Conservative upper bound on what one decision request can bill. */
-export function jevWorstCaseCostUsd(
+/** What one decision request can bill: the admission worst case, and its prompt alone. */
+export function jevRequestCostBoundsUsd(
   pricing: JevDecisionPricing,
   requestBody: Readonly<Record<string, unknown>>,
-): number {
+): { worstCaseUsd: number; inputBoundUsd: number } {
   const inputTokenBound = Buffer.byteLength(JSON.stringify(requestBody), 'utf8');
-  return priceTokens(pricing, inputTokenBound, pricing.maxOutputTokens);
+  return {
+    worstCaseUsd: priceTokens(pricing, inputTokenBound, pricing.maxOutputTokens),
+    inputBoundUsd: priceTokens(pricing, inputTokenBound, 0),
+  };
 }
 
 function isHttpRefusal(httpStatus: number | undefined): boolean {
@@ -43,7 +49,7 @@ function isHttpRefusal(httpStatus: number | undefined): boolean {
  */
 export function jevDecisionRowCost(input: {
   pricing: JevDecisionPricing | null;
-  worstCaseUsd: number | undefined;
+  bounds: { worstCaseUsd: number; inputBoundUsd: number } | undefined;
   result: JevTransportResult;
 }): { estimatedCostUsd?: number; costSource: ModelUsageCostSource } {
   const { outcome, usage, httpStatus } = input.result;
@@ -53,8 +59,9 @@ export function jevDecisionRowCost(input: {
     estimatedCostUsd = 0;
   } else if (input.pricing && outcome.ok && usage) {
     estimatedCostUsd = priceTokens(input.pricing, usage.inputTokens, usage.outputTokens);
-  } else if (input.worstCaseUsd !== undefined) {
-    estimatedCostUsd = input.worstCaseUsd;
+  } else if (input.bounds) {
+    // No status: the call ended before any reply was read, so no output was received.
+    estimatedCostUsd = httpStatus === undefined ? input.bounds.inputBoundUsd : input.bounds.worstCaseUsd;
   }
   const costSource: ModelUsageCostSource = providerPriced
     ? 'provider'

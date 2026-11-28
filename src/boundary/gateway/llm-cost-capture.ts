@@ -280,29 +280,23 @@ export function applyGatewayCapturedProviderCost<T extends LLMResponse>(
     cacheWrite: 0,
     totalTokens: response.inputTokens + response.outputTokens,
   };
-  const responseUsageEvidence = usageDetails.cost
-    ? { responseUsage: usageDetails.cost }
-    : {};
+  // The wire capture is the only provider cost: the client never reports
+  // pi-ai's locally calculated cost as one (lomm1).
   const reconciliation = mergeProviderCostEvidenceConflicts(
     reconcileProviderCostEvidence({
-      ...responseUsageEvidence,
       ...capturedCost.providerCostEvidence,
     }, {
       input: usageDetails.input,
       output: usageDetails.output,
       cacheRead: usageDetails.cacheRead,
       cacheWrite: usageDetails.cacheWrite,
-    }, combineProviderCostEvidenceObservations(
-      { providerCostEvidence: responseUsageEvidence },
-      {
-        providerCostEvidence: capturedCost.providerCostEvidence,
-        ...(capturedCost.providerCostEvidenceSummary
-          ? { providerCostEvidenceSummary: capturedCost.providerCostEvidenceSummary }
-          : {}),
-      },
-    )),
+    }, combineProviderCostEvidenceObservations({
+      providerCostEvidence: capturedCost.providerCostEvidence,
+      ...(capturedCost.providerCostEvidenceSummary
+        ? { providerCostEvidenceSummary: capturedCost.providerCostEvidenceSummary }
+        : {}),
+    })),
     capturedCost.providerCostEvidenceConflict,
-    usageDetails.costEvidenceConflict,
   );
   const { cost: _quarantinedCost, raw, ...usageWithoutCost } = usageDetails;
   return {

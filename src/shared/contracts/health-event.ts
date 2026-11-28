@@ -80,6 +80,7 @@ const HEALTH_EVENT_COMPONENTS = [
   'cogsec', // psfn-framework-mlhn3
   'channels', // psfn-framework-6cs5j
   'decision', // psfn-framework-na1r9
+  'model_pricing', // psfn-framework-lomm1
 ] as const;
 
 export type HealthEventComponent = typeof HEALTH_EVENT_COMPONENTS[number];
@@ -233,6 +234,22 @@ const HEALTH_EVENT_CODES = [
    * spend and the ceiling in USD.
    */
   'decision_budget_exceeded', // psfn-framework-na1r9
+  /**
+   * One model slot's upstream price could not be read from the provider
+   * catalogue on a scheduled refresh (psfn-framework-lomm1): the catalogue was
+   * unreachable, or it does not list the model, its upstream provider, or one
+   * unambiguous price. Grouped by a digest of the SLOT KEY, so a slot that keeps
+   * failing is one episode; the failure kind stays in the gateway log.
+   */
+  'model_price_refresh_failed', // psfn-framework-lomm1
+  /**
+   * One enabled model slot has no usable price (psfn-framework-lomm1): no
+   * catalogue price fresh enough to use and no owner price in models.json. Its
+   * calls book as unknown cost, and an enforced budget refuses them. Evidence
+   * `priceStale` says whether an older catalogue price exists. Grouped by a
+   * digest of the SLOT KEY.
+   */
+  'model_price_unknown', // psfn-framework-lomm1
 ] as const;
 
 export type HealthEventCode = typeof HEALTH_EVENT_CODES[number];
@@ -356,6 +373,7 @@ const HEALTH_EVENT_EVIDENCE_KEYS = [
   'httpStatus', // psfn-framework-mlhn3
   'spentUsd', // psfn-framework-na1r9
   'limitUsd', // psfn-framework-na1r9
+  'priceStale', // psfn-framework-lomm1
 ] as const;
 
 type HealthEventEvidenceKey = typeof HEALTH_EVENT_EVIDENCE_KEYS[number];

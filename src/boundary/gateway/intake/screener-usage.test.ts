@@ -106,7 +106,7 @@ describe('intake screener usage ledger (1fyyi)', () => {
     expect(rows[0]?.logicalCallId).toBe(rows[1]?.logicalCallId);
   });
 
-  it('charges a timed-out dispatch with no reported usage its request bound', async () => {
+  it('charges a timed-out dispatch with no reported usage the prompt it sent, never its output cap (lomm1)', async () => {
     const { ledger, rows } = ledgerFor(registryConfig({ inputPer1MUsd: 0.5, outputPer1MUsd: 2 }));
     ledger('l3', CANDIDATE)?.(attempt({
       status: 'failure', errorCode: 'timeout', inputTokens: 0, outputTokens: 0,
@@ -116,7 +116,7 @@ describe('intake screener usage ledger (1fyyi)', () => {
       status: 'failure',
       errorCode: 'timeout',
       costSource: 'estimate',
-      estimatedCostUsd: ((40_000 * 0.5) + (1_200 * 2)) / 1_000_000,
+      estimatedCostUsd: (40_000 * 0.5) / 1_000_000,
     });
   });
 

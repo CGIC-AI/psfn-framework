@@ -186,7 +186,13 @@ function normalizeModelRegistryPayload(value: unknown): CanonicalModelRegistry {
   }
   const normalized = parsed.models.map((entry, index) => normalizeModelEntry(entry, index));
   const normalizedBudgetPolicy = normalizeBudgetPolicy(parsed.budgetPolicy);
+  // Registry-wide blocks this page does not edit (prompt caching, image
+  // models, the price refresh policy) are carried through untouched, as entry
+  // fields are, so a save never silently turns an owner policy off (lomm1).
+  // The gateway validates them on save.
+  const { schemaVersion: _schemaVersion, models: _models, budgetPolicy: _budgetPolicy, ...registryBlocks } = parsed;
   return {
+    ...(registryBlocks as Partial<CanonicalModelRegistry>),
     schemaVersion: 1,
     models: normalized.sort((a, b) => b.rank - a.rank),
     budgetPolicy: normalizedBudgetPolicy,

@@ -47,7 +47,7 @@ import {
   ModelBudgetController,
   ModelBudgetExceededError,
   normalizeModelIdForProvider,
-  resolveModelUsageCostRates,
+  resolveModelUsagePrice,
 } from './model-budget.js';
 import { countMessageTokens } from './tokens.js';
 import type { LLMProviderPort, LLMProviderStreamOptions } from '../../core/agent/contracts.js';
@@ -86,7 +86,7 @@ import {
   capInputTokensToContextWindow,
   extractCompletionToolCalls,
   normalizeContent,
-  normalizeLLMUsageDetails,
+  normalizePiUsageDetails,
   resolveEmptyToolArgumentUsageMetadata,
   normalizeSharedRouteKey,
   stripProviderResponseTerminatorArtifact,
@@ -619,8 +619,8 @@ export class LLMClient {
       error?: Error;
       providerObservability?: LLMProviderObservability;
       metadata?: Record<string, unknown>;
-      /** Request bound charged when an aborted/timed-out attempt reports no usage. */
-      worstCaseTokens?: { input: number; output: number };
+      /** The request's input token estimate, charged when a dispatched attempt ends unreported (lomm1). */
+      requestInputTokens?: number;
       /** Dispatch and cancellation evidence that settles an unreported attempt's charge (ge9w7). */
       attemptOutcome?: UnreportedAttemptOutcome;
     },
@@ -650,45 +650,30 @@ export class LLMClient {
     if (options.providerObservability && providerResponse) {
       options.providerObservability.providerResponse = providerResponse;
     }
-    const accountingRates = resolveModelUsageCostRates(this.config, candidate, purpose);
-    const syntheticRoutedEndpointCost = candidate.requestBaseUrl !== undefined
-      && usageDetails?.cost?.total === 0
-      && [
-        usageDetails.cost.input,
-        usageDetails.cost.output,
-        usageDetails.cost.cacheRead,
-        usageDetails.cost.cacheWrite,
-      ].every(value => value === undefined || value === 0)
-      && accountingRates !== undefined
-      && [
-        accountingRates.inputPer1MUsd,
-        accountingRates.outputPer1MUsd,
-        accountingRates.cacheReadPer1MUsd,
-        accountingRates.cacheWritePer1MUsd,
-      ].some(value => value !== undefined && value > 0);
-    const responseUsageEvidence = usageDetails?.cost && !syntheticRoutedEndpointCost
-      ? { responseUsage: usageDetails.cost }
-      : {};
+    // Priced as of the attempt's start, the same quote its admission read (lomm1).
+    const accountingPrice = resolveModelUsagePrice(this.config, candidate, purpose, options.startedAtMs);
+    const accountingRates = accountingPrice.rates;
+    // Provider cost is only what the provider put on the wire (body usage.cost,
+    // cost headers), captured by the gateway. pi-ai's `usage.cost` is its own
+    // calculateCost() over model.cost — the bundled catalogue snapshot or the
+    // owner rates, and zeros for an unpriced route — so it is never provider
+    // evidence: counting it quarantined every real OpenRouter charge as a
+    // conflict and booked unpriced routes as a provider-reported $0 (lomm1).
     const providerCostReconciliation = mergeProviderCostEvidenceConflicts(
       reconcileProviderCostEvidence({
-        ...responseUsageEvidence,
         ...(capturedProviderCost?.providerCostEvidence ?? {}),
       }, {
         input: usageDetails?.input ?? inputTokens,
         output: usageDetails?.output ?? outputTokens,
         cacheRead: usageDetails?.cacheRead ?? 0,
         cacheWrite: usageDetails?.cacheWrite ?? 0,
-      }, combineProviderCostEvidenceObservations(
-        { providerCostEvidence: responseUsageEvidence },
-        {
-          providerCostEvidence: capturedProviderCost?.providerCostEvidence ?? {},
-          ...(capturedProviderCost?.providerCostEvidenceSummary
-            ? { providerCostEvidenceSummary: capturedProviderCost.providerCostEvidenceSummary }
-            : {}),
-        },
-      )),
+      }, combineProviderCostEvidenceObservations({
+        providerCostEvidence: capturedProviderCost?.providerCostEvidence ?? {},
+        ...(capturedProviderCost?.providerCostEvidenceSummary
+          ? { providerCostEvidenceSummary: capturedProviderCost.providerCostEvidenceSummary }
+          : {}),
+      })),
       capturedProviderCost?.providerCostEvidenceConflict,
-      usageDetails?.costEvidenceConflict,
     );
     const providerCost = providerCostReconciliation.providerCost;
     const unreportedCharge = resolveUnreportedAttemptCharge({
@@ -696,11 +681,8 @@ export class LLMClient {
       error: options.error,
       reportedTokens: (usageDetails?.input ?? inputTokens) + (usageDetails?.output ?? outputTokens)
         + (usageDetails?.cacheRead ?? 0) + (usageDetails?.cacheWrite ?? 0),
-      worstCaseTokens: options.worstCaseTokens
-        ? {
-          input: capInputTokensToContextWindow(options.worstCaseTokens.input, candidate),
-          output: options.worstCaseTokens.output,
-        }
+      requestInputTokens: options.requestInputTokens !== undefined
+        ? capInputTokensToContextWindow(options.requestInputTokens, candidate)
         : undefined,
       outcome: options.attemptOutcome,
     });
@@ -756,8 +738,18 @@ export class LLMClient {
         ? { providerCostEvidenceSummary: providerCostReconciliation.providerCostEvidenceSummary }
         : {}),
       ...(providerCost ? { providerCost } : {}),
-      ...(syntheticRoutedEndpointCost ? { syntheticRoutedEndpointCostIgnored: true } : {}),
       ...(unreportedCharge ? { unreportedAttemptCharge: unreportedCharge.basis } : {}),
+      pricing: {
+        source: accountingPrice.source,
+        ...(accountingPrice.catalog
+          ? {
+              catalogModel: accountingPrice.catalog.catalogModel,
+              endpointTag: accountingPrice.catalog.endpointTag,
+              fetchedAtMs: accountingPrice.catalog.fetchedAtMs,
+            }
+          : {}),
+        ...(accountingPrice.catalogUnavailable ? { catalogUnavailable: accountingPrice.catalogUnavailable } : {}),
+      },
       ...(correlation?.icpCorrelation
         ? {
             icpCost: {
@@ -1041,8 +1033,8 @@ export class LLMClient {
                     record.usageDetails,
                     {
                       ...record.options,
-                      worstCaseTokens: { input: accountingInputTokens, output: candidateTarget.maxTokens },
-                      attemptOutcome: { ownerCancelled: transportSignal.aborted, dispatch },
+                      requestInputTokens: accountingInputTokens,
+                      attemptOutcome: { dispatch },
                     },
                   ),
                   throwIfAborted: () => throwIfTransportAborted(transportSignal),
@@ -1262,8 +1254,8 @@ export class LLMClient {
                 settlement: 'unknown',
                 error: err,
                 providerObservability,
-                worstCaseTokens: { input: worstCaseInputTokens, output: candidateTarget.maxTokens },
-                attemptOutcome: { ownerCancelled: transportSignal.aborted, dispatch },
+                requestInputTokens: worstCaseInputTokens,
+                attemptOutcome: { dispatch },
                 metadata: { completionPurpose: purpose, routingPurpose, emptyArgsRetries },
               },
             );
@@ -1292,7 +1284,7 @@ export class LLMClient {
               inputTokens?: unknown;
               outputTokens?: unknown;
             };
-            usageDetails = normalizeLLMUsageDetails(
+            usageDetails = normalizePiUsageDetails(
               response.usage,
               typeof responseWithLegacyTokenCounts.inputTokens === 'number'
                 ? responseWithLegacyTokenCounts.inputTokens
@@ -1375,8 +1367,8 @@ export class LLMClient {
                 stopReason: response.stopReason,
                 error: err,
                 providerObservability,
-                worstCaseTokens: { input: worstCaseInputTokens, output: candidateTarget.maxTokens },
-                attemptOutcome: { ownerCancelled: transportSignal.aborted, dispatch },
+                requestInputTokens: worstCaseInputTokens,
+                attemptOutcome: { dispatch },
                 metadata: {
                   completionPurpose: purpose,
                   routingPurpose,
@@ -1547,7 +1539,7 @@ export class LLMClient {
     const reasoning = typeof completionResponse.reasoning === 'string'
       ? completionResponse.reasoning
       : extractReasoningContent(contentBlocks);
-    const usageDetails = normalizeLLMUsageDetails(
+    const usageDetails = normalizePiUsageDetails(
       completionResponse.usage,
       completionResponse.inputTokens ?? 0,
       completionResponse.outputTokens ?? 0,

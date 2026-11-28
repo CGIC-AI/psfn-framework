@@ -25,7 +25,7 @@ import {
   extractToolCallsFromContentBlocks,
   isPotentialProviderResponsePrefixArtifact,
   normalizeContent,
-  normalizeLLMUsageDetails,
+  normalizePiUsageDetails,
   resolveEmptyToolArgumentUsageMetadata,
   stripProviderResponseTerminatorArtifact,
 } from './client-response-helpers.js';
@@ -269,7 +269,7 @@ export async function runLLMStreamAttempt(
             }
           }
           content = stripProviderResponseTerminatorArtifact(content, input.candidate);
-          const usageDetails = normalizeLLMUsageDetails(
+          const usageDetails = normalizePiUsageDetails(
             event.message.usage,
             event.message.usage.input,
             event.message.usage.output,

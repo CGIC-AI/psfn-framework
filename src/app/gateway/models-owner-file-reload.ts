@@ -24,6 +24,8 @@ const log = createComponentLogger('GatewayModelsReload');
 export function startGatewayModelsOwnerFileReload(input: {
   config: SubstrateConfig;
   intakeScreening: Pick<GatewayIntakeScreeningRuntime, 'refreshScreenerModels'>;
+  /** Runs after a reload applied, e.g. to price slots the edit added (lomm1). */
+  onModelsReloaded?: () => void;
 }): OwnerFileReloadWatcher {
   const configStore = createOwnerFileConfigStore({
     dataDir: input.config.dataDir,
@@ -38,6 +40,7 @@ export function startGatewayModelsOwnerFileReload(input: {
         config: input.config,
         configStore,
         intakeScreening: input.intakeScreening,
+        ...(input.onModelsReloaded ? { onModelsReloaded: input.onModelsReloaded } : {}),
       }),
     }],
   });
@@ -49,6 +52,7 @@ export function reloadGatewayModels(input: {
   config: SubstrateConfig;
   configStore: Parameters<typeof reloadOwnerModelsFromDisk>[0]['configStore'];
   intakeScreening: Pick<GatewayIntakeScreeningRuntime, 'refreshScreenerModels'>;
+  onModelsReloaded?: () => void;
 }): void {
   const result = reloadOwnerModelsFromDisk({ config: input.config, configStore: input.configStore });
   if (!result.ok) {
@@ -56,4 +60,5 @@ export function reloadGatewayModels(input: {
   }
   const screeners = input.intakeScreening.refreshScreenerModels();
   log.info('Gateway applied reloaded models.json', { screenerCompositionsSwitched: screeners.applied });
+  input.onModelsReloaded?.();
 }

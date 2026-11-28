@@ -4,6 +4,7 @@ import type {
   MemoryExtractionOutputs,
 } from '../../core/agent/contracts.js';
 import { extractionPreGateSkips, type ExtractionPreGateDecisions } from './extraction/decision-pregate.js';
+import { findModelBudgetRefusal } from './model-budget-deferral.js';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import type { PromptRegistryStatePort } from '../../core/identity/prompt-state-port.js';
 import type { PersonaPreamblePort } from '../../core/identity/persona-preamble.js';
@@ -734,7 +735,10 @@ export class MemoryExtractor {
           });
           return;
         }
-        log.error('Extraction run failed', {
+        // Budget refusals are reported once per blocked window by the caller
+        // that defers them (zwwo0).
+        const logLevel = findModelBudgetRefusal(error) ? 'debug' : 'error';
+        log[logLevel]('Extraction run failed', {
           channelId,
           logicalSessionId,
           triggerReason,

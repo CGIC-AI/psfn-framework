@@ -47,6 +47,7 @@ import { resolveEpisodeSessionEntryTurnId } from './turn-reference.js';
 import { parseIntakeScreeningMetadata } from '../../../core/session/intake-screening-metadata.js';
 import { isRuntimeAuthoredFallbackSessionEntry } from '../../../core/session/runtime-fallback-provenance.js';
 import { positiveIntegerOr } from '../../../shared/utils/numeric.js';
+import { findModelBudgetRefusal } from '../model-budget-deferral.js';
 
 const log = createComponentLogger('EpisodicSynthesis');
 
@@ -897,7 +898,10 @@ export class EpisodicSynthesizer {
           heldBackEntryCount: 0,
           error: message,
         });
-        log.warn('Topic segmentation failed closed; chunk left for the next pass', {
+        // A budget refusal is reported once per blocked window by the lane
+        // (zwwo0), not on every refused pass.
+        const logLevel = findModelBudgetRefusal(error) ? 'debug' : 'warn';
+        log[logLevel]('Topic segmentation failed closed; chunk left for the next pass', {
           sessionId: input.sessionId,
           channelId,
           chunkEntryCount: group.entries.length,

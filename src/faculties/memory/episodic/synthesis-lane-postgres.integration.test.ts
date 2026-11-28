@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-const logSpies = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn() }));
+const logSpies = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn() }));
 
 // Keep every real logger export and only spy on component log lines, so the
 // once-per-window budget-deferral visibility (zwwo0) can be asserted.
@@ -15,7 +15,7 @@ vi.mock('../../../shared/logger.js', async (importOriginal) => {
     createComponentLogger: () => ({
       info: logSpies.info,
       warn: logSpies.warn,
-      error: vi.fn(),
+      error: logSpies.error,
       debug: vi.fn(),
       trace: vi.fn(),
     }),
@@ -734,6 +734,7 @@ describe('EpisodeSynthesisLane under a model-budget block (real Postgres, real b
       await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
       logSpies.warn.mockClear();
       logSpies.info.mockClear();
+      logSpies.error.mockClear();
       const startMs = Date.parse('2026-11-28T06:00:00.000Z');
       const sessions = ['api:budget-session-a', 'api:budget-session-b'];
       await appendConversation(transcript, sessions[0]!, startMs, 4);
@@ -786,6 +787,18 @@ describe('EpisodeSynthesisLane under a model-budget block (real Postgres, real b
       // One warning for the whole blocked window, not one per refused attempt.
       expect(budgetDeferralLogs('warn', 'episode_synthesis')).toHaveLength(1);
       expect(budgetDeferralLogs('info', 'episode_synthesis')).toHaveLength(0);
+      // No memory-pipeline line warns or errors per refused attempt. The
+      // gateway's own LLMClient lines (fallback exhaustion per refused call,
+      // plus the seeded ledger row's attribution warning) run in the gateway
+      // process, outside the memory pipeline, and are excluded here.
+      const gatewaySide = new Set([
+        'All fallback candidates exhausted',
+        'Model usage recorded with unknown charge-lane attribution',
+      ]);
+      expect([...logSpies.warn.mock.calls, ...logSpies.error.mock.calls]
+        .map(([message]) => message)
+        .filter(message => !gatewaySide.has(message as string)))
+        .toEqual(['Memory pipeline deferred: the model budget refuses its calls before dispatch; no attempt is consumed']);
 
       model.state.mode = 'admit';
       await expect(lane.execute(timerAction())).resolves.toEqual({ outcome: 'complete' });

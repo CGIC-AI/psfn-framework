@@ -836,6 +836,52 @@ Substitute the companion schema and a narrower `WHERE` (`job_id = ...`,
 `source_turn_id = ...`) when only specific rows are stuck. Never edit a row in
 `running` state while its `lease_owner` process is alive; stop the agent first.
 
+## Recovery: failing memory pipelines
+
+Episode synthesis (per session) and observed group-memory extraction (per
+channel range) record every failure durably with its full cause chain, retry it
+on a bounded exponential backoff, and stop after an owner-file attempt cap. A
+failing unit never blocks other sessions or channels. Each failure emits a
+content-free `memory_pipeline_failed` health event (the repeated-failure
+detector opens `background_work_failures_opened` for the pipeline), and the
+failure that exhausts the cap emits a standalone `memory_pipeline_quarantined`
+incident. The cause text stays in the durable record, never in the health
+stream.
+
+Tunables live in `scheduler.json`: `episodeSynthesis.sessionFailure`
+(`maxAttempts`, `retryBaseDelayMinutes`) and
+`groupMemoryExtraction.failureRetry` (`maxAttempts`, `baseDelayMinutes`,
+`sweepIntervalMinutes`). Both blocks are optional; an owner file without them
+takes the seeded defaults.
+
+**Episode synthesis.** A quarantined session keeps its checkpoint, so none of
+its source is lost; newer activity in the session re-enables it with a fresh
+attempt budget. A claim held by a build without failure tracking enters the
+bounded path on its next failure. To inspect and release without new
+activity (it connects with the companion's own `POSTGRES_DATABASE_URL` and
+tenant schema/role, and `release` is a dry run unless `--apply`):
+
+```bash
+npm run memory:workset-quarantine -- list
+npm run memory:workset-quarantine -- release --session <logical-session-id>          # dry run
+npm run memory:workset-quarantine -- release --session <logical-session-id> --apply
+```
+
+`list` prints each quarantined session's attempt count, failed stage and
+recorded cause. Fix that cause first, or the released session quarantines again
+after another full budget.
+
+**Group-memory extraction.** The agent process sweeps failed ranges every
+`sweepIntervalMinutes` and retries each one once its backoff has elapsed,
+without needing new traffic in the room; live traffic honours the same
+backoff. A failed watermark written by a build without timed retry is due on
+the first sweep with a fresh budget. The record in
+`<data-dir>/group-memory-watermarks.json` shows `consecutiveFailureCount`,
+`nextFailureRetryAt`, `failureRetryExhaustedAt` and `lastFailure.error` (the
+cause chain). After the cap, fix the cause and replay the range with the
+Garden group-memory backfill (`POST /api/admin/group-memory/<channel>/backfill`,
+`mode: "dry_run"` first); a processed span clears the retry state.
+
 ## Diagnosis order
 
 When `*:doctor` fails, inspect in this order:

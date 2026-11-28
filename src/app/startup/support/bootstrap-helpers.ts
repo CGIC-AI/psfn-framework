@@ -312,6 +312,7 @@ export function hydrateCanonicalStartupConfig(
       group: { ...persistedScheduler.nearTurnMemory.group },
     },
     episodeSynthesis: { ...persistedScheduler.episodeSynthesis },
+    groupMemoryExtraction: { failureRetry: { ...persistedScheduler.groupMemoryExtraction.failureRetry } },
     sleepConsolidation: { ...persistedScheduler.sleepConsolidation },
     orientationRewrite: { ...persistedScheduler.orientationRewrite },
     reflectionNovelty: { ...persistedScheduler.reflectionNovelty },

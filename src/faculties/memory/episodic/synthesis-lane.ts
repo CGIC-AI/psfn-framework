@@ -1,12 +1,13 @@
 import { createComponentLogger } from '../../../shared/logger.js';
-import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { formatErrorCauseChain, toErrorMessage } from '../../../shared/utils/errors.js';
 import type { InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { Episode, EpisodeArc } from '../../../shared/contracts/episodic-memory.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type {
+  ClaimedConversationalActivityWorkItem,
   ConversationalActivityWorkItem,
-  ConversationalActivityWorksetPort,
+  RecoverableConversationalActivityWorksetPort,
 } from '../../../core/session/conversational-activity-workset.js';
 import {
   isExperientialSelfDirectedSessionId,
@@ -21,6 +22,7 @@ import {
   type SessionCounterpartyContactStore,
   type SessionMemoryAttribution,
 } from '../session-counterparty-resolution.js';
+import { findModelBudgetRefusal, ModelRefusalDeferralWindow } from '../model-budget-deferral.js';
 import type { EpisodicSynthesisRunResult, EpisodicSynthesizer } from './synthesis.js';
 import type {
   EpisodicStorePort,
@@ -35,6 +37,8 @@ const EPISODE_SYNTHESIS_DRAIN_CLAIMANT_ID = 'episode-synthesis-drain';
 const EPISODIC_SYNTHESIS_PROCESSOR = 'episodic_synthesis';
 const MAX_BEHAVIORAL_SUMMARY_WRITES = 1;
 const BEHAVIORAL_SUMMARY_STAGE_PREFIX = 'behavioral_summary:';
+const EPISODE_SYNTHESIS_FAILURE_STAGE = 'episode_synthesis';
+const MINUTE_MS = 60_000;
 
 interface BehavioralSummaryWrite {
   arc: EpisodeArc;
@@ -46,24 +50,28 @@ class BehavioralSummaryWriteError extends Error {
   readonly logicalSessionId: string;
 
   constructor(logicalSessionId: string, stage: string, cause: unknown) {
-    super(cause instanceof Error ? cause.message : String(cause));
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = 'BehavioralSummaryWriteError';
     this.logicalSessionId = logicalSessionId;
     this.stage = stage;
   }
 }
 
-class EpisodeSynthesisSessionError extends Error {
+/**
+ * The failure bookkeeping itself failed: the session's failure could not be
+ * recorded (or its exhausted claim could not be quarantined). This is the only
+ * per-session condition the drain still rethrows, because without a durable
+ * record nothing bounds the next attempt.
+ */
+class EpisodeSynthesisFailureRecordError extends AggregateError {
   readonly logicalSessionId: string;
   readonly stage: string;
-  override readonly cause: unknown;
 
-  constructor(logicalSessionId: string, stage: string, cause: unknown) {
-    super(toErrorMessage(cause));
-    this.name = 'EpisodeSynthesisSessionError';
+  constructor(logicalSessionId: string, stage: string, errors: unknown[]) {
+    super(errors, `Episode synthesis failure could not be recorded for ${logicalSessionId}`);
+    this.name = 'EpisodeSynthesisFailureRecordError';
     this.logicalSessionId = logicalSessionId;
     this.stage = stage;
-    this.cause = cause;
   }
 }
 
@@ -87,6 +95,21 @@ export interface EpisodeSynthesisGateEvent {
   newEntryCount: number;
   relevantTurnCount: number;
   minRelevantTurns: number;
+  timestamp: number;
+}
+
+/**
+ * One durably recorded per-session failure. Content-free apart from the
+ * session id (the failure text stays on the workset row): telemetry and the
+ * health plane count these, and `quarantined` marks the terminal attempt.
+ */
+export interface EpisodeSynthesisSessionFailureEvent {
+  sessionId: string;
+  stage: string;
+  attemptCount: number;
+  maxAttempts: number;
+  quarantined: boolean;
+  retryAfterMs?: number;
   timestamp: number;
 }
 
@@ -125,7 +148,7 @@ export interface EpisodeSynthesisLaneOptions {
     'getEpisodesByIds' | 'listEpisodeArcsForEpisodes'
   > | null;
   /** Durable changed-session workset shared by all episode drain triggers. */
-  workset: ConversationalActivityWorksetPort;
+  workset: RecoverableConversationalActivityWorksetPort;
   /** JSON-owned gate config (scheduler.json `episodeSynthesis`). Required. */
   config: EpisodeSynthesisLaneConfig;
   /** Canonical direct-vs-group scope classification; absent => direct scope. */
@@ -142,6 +165,8 @@ export interface EpisodeSynthesisLaneOptions {
   companionId?: string;
   /** Gate telemetry sink; wired to the runtime event bus by composition. */
   onGateEvent?: (event: EpisodeSynthesisGateEvent) => void;
+  /** Recorded per-session failure sink; wired to the runtime event bus. */
+  onSessionFailure?: (event: EpisodeSynthesisSessionFailureEvent) => void;
   now?: () => number;
   /** Stable across restart so an interrupted session claim can be reclaimed. */
   claimantId?: string;
@@ -294,11 +319,13 @@ function parseBehavioralSummaryStage(stage: string | undefined): {
  *    (classifySessionEntryCompanionRelevance); async group traffic between
  *    other members does not count.
  *
- * Below the minimum the lane holds: because synthesis never ran, the
- * watermark does not advance, so unprocessed turns accumulate into the next
- * changed revision (9 relevant now => hold; 25 total after more conversation
- * => process the whole accumulated chunk). Every skip emits a typed gate event
- * with a reason.
+ * Below the minimum the lane holds: the claim is released without a
+ * checkpoint and the watermark does not advance, so the session stays eligible
+ * and its turns accumulate (9 relevant now => hold; 25 total after more
+ * conversation => process the whole accumulated chunk). A session that stops
+ * growing below the minimum gets a final pass once its newest turn is
+ * `finalPassIdleMinutes` old (d5e0p.2); one with no relevant turn at all is
+ * checkpointed. Every skip emits a typed gate event with a reason.
  */
 export class EpisodeSynthesisLane {
   private readonly sessionManager: SynthesisLaneSessionReader;
@@ -308,7 +335,7 @@ export class EpisodeSynthesisLane {
     EpisodicStorePort,
     'getEpisodesByIds' | 'listEpisodeArcsForEpisodes'
   > | null;
-  private readonly workset: ConversationalActivityWorksetPort;
+  private readonly workset: RecoverableConversationalActivityWorksetPort;
   private readonly config: EpisodeSynthesisLaneConfig;
   private readonly scopeClassifier: NearTurnMemoryScopeClassifierPort | null;
   private readonly companionNames: readonly string[];
@@ -317,8 +344,10 @@ export class EpisodeSynthesisLane {
   private readonly contactStore: SessionCounterpartyContactStore | null;
   private readonly companionId: string | undefined;
   private readonly onGateEvent?: (event: EpisodeSynthesisGateEvent) => void;
+  private readonly onSessionFailure?: (event: EpisodeSynthesisSessionFailureEvent) => void;
   private readonly now: () => number;
   private readonly claimantId: string;
+  private readonly budgetDeferral: ModelRefusalDeferralWindow;
   private turnCount = 0;
   private activeDrain: Promise<EpisodeSynthesisDrainOutcome> | null = null;
 
@@ -327,6 +356,11 @@ export class EpisodeSynthesisLane {
     assertPositiveInteger(options.config.turnThreshold, 'turnThreshold');
     assertPositiveInteger(options.config.minRelevantTurns, 'minRelevantTurns');
     assertPositiveInteger(options.config.transcriptMessageLimit, 'transcriptMessageLimit');
+    assertPositiveInteger(options.config.sessionFailure.maxAttempts, 'sessionFailure.maxAttempts');
+    assertPositiveInteger(
+      options.config.sessionFailure.retryBaseDelayMinutes,
+      'sessionFailure.retryBaseDelayMinutes',
+    );
     this.config = options.config;
     this.synthesizer = options.synthesizer;
     this.watermarkStore = options.watermarkStore;
@@ -339,7 +373,9 @@ export class EpisodeSynthesisLane {
     this.contactStore = options.contactStore ?? null;
     this.companionId = options.companionId?.trim() || undefined;
     this.onGateEvent = options.onGateEvent;
+    this.onSessionFailure = options.onSessionFailure;
     this.now = options.now ?? (() => Date.now());
+    this.budgetDeferral = new ModelRefusalDeferralWindow('episode_synthesis', this.now);
     this.claimantId = options.claimantId?.trim() || EPISODE_SYNTHESIS_DRAIN_CLAIMANT_ID;
   }
 
@@ -402,7 +438,19 @@ export class EpisodeSynthesisLane {
     const failures: Error[] = [];
     let yielded = false;
     for (const workItem of workItems) {
-      const resumedClaim = workItem.claimantId === this.claimantId
+      const ownClaim = workItem.claimantId === this.claimantId;
+      if (ownClaim && workItem.retryAfterMs !== undefined && workItem.retryAfterMs > this.now()) {
+        // A recorded failure holds its claim for the backoff window; other
+        // sessions keep draining around it.
+        log.info('Episode synthesis session is waiting out its failure backoff', {
+          actionId: action.id,
+          logicalSessionId: workItem.logicalSessionId,
+          failureCount: workItem.failureCount ?? 0,
+          retryAfterMs: workItem.retryAfterMs,
+        });
+        continue;
+      }
+      const resumedClaim = ownClaim
         ? await this.workset.resumeClaim({
             purpose: 'episodic_synthesis',
             logicalSessionId: workItem.logicalSessionId,
@@ -417,54 +465,33 @@ export class EpisodeSynthesisLane {
         });
       if (!claim) continue;
       try {
-        await this.executeSession(action, claim);
-        await this.workset.checkpoint({
-          purpose: 'episodic_synthesis',
+        const disposition = await this.executeSession(action, claim);
+        const claimInput = {
+          purpose: 'episodic_synthesis' as const,
           logicalSessionId: claim.logicalSessionId,
           revision: claim.revision,
           claimantId: claim.claimantId,
-        });
+        };
+        // d5e0p.2: a held session keeps its unprocessed revision eligible.
+        await (disposition === 'hold'
+          ? this.workset.releaseClaim(claimInput)
+          : this.workset.checkpoint(claimInput));
       } catch (error) {
-        const normalizedError = error instanceof Error ? error : new Error(String(error));
-        const stage = error instanceof BehavioralSummaryWriteError ? error.stage : 'episode_synthesis';
-        const errorSummary = toErrorMessage(normalizedError);
-        log.warn('Episode synthesis failed for session', {
-          actionId: action.id,
-          logicalSessionId: claim.logicalSessionId,
-          revision: claim.revision,
-          stage,
-          error: errorSummary.startsWith(claim.logicalSessionId)
-            ? errorSummary
-            : `${claim.logicalSessionId}/${stage}: ${errorSummary}`,
-        });
-        if (error instanceof BehavioralSummaryWriteError) {
-          try {
-            await this.workset.recordFailure({
-              purpose: 'episodic_synthesis',
-              logicalSessionId: claim.logicalSessionId,
-              revision: claim.revision,
-              claimantId: claim.claimantId,
-              stage: error.stage,
-              message: error.message,
-            });
-          } catch (recordError) {
-            log.warn('Episode behavioral-summary failure checkpoint failed', {
-              actionId: action.id,
-              logicalSessionId: claim.logicalSessionId,
-              revision: claim.revision,
-              stage: error.stage,
-              error: toErrorMessage(recordError),
-            });
-            failures.push(new AggregateError(
-              [error, recordError],
-              `Episode behavioral-summary failure could not be checkpointed for ${claim.logicalSessionId}`,
-            ));
-            continue;
-          }
-          failures.push(error);
-          continue;
+        const refusal = error instanceof BehavioralSummaryWriteError ? undefined : findModelBudgetRefusal(error);
+        if (refusal) {
+          // zwwo0: the budget refused the call before anything was dispatched,
+          // so this is no evidence against the session. Its claim stays held
+          // exactly as it is (no attempt consumed, no backoff, any recorded
+          // failure kept) and the next drain resumes it. Every other session
+          // asks the same companion budget, so stop probing them this drain.
+          this.budgetDeferral.noteRefusal(refusal, {
+            actionId: action.id,
+            logicalSessionId: claim.logicalSessionId,
+          });
+          break;
         }
-        failures.push(new EpisodeSynthesisSessionError(claim.logicalSessionId, stage, normalizedError));
+        const bookkeepingFailure = await this.recordSessionFailure(action, claim, error);
+        if (bookkeepingFailure) failures.push(bookkeepingFailure);
         continue;
       }
       const disposition = await options.onSafeBoundary?.({
@@ -482,10 +509,106 @@ export class EpisodeSynthesisLane {
     return { outcome: yielded ? 'yield' : 'complete' };
   }
 
+  /**
+   * Durably record one session's failure on its workset row and bound it
+   * (psfn-framework-d5e0p.3). Below the owner-file attempt cap the claim stays
+   * held behind an exponential backoff; at the cap it is quarantined at its
+   * claimed revision without advancing the checkpoint, so the session's
+   * unprocessed source survives for newer activity or an operator release.
+   *
+   * A recorded failure is handled, not rethrown: rethrowing would re-run the
+   * whole drain through post-turn retries and report "exhausted retries" for a
+   * condition that is already bounded and visible. Only a failure to record
+   * is returned for the drain to raise.
+   */
+  private async recordSessionFailure(
+    action: Pick<InferredPostTurnAction, 'id'>,
+    claim: ClaimedConversationalActivityWorkItem,
+    error: unknown,
+  ): Promise<Error | null> {
+    const stage = this.resolveFailureStage(claim, error);
+    const message = formatErrorCauseChain(error);
+    const policy = this.config.sessionFailure;
+    const attemptCount = (claim.failureCount ?? 0) + 1;
+    const quarantined = attemptCount >= policy.maxAttempts;
+    const failedAtMs = this.now();
+    const retryAfterMs = quarantined
+      ? undefined
+      : failedAtMs + policy.retryBaseDelayMinutes * MINUTE_MS * 2 ** (attemptCount - 1);
+    const claimInput = {
+      purpose: 'episodic_synthesis' as const,
+      logicalSessionId: claim.logicalSessionId,
+      revision: claim.revision,
+      claimantId: claim.claimantId,
+    };
+    try {
+      await this.workset.recordFailure({
+        ...claimInput,
+        stage,
+        message,
+        ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+      });
+      if (quarantined) {
+        await this.workset.quarantineClaim(claimInput);
+      }
+    } catch (recordError) {
+      log.error('Episode synthesis session failure could not be recorded', {
+        actionId: action.id,
+        logicalSessionId: claim.logicalSessionId,
+        revision: claim.revision,
+        stage,
+        error: message,
+        recordError: toErrorMessage(recordError),
+      });
+      return new EpisodeSynthesisFailureRecordError(claim.logicalSessionId, stage, [error, recordError]);
+    }
+    const details = {
+      actionId: action.id,
+      logicalSessionId: claim.logicalSessionId,
+      revision: claim.revision,
+      stage,
+      attemptCount,
+      maxAttempts: policy.maxAttempts,
+      error: `${claim.logicalSessionId}/${stage}: ${message}`,
+    };
+    if (quarantined) {
+      log.error('Episode synthesis session quarantined after exhausting its retries', details);
+    } else {
+      log.warn('Episode synthesis failed for session', { ...details, retryAfterMs });
+    }
+    this.onSessionFailure?.({
+      sessionId: claim.logicalSessionId,
+      stage,
+      attemptCount,
+      maxAttempts: policy.maxAttempts,
+      quarantined,
+      ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+      timestamp: failedAtMs,
+    });
+    return null;
+  }
+
+  /**
+   * A behavioral-summary write names its own resumable stage. Any other failure
+   * while a behavioral-summary stage is pending keeps that stage, so recording
+   * the new failure never erases the resume pointer.
+   */
+  private resolveFailureStage(claim: ConversationalActivityWorkItem, error: unknown): string {
+    if (error instanceof BehavioralSummaryWriteError) return error.stage;
+    const pendingStage = claim.lastFailure?.stage;
+    if (pendingStage && parseBehavioralSummaryStage(pendingStage)) return pendingStage;
+    return EPISODE_SYNTHESIS_FAILURE_STAGE;
+  }
+
+  /**
+   * Runs one claimed session. 'checkpoint' means the claimed revision is done
+   * (processed, or skipped for a terminal reason); 'hold' means the session is
+   * below the relevance minimum but may still grow, so it stays eligible.
+   */
   private async executeSession(
     action: Pick<InferredPostTurnAction, 'id' | 'channelId' | 'sourceMessageId' | 'payload'>,
     workItem: ConversationalActivityWorkItem,
-  ): Promise<void> {
+  ): Promise<'checkpoint' | 'hold'> {
     const sessionId = workItem.logicalSessionId;
     const trigger = this.resolveActionTrigger(action);
 
@@ -504,7 +627,7 @@ export class EpisodeSynthesisLane {
         newEntryCount: 0,
         relevantTurnCount: 0,
       });
-      return;
+      return 'checkpoint';
     }
 
     if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) {
@@ -522,7 +645,7 @@ export class EpisodeSynthesisLane {
         newEntryCount: 0,
         relevantTurnCount: 0,
       });
-      return;
+      return 'checkpoint';
     }
 
     const entries = this.sessionManager
@@ -536,7 +659,7 @@ export class EpisodeSynthesisLane {
         actionId: action.id,
         trigger,
       });
-      return;
+      return 'checkpoint';
     }
 
     // Gate 1 (free, deterministic): any new messages since the durable
@@ -579,12 +702,16 @@ export class EpisodeSynthesisLane {
         newEntryCount: 0,
         relevantTurnCount: 0,
       });
-      return;
+      return 'checkpoint';
     }
 
     // Gate 2 (deterministic): minimum companion-relevant turn count. Below
-    // the minimum the lane holds; the watermark does not advance, so the
-    // unprocessed turns accumulate into the next period.
+    // the minimum the lane holds the session (claim released, revision still
+    // eligible, watermark untouched) so its turns accumulate into the next
+    // period. Many sessions never grow again once they end (each external
+    // conversation, a short DM), so once the session has been idle for
+    // finalPassIdleMinutes its remaining relevant turns get a final pass
+    // instead of being held forever (d5e0p.2).
     const scope = await this.resolveMemoryScope(
       channelId,
       this.resolveActionChannelType(action),
@@ -598,7 +725,14 @@ export class EpisodeSynthesisLane {
           companionAuthorIds: this.companionAuthorIds,
         }) !== 'not_relevant'
       )).length;
-    if (relevantTurnCount < this.config.minRelevantTurns) {
+    const idleMs = this.now() - Math.max(...newEntries.map(entry => entry.timestamp));
+    const finalPass = relevantTurnCount > 0
+      && relevantTurnCount < this.config.minRelevantTurns
+      && idleMs >= this.config.finalPassIdleMinutes * MINUTE_MS;
+    if (relevantTurnCount < this.config.minRelevantTurns && !finalPass) {
+      // No relevant turn at all is terminal for this revision (nothing to
+      // episodize); a relevant but short session is held, not checkpointed.
+      const disposition = relevantTurnCount === 0 ? 'checkpoint' : 'hold';
       log.warn('Episode synthesis skipped below the relevance minimum', {
         sessionId,
         actionId: action.id,
@@ -606,6 +740,8 @@ export class EpisodeSynthesisLane {
         newEntryCount: newEntries.length,
         relevantTurnCount,
         minRelevantTurns: this.config.minRelevantTurns,
+        disposition,
+        idleMinutes: Math.floor(idleMs / MINUTE_MS),
       });
       this.emitGateEvent({
         sessionId,
@@ -616,12 +752,13 @@ export class EpisodeSynthesisLane {
         newEntryCount: newEntries.length,
         relevantTurnCount,
       });
-      return;
+      return disposition;
     }
 
     const synthesis = await this.synthesizer.run({
       sessionId,
       sourceMessageId: action.sourceMessageId,
+      ...(finalPass ? { finalPass: true } : {}),
     });
     const attribution = await resolveSessionMemoryAttribution({
       sessionId,
@@ -639,8 +776,11 @@ export class EpisodeSynthesisLane {
       synthesis,
     });
     if (synthesis.segmentationFailedChunkCount > 0) {
-      throw new Error('Episode topic segmentation failed; unprocessed source remains retryable');
+      throw new Error('Episode topic segmentation failed; unprocessed source remains retryable', {
+        ...(synthesis.segmentationFailure ? { cause: synthesis.segmentationFailure } : {}),
+      });
     }
+    this.budgetDeferral.noteAdmitted();
     this.emitGateEvent({
       sessionId,
       channelId,
@@ -653,6 +793,7 @@ export class EpisodeSynthesisLane {
       sessionId,
       actionId: action.id,
       trigger,
+      finalPass,
       newEntryCount: newEntries.length,
       relevantTurnCount,
       candidateEpisodes: synthesis.candidateEpisodeCount,
@@ -662,6 +803,10 @@ export class EpisodeSynthesisLane {
       heldBackEntries: synthesis.heldBackEntryCount,
       segmentationFailedChunks: synthesis.segmentationFailedChunkCount,
     });
+    // An open trailing topic was held back unclaimed: keep the session
+    // eligible so those turns are revisited (and given the idle final pass
+    // if the conversation does not continue) instead of being orphaned.
+    return synthesis.heldBackEntryCount > 0 ? 'hold' : 'checkpoint';
   }
 
   private buildActionCandidate(

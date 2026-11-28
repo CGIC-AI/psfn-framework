@@ -27,6 +27,8 @@ import {
   getRecentDiagnosticLogRecords,
 } from '../../../shared/logger.js';
 import { NO_AUTOMATA_REDELIVERY } from '../../../test-support/automata-run-redelivery.js';
+import { ModelBudgetExceededError } from '../../../primitives/llm/model-budget.js';
+import { findModelBudgetRefusal } from '../model-budget-deferral.js';
 
 type LlmCompletionContext = Parameters<ExtractionRunOptions['llmClient']['complete']>[0];
 type LlmCompletionResponse = Awaited<ReturnType<ExtractionRunOptions['llmClient']['complete']>>;
@@ -963,6 +965,40 @@ describe('runExtractionOrchestration fail-closed errors', () => {
         }),
       ],
     }));
+  });
+
+  it('keeps a model-budget refusal out of the per-attempt error log (zwwo0)', async () => {
+    clearDiagnosticLogRingBufferForTests();
+    const refusal = new ModelBudgetExceededError({
+      timestampMs: 1,
+      reason: 'daily_budget_exceeded',
+      purpose: 'extraction',
+      provider: 'test-provider',
+      model: 'test-model',
+      service: 'extraction',
+      process: 'memory.extraction',
+      estimatedRequestCostUsd: 0.1,
+      budget: {
+        dayKey: '2026-11-28',
+        monthKey: '2026-11',
+        dailySpentUsd: 6,
+        dailyLimitUsd: 5,
+        monthlySpentUsd: 6,
+        monthlyLimitUsd: 5,
+        dailyUnknownCostAttempts: 0,
+        monthlyUnknownCostAttempts: 0,
+      },
+    });
+    const options = buildOptions({
+      llmClient: { complete: vi.fn().mockRejectedValue(refusal) } as ExtractionRunOptions['llmClient'],
+    });
+
+    const runPromise = runExtractionOrchestration(options);
+    await expect(runPromise).rejects.toBeInstanceOf(ExtractionIntegrityError);
+    await expect(runPromise.catch(error => findModelBudgetRefusal(error))).resolves.toBe(refusal);
+    expect(getRecentDiagnosticLogRecords().filter(record => (
+      record.component === 'Extraction' && (record.level === 'error' || record.level === 'warn')
+    ))).toEqual([]);
   });
 
   it('surfaces fact write failures with structured context instead of continuing', async () => {

@@ -1,22 +1,19 @@
 import '../../shared/utils/load-dotenv.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Pool } from 'pg';
 import {
   BACKGROUND_WORK_STATES,
   type BackgroundWorkState,
 } from '../../core/agent/background-work/types.js';
-import { createPostgresPool } from '../../persistence/postgres.js';
 import {
   listBackgroundWorkJobs,
   retireBackgroundWorkJobs,
   type BackgroundWorkJobSummary,
 } from '../../persistence/postgres/background-work-operator.js';
-import { resolveConfigTenantPoolScope } from '../../persistence/postgres/tenant-pool-scope.js';
-import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import {
   bootstrapMaintenanceRuntime,
   isMaintenanceCliEntrypoint,
+  openMaintenanceCompanionPool,
   parseCommonMaintenanceArgs,
   runMaintenanceCli,
 } from './cli-harness.js';
@@ -83,22 +80,6 @@ export function parseBackgroundWorkJobsArgs(argv: readonly string[]): CliOptions
   return { ...options, command };
 }
 
-function openCompanionPool(config: SubstrateConfig): Pool {
-  const databaseUrl = config.postgresDatabaseUrl?.trim();
-  if (!databaseUrl) {
-    throw new Error('Background work maintenance requires POSTGRES_DATABASE_URL');
-  }
-  const tenant = resolveConfigTenantPoolScope(config);
-  const schema = tenant?.schema ?? (config.postgresSchema?.trim() || undefined);
-  return createPostgresPool(databaseUrl, {
-    applicationName: 'background-work-maintenance',
-    allowExitOnIdle: true,
-    max: 1,
-    ...(schema ? { schema } : {}),
-    ...(tenant ? { role: tenant.role } : {}),
-  });
-}
-
 function printJobs(label: string, jobs: readonly BackgroundWorkJobSummary[]): void {
   console.log(`${label}: ${jobs.length}`);
   for (const job of jobs) {
@@ -122,7 +103,7 @@ export function runBackgroundWorkJobsCli(
       const runtime = await bootstrapMaintenanceRuntime(options.command === 'retire' && options.apply
         ? { backupLabel: 'background-work-retirement' }
         : {});
-      const pool = openCompanionPool(runtime.config);
+      const pool = openMaintenanceCompanionPool(runtime.config, 'background-work-maintenance');
       try {
         if (options.command === 'list') {
           const jobs = await listBackgroundWorkJobs(pool, {

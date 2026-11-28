@@ -912,6 +912,7 @@ describe('EpisodicSynthesizer contextual topic cutting (E5.4)', () => {
     const events: EpisodeSegmentationEvent[] = [];
     const provider = queuedSegmentationProvider([
       'Topic A covers debugging and then the conversation moves to dinner planning.',
+      'Still prose: debugging first, then dinner.',
     ]);
     const synthesizer = new EpisodicSynthesizer(store, { getRecentMessages: () => entries }, {
       topicSegmentation: {
@@ -933,9 +934,48 @@ describe('EpisodicSynthesizer contextual topic cutting (E5.4)', () => {
       expect.objectContaining({
         outcome: 'failed',
         chunkEntryCount: 10,
-        error: expect.stringContaining('JSON'),
+        error: expect.stringContaining('after one corrective retry'),
       }),
     ]);
+    // The validator's own message is carried to the lane's durable failure record.
+    expect(result.segmentationFailure?.message).toContain('segmentation response contains no JSON object');
+    expect(provider.callCount()).toBe(2);
+  });
+
+  it('episodizes a chunk whose proposal leaves the tail uncovered and over-runs the label cap (iu7v0)', async () => {
+    const store = makeStore();
+    const entries = eightPlusTwoEntries();
+    const events: EpisodeSegmentationEvent[] = [];
+    // Both production validator failures in one proposal; the same response
+    // previously failed the chunk on every pass.
+    const provider = queuedSegmentationProvider([
+      segmentsJson([
+        { start_index: 0, end_index: 7, topic: `atlas scheduler debugging ${'and patch review '.repeat(6)}`, status: 'closed' },
+        { start_index: 8, end_index: 8, topic: 'dinner planning', status: 'closed' },
+      ]),
+    ]);
+    const synthesizer = new EpisodicSynthesizer(store, { getRecentMessages: () => entries }, {
+      topicSegmentation: { enabled: true, llmProvider: provider, onEvent: event => events.push(event) },
+    });
+
+    const result = await synthesizer.run({ sessionId: SESSION_ID });
+
+    expect(result.segmentationFailedChunkCount).toBe(0);
+    expect(result.segmentationFailure).toBeUndefined();
+    // The extended final segment now covers the previously uncovered turn 10.
+    expect(result.createdEpisodes.map(episode => episode.spanRefs[0])).toEqual([
+      expect.objectContaining({ startTurnId: turnId(1), endTurnId: turnId(8) }),
+      expect.objectContaining({ startTurnId: turnId(9), endTurnId: turnId(10) }),
+    ]);
+    expect(await store.listEpisodeMessageClaims({ status: 'active' })).toHaveLength(10);
+    expect(events).toEqual([
+      expect.objectContaining({
+        outcome: 'segmented',
+        segmentCount: 2,
+        repairs: expect.arrayContaining(['topic_truncated', 'trailing_gap_extended']),
+      }),
+    ]);
+    expect(provider.callCount()).toBe(1);
   });
 
   it('caps materialized episodes per run; uncapped segments stay unclaimed for the next pass', async () => {

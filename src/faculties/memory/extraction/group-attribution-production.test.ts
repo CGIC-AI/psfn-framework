@@ -207,6 +207,7 @@ async function runProductionExtraction(observerName: string) {
     sessionReader: reader,
     watermarkStore: makeWatermarkStore(),
     memoryExtractor: extractor,
+    failureRetry: { maxAttempts: 6, baseDelayMinutes: 15, sweepIntervalMinutes: 5 },
     companionNames: [observerName],
     companionAuthorIds: [`${observerName.toLowerCase()}-bot`],
     nowMs: () => 2_000,

@@ -195,6 +195,7 @@ describe('observed group memory scheduler', () => {
       sessionReader: reader,
       watermarkStore,
       memoryExtractor: extractor,
+      failureRetry: { maxAttempts: 6, baseDelayMinutes: 15, sweepIntervalMinutes: 5 },
       nowMs: () => 1_000,
     });
 
@@ -230,6 +231,7 @@ describe('observed group memory scheduler', () => {
       sessionReader: makeReader(entries),
       watermarkStore: makeWatermarkStore(),
       memoryExtractor: makeExtractor(),
+      failureRetry: { maxAttempts: 6, baseDelayMinutes: 15, sweepIntervalMinutes: 5 },
       nowMs: () => 1_000,
     });
 
@@ -250,6 +252,7 @@ describe('observed group memory scheduler', () => {
       sessionReader: reader,
       watermarkStore: makeWatermarkStore(),
       memoryExtractor: makeExtractor(),
+      failureRetry: { maxAttempts: 6, baseDelayMinutes: 15, sweepIntervalMinutes: 5 },
       nowMs: () => 1_000,
     });
 
@@ -279,6 +282,7 @@ describe('observed group memory scheduler', () => {
       sessionReader: reader,
       watermarkStore: makeWatermarkStore(),
       memoryExtractor: extractor,
+      failureRetry: { maxAttempts: 6, baseDelayMinutes: 15, sweepIntervalMinutes: 5 },
       nowMs: () => now,
     });
 
@@ -305,6 +309,7 @@ describe('observed group memory scheduler', () => {
       ]),
       watermarkStore: makeWatermarkStore(),
       memoryExtractor: makeExtractor(),
+      failureRetry: { maxAttempts: 6, baseDelayMinutes: 15, sweepIntervalMinutes: 5 },
       companionNames: ['Lyra'],
       nowMs: () => 1_000,
     });
@@ -323,6 +328,7 @@ describe('observed group memory scheduler', () => {
       ]),
       watermarkStore: makeWatermarkStore(),
       memoryExtractor: makeExtractor(),
+      failureRetry: { maxAttempts: 6, baseDelayMinutes: 15, sweepIntervalMinutes: 5 },
       companionNames: ['Lyra'],
       nowMs: () => 1_000,
     });
@@ -348,6 +354,7 @@ describe('observed group memory scheduler', () => {
       sessionReader: reader,
       watermarkStore,
       memoryExtractor: extractor,
+      failureRetry: { maxAttempts: 6, baseDelayMinutes: 15, sweepIntervalMinutes: 5 },
       nowMs: () => now,
     });
 
@@ -379,6 +386,7 @@ describe('observed group memory scheduler', () => {
       sessionReader: makeReader(entries),
       watermarkStore,
       memoryExtractor: extractor,
+      failureRetry: { maxAttempts: 6, baseDelayMinutes: 15, sweepIntervalMinutes: 5 },
       nowMs: () => 1_000,
     });
 

@@ -266,6 +266,11 @@ describe('startup owner-file loaders', () => {
         minSingleEntryChars: 120,
         topicSegmentationEnabled: false,
         maxPriorCandidates: 24,
+        sessionFailure: { maxAttempts: 5, retryBaseDelayMinutes: 60 },
+        finalPassIdleMinutes: 180,
+      },
+      groupMemoryExtraction: {
+        failureRetry: { maxAttempts: 6, baseDelayMinutes: 15, sweepIntervalMinutes: 5 },
       },
       sleepConsolidation: {
         reviewWindowDays: 60,

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fromAny } from '@total-typescript/shoehorn';
 import { EventEmitter } from 'node:events';
 import type { DiscoveredModel } from '../../primitives/llm/discovery.js';
+import { ModelBudgetExceededError } from '../../primitives/llm/model-budget.js';
 import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../shared/telemetry/model-usage.js';
 import { GatewayClient } from './client.js';
 import { GatewayErrors } from './protocol.js';
@@ -1500,8 +1501,26 @@ describe('GatewayClient streaming', () => {
       },
     });
 
-    await expect(streamPromise).rejects.toThrow('budget blocked');
+    // zwwo0: the refusal keeps its type across the RPC boundary, so agent-side
+    // lanes can tell a pre-dispatch budget refusal from a model failure.
+    const streamRejection = await streamPromise.then(() => null, (error: unknown) => error);
+    expect(streamRejection).toBeInstanceOf(ModelBudgetExceededError);
+    expect(streamRejection).toMatchObject({ code: 'model_budget_blocked', event });
+    expect((streamRejection as Error).message).toContain('budget blocked');
     expect(onModelBudgetBlocked).toHaveBeenCalledWith(event);
+
+    const completePromise = client.complete({
+      systemPrompt: 'test',
+      messages: [{ role: 'user', content: 'blocked' }],
+    }, 'memory');
+    const completeRequest = conn.sent[1] as { id: number };
+    conn._emit({
+      id: completeRequest.id,
+      jsonrpc: '2.0',
+      error: { code: GatewayErrors.MODEL_BUDGET_BLOCKED, message: 'budget blocked', data: event },
+    });
+    await expect(completePromise).rejects.toBeInstanceOf(ModelBudgetExceededError);
+    expect(onModelBudgetBlocked).toHaveBeenCalledTimes(2);
   });
 
   it('decodes a strict ICP cost block without accepting partner-identifying extensions', async () => {

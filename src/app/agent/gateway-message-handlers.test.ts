@@ -484,6 +484,8 @@ describe('registerGatewayMessageHandlers', () => {
 
   it('can schedule observed group memory from passive discord observations without replying', async () => {
     const observedGroupMemoryScheduler: ObservedGroupMemorySchedulerPort = {
+      listDueFailureRetries: vi.fn((): string[] => []),
+      retryFailedRange: vi.fn(async (channelId: string) => ({ status: 'skipped' as const, channelId, reason: 'no_backlog' as const })),
       observeMessage: vi.fn(async () => ({
         status: 'scheduled',
         channelId: 'discord:general',
@@ -532,6 +534,8 @@ describe('registerGatewayMessageHandlers', () => {
   it('does not schedule duplicate observed group memory jobs for duplicate passive notifications', async () => {
     const deferredSchedule = createDeferred<Awaited<ReturnType<ObservedGroupMemorySchedulerPort['observeMessage']>>>();
     const observedGroupMemoryScheduler: ObservedGroupMemorySchedulerPort = {
+      listDueFailureRetries: vi.fn((): string[] => []),
+      retryFailedRange: vi.fn(async (channelId: string) => ({ status: 'skipped' as const, channelId, reason: 'no_backlog' as const })),
       observeMessage: vi.fn(async () => deferredSchedule.promise),
     };
     const harness = createHarness({ observedGroupMemoryScheduler });
@@ -1202,6 +1206,8 @@ describe('registerGatewayMessageHandlers', () => {
       revision: 1,
     };
     const observedGroupMemoryScheduler: ObservedGroupMemorySchedulerPort = {
+      listDueFailureRetries: vi.fn((): string[] => []),
+      retryFailedRange: vi.fn(async (channelId: string) => ({ status: 'skipped' as const, channelId, reason: 'no_backlog' as const })),
       observeMessage: vi.fn(async () => ({
         status: 'skipped',
         channelId: message.channelId,
@@ -2552,6 +2558,8 @@ describe('registerGatewayMessageHandlers — participation appraiser wiring (jp3
       Awaited<ReturnType<ObservedGroupMemorySchedulerPort['observeMessage']>>
     >();
     const observedGroupMemoryScheduler: ObservedGroupMemorySchedulerPort = {
+      listDueFailureRetries: vi.fn((): string[] => []),
+      retryFailedRange: vi.fn(async (channelId: string) => ({ status: 'skipped' as const, channelId, reason: 'no_backlog' as const })),
       observeMessage: vi.fn(async () => deferredMemory.promise),
     };
     const appraiser: ParticipationAppraiserPort = {
@@ -2585,6 +2593,8 @@ describe('registerGatewayMessageHandlers — participation appraiser wiring (jp3
     const candidate = makeParticipationCandidate();
     // The extraction never settles: observe latency must not depend on it.
     const observedGroupMemoryScheduler: ObservedGroupMemorySchedulerPort = {
+      listDueFailureRetries: vi.fn((): string[] => []),
+      retryFailedRange: vi.fn(async (channelId: string) => ({ status: 'skipped' as const, channelId, reason: 'no_backlog' as const })),
       observeMessage: vi.fn(() => new Promise<never>(() => undefined)),
     };
     const appraiser: ParticipationAppraiserPort = {

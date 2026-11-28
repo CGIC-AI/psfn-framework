@@ -46,6 +46,9 @@ const STANDALONE_INCIDENT_CODES = [
   // psfn-framework-6cs5j: a channel that refused to run is down until a human
   // fixes it; it is keyed per surface, so each disabled channel is one incident.
   'channel_surface_disabled',
+  // psfn-framework-d5e0p.3: a memory pipeline unit that exhausted its retries
+  // stays parked until newer activity or an operator release; keyed per unit.
+  'memory_pipeline_quarantined',
 ] as const satisfies readonly HealthEventCode[];
 
 function isStandaloneIncidentCode(code: HealthEventCode): boolean {

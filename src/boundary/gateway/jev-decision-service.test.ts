@@ -9,7 +9,11 @@ import {
   TUTORIAL_RESPONSE_BODY,
 } from '../../primitives/llm/decision/jev-transport.test-fixtures.js';
 import type { DecisionQuestionSet } from '../../primitives/llm/decision/types.js';
-import type { ModelUsageEventInput } from '../../shared/telemetry/model-usage.js';
+import type {
+  ModelUsageBudgetQueryPort,
+  ModelUsageBudgetSpendSnapshot,
+  ModelUsageEventInput,
+} from '../../shared/telemetry/model-usage.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import {
   createGatewayJevDecisionService,
@@ -202,5 +206,62 @@ describe('Jev decision pricing (worst case before dispatch)', () => {
     const { svc, fetch } = service(unpriced);
     await expect(svc.decide(INPUT)).rejects.toMatchObject({ reasonCode: 'jev_pricing_unavailable' });
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('Jev daily decision ceiling fail-closed paths (na1r9)', () => {
+  const PRICING = { inputPer1MUsd: 0.5, outputPer1MUsd: 2, maxOutputTokens: 400 };
+  const ceilingConfig = (pricing: typeof PRICING | null = PRICING) => makeConfig({
+    decisionBackend: { ...settings('jev'), jev: { ...settings('jev').jev, pricing, dailyBudgetUsd: 1 } },
+  });
+  const spend = (overrides: Partial<ModelUsageBudgetSpendSnapshot> = {}): ModelUsageBudgetSpendSnapshot => ({
+    dayKey: '2026-11-28',
+    monthKey: '2026-11',
+    dailyEstimatedCostUsd: 0,
+    monthlyEstimatedCostUsd: 0,
+    dailyUnknownCostAttempts: 0,
+    monthlyUnknownCostAttempts: 0,
+    ...overrides,
+  });
+
+  it.each([
+    ['no usage query is wired', ceilingConfig(), undefined, 'jev_budget_accounting_unavailable'],
+    ['the usage query fails', ceilingConfig(), {
+      getModelBudgetSpend: async () => { throw new Error('pool exhausted'); },
+    }, 'jev_budget_accounting_unavailable'],
+    ['a Jev row today has unknown cost', ceilingConfig(), {
+      getModelBudgetSpend: async () => spend({ dailyUnknownCostAttempts: 1 }),
+    }, 'jev_budget_unknown_cost'],
+    ['the ceiling has no pricing to bound a call', ceilingConfig(null), {
+      getModelBudgetSpend: async () => spend(),
+    }, 'jev_pricing_unavailable'],
+  ] satisfies [string, GatewayJevDecisionServiceOptions['config'], ModelUsageBudgetQueryPort | undefined, string][])(
+    'refuses before any network call when %s',
+    async (_label, config, budgetQuery, reasonCode) => {
+      const fetch = okFetch();
+      const svc = createGatewayJevDecisionService({
+        config,
+        requireCompanionAttribution: false,
+        fetch,
+        ...(budgetQuery ? { budgetQuery } : {}),
+      });
+      await expect(svc.decide(INPUT)).rejects.toMatchObject({ reasonCode });
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it('scopes the spend read to the companion and the Jev attribution', async () => {
+    const getModelBudgetSpend = vi.fn<ModelUsageBudgetQueryPort['getModelBudgetSpend']>(async () => spend());
+    const svc = createGatewayJevDecisionService({
+      config: ceilingConfig(),
+      requireCompanionAttribution: false,
+      fetch: okFetch(),
+      budgetQuery: { getModelBudgetSpend },
+    });
+    await expect(svc.decide(INPUT)).resolves.toMatchObject({ ok: true });
+    expect(getModelBudgetSpend).toHaveBeenCalledWith(expect.any(Number), {
+      companionId: 'companion-test',
+      attribution: { service: 'decision', process: 'jev' },
+    });
   });
 });

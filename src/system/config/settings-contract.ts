@@ -119,6 +119,12 @@ export interface SettingsContractField {
   maximum?: number;
   enumValues?: string[];
   deprecated?: boolean;
+  /**
+   * True when a saved change reaches the running gateway and agent processes
+   * only after they restart. The Garden reports such a field as
+   * restart-required until the on-disk value matches what the process loaded.
+   */
+  restartRequired?: boolean;
 }
 
 export interface SettingsContractData {
@@ -427,6 +433,18 @@ const DEPRECATED_SETTINGS_FIELDS = new Set<string>([
   'modelRoster',
 ]);
 
+/**
+ * Settings whose consumers live in the gateway and agent processes and are not
+ * reloaded after a settings.json write (bead psfn-framework-y7mjg). The Garden
+ * applies a save to its own config view only; the gateway's remote decision
+ * service and the agents' decision sites keep the value they loaded at startup.
+ */
+export const RESTART_REQUIRED_SETTINGS_FIELDS = ['decisionBackend'] as const;
+
+export type RestartRequiredSettingsField = typeof RESTART_REQUIRED_SETTINGS_FIELDS[number];
+
+const RESTART_REQUIRED_SETTINGS_FIELD_SET = new Set<string>(RESTART_REQUIRED_SETTINGS_FIELDS);
+
 const STRUCTURED_SETTINGS_FIELD_KEYS = [...new Set<string>([
   ...RUNTIME_SETTINGS_KEYS,
   ...SETTINGS_OWNER_FILE_BY_FIELD.keys(),
@@ -519,6 +537,7 @@ export function buildSettingsContractData(options: {
     const enumValues = resolveEnumValues(key, options);
     if (enumValues) field.enumValues = enumValues;
     if (DEPRECATED_SETTINGS_FIELDS.has(key)) field.deprecated = true;
+    if (RESTART_REQUIRED_SETTINGS_FIELD_SET.has(key)) field.restartRequired = true;
     fields[key] = field;
   }
 

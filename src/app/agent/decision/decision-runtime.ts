@@ -2,8 +2,12 @@
 // DecisionRuntime per agent process, shared by every decision site. The local
 // backend reuses the agent's gateway-backed LLM provider port, so decision
 // calls ride the same admission, budget and usage accounting as every other
-// background call. Settings are read live from the runtime config, so a
-// settings.json reload changes the backend without a restart.
+// background call. Settings are read per call from this process's runtime
+// config, but nothing reloads that config after a settings.json write: the
+// Garden applies a save to its own config view only, and the gateway's remote
+// decision service keeps its startup copy. A decisionBackend change therefore
+// takes effect after the gateway and agents restart, and the Garden save
+// response reports it as restart-required (bead psfn-framework-y7mjg).
 
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { GatewayClient } from '../../../boundary/gateway/client.js';

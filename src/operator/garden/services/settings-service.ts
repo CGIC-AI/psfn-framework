@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { EXTERNAL_MEMORY_CHANNEL, externalMemoryPolicyChannelId } from '../../../shared/routing/external-memory-channel.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
@@ -29,6 +30,8 @@ import {
   SETTINGS_BOOLEAN_FIELDS,
   SETTINGS_OWNER_FILE_BY_FIELD,
   SETTINGS_STRING_ARRAY_FIELDS,
+  RESTART_REQUIRED_SETTINGS_FIELDS,
+  type RestartRequiredSettingsField,
   type SettingsContractData,
 } from '../../../system/config/settings-contract.js';
 import {
@@ -529,6 +532,8 @@ export async function applyAdminSettingsMutation(options: {
 
 export class AdminSettingsDataService implements AdminSettingsService {
   private readonly divergences = new Map<AdminSettingsDivergence['key'], AdminSettingsDivergence>();
+  /** Restart-required settings as this process loaded them at startup (y7mjg). */
+  private readonly startupRestartRequiredSettings: ReadonlyMap<RestartRequiredSettingsField, unknown>;
 
   constructor(private readonly deps: {
     config: SubstrateConfig;
@@ -537,7 +542,11 @@ export class AdminSettingsDataService implements AdminSettingsService {
     getCredentialPresence?: () => Promise<GatewayCredentialPresenceResult>;
     effectiveSchedulerConfig?: import('../../../system/config/scheduler-config.js').SchedulerRuntimeConfig;
     onCapabilityTierChanged?: CapabilityTierChangeHandler;
-  }) {}
+  }) {
+    this.startupRestartRequiredSettings = new Map(
+      RESTART_REQUIRED_SETTINGS_FIELDS.map(key => [key, structuredClone(deps.config[key])]),
+    );
+  }
 
   private async persistSystemOwner<T>(
     ownerFile: SystemOwnerWriteKey,
@@ -584,6 +593,29 @@ export class AdminSettingsDataService implements AdminSettingsService {
       this.divergences.set(divergence.key, divergence);
     }
     return this.buildSettingsStatus();
+  }
+
+  /**
+   * A restart-required setting whose on-disk value differs from the value this
+   * process loaded at startup. The Garden's own config view takes a save at
+   * once, but the gateway and the agents keep their startup copy, so the save
+   * is reported as pending a restart rather than as matching the runtime.
+   */
+  private refreshRestartRequiredDivergences(onDisk: EditableSettings): void {
+    const persisted = onDisk as Partial<Record<string, unknown>>;
+    for (const key of RESTART_REQUIRED_SETTINGS_FIELDS) {
+      if (isDeepStrictEqual(persisted[key], this.startupRestartRequiredSettings.get(key))) {
+        this.divergences.delete(key);
+      } else if (this.divergences.get(key)?.state !== 'restart_required') {
+        this.divergences.set(key, {
+          key,
+          state: 'restart_required',
+          detail: `${key} is saved to settings.json, but the gateway and agent processes loaded it at startup; `
+            + 'restart them to apply it.',
+          updatedAt: Date.now(),
+        });
+      }
+    }
   }
 
   private buildSettingsStatus(): AdminSettingsStatus {
@@ -1133,6 +1165,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
 
   async getSettingsData(): Promise<AdminSettingsData> {
     const effectiveRuntimeSettings = this.deps.configStore.loadEffectiveRuntimeSettings();
+    this.refreshRestartRequiredDivergences(effectiveRuntimeSettings);
     const runtimeConfig = splitSettingsByDomain(effectiveRuntimeSettings).runtime;
     runtimeConfig.sessionRestartBehavior ??= 'reuse_latest_session';
     const editors = this.loadSettingsConfigEditors();
@@ -1295,6 +1328,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
       if (!mutationResult.ok) {
         return this.ownerWriteFailure(new Error(mutationResult.message));
       }
+      this.refreshRestartRequiredDivergences(this.deps.configStore.loadEffectiveRuntimeSettings());
       const status = this.updateDivergences(mutationResult.refreshedKeys, mutationResult.divergences);
       return this.buildSuccessfulSaveResult('Settings updated', status);
     } catch (error) {

@@ -26,7 +26,7 @@ import type {
 
 export interface LocalDecisionBackendOptions {
   llmProvider: Pick<LLMProviderPort, 'complete'>;
-  /** Read per call so a settings reload applies without a restart. */
+  /** Read per call from the runtime config (which a settings.json write does not reload). */
   resolveQuestionMode: () => DecisionLocalQuestionMode;
   /**
    * Optional token-logprob reader. Returns option -> probability for a single

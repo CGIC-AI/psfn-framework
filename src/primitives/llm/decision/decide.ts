@@ -64,7 +64,11 @@ export interface DecisionRuntimeOptions {
   local: LocalDecisionBackend;
   /** Remote backend; absent when not wired (then jev/shadow degrade to local). */
   jev?: RemoteDecisionBackend;
-  /** Read per call so a settings reload applies without a restart. */
+  /**
+   * Read per call, so the runtime follows whatever its config holds. The
+   * runtime wiring does not reload that config after a settings.json write;
+   * see app/agent/decision/decision-runtime.ts.
+   */
   resolveSettings: () => DecisionBackendSettings | undefined;
   shadowSink?: DecisionShadowSink;
   now?: () => number;

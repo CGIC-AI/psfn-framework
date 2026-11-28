@@ -79,6 +79,7 @@ const HEALTH_EVENT_COMPONENTS = [
   'automata',
   'cogsec', // psfn-framework-mlhn3
   'channels', // psfn-framework-6cs5j
+  'decision', // psfn-framework-na1r9
 ] as const;
 
 export type HealthEventComponent = typeof HEALTH_EVENT_COMPONENTS[number];
@@ -198,6 +199,16 @@ const HEALTH_EVENT_CODES = [
    * tells an operator the channel is down.
    */
   'channel_surface_disabled', // psfn-framework-6cs5j
+  /**
+   * The remote decision backend refused a call because the owning companion's
+   * Jev spend for the current UTC day, plus the call's worst-case price, would
+   * cross the owner-file `decisionBackend.jev.dailyBudgetUsd` ceiling (bead
+   * psfn-framework-na1r9). The site answers locally, so nothing fails; this is
+   * the signal that remote decisions are off until the day rolls over. Reported
+   * once per companion per UTC day by the emitting gateway. Evidence carries the
+   * spend and the ceiling in USD.
+   */
+  'decision_budget_exceeded', // psfn-framework-na1r9
 ] as const;
 
 export type HealthEventCode = typeof HEALTH_EVENT_CODES[number];
@@ -318,6 +329,8 @@ const HEALTH_EVENT_EVIDENCE_KEYS = [
   'waitingRequests',
   'windowMs',
   'httpStatus', // psfn-framework-mlhn3
+  'spentUsd', // psfn-framework-na1r9
+  'limitUsd', // psfn-framework-na1r9
 ] as const;
 
 type HealthEventEvidenceKey = typeof HEALTH_EVENT_EVIDENCE_KEYS[number];

@@ -342,10 +342,18 @@ export async function buildGatewayPrivilegedCore(
   // provisioned-but-broken L1.5 model fails startup.
   // Epic 4lf3r: one gateway-owned remote decision service, shared by the
   // agent-facing llm.decide RPC and the additive intake.l2 signal.
+  // The same usage store ledgers Jev rows and answers the daily ceiling's
+  // spend read (na1r9), so the ceiling counts exactly what was recorded.
   const jevDecisions = createGatewayJevDecisionService({
     config: input.config,
     requireCompanionAttribution: input.bootstrap.server.multiCompanion.enabled,
-    ...(privilegedServices.modelUsageStore ? { usageRecorder: privilegedServices.modelUsageStore } : {}),
+    ...(privilegedServices.modelUsageStore
+      ? {
+          usageRecorder: privilegedServices.modelUsageStore,
+          budgetQuery: privilegedServices.modelUsageStore,
+        }
+      : {}),
+    healthEvents: eventBus,
   });
   const intakeScreening = await composeGatewayIntakeScreeningRuntime({
     config: input.config,

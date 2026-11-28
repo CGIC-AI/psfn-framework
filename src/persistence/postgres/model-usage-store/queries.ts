@@ -397,6 +397,15 @@ export class PostgresModelUsageQueries {
     if (!budgetCompanionId) {
       throw new Error('Fleet model budget queries require an explicit companionId');
     }
+    const attributionService = scope?.attribution
+      ? normalizeQueryText(scope.attribution.service, 'attribution.service')
+      : undefined;
+    const attributionProcess = scope?.attribution
+      ? normalizeQueryText(scope.attribution.process, 'attribution.process')
+      : undefined;
+    if (scope?.attribution && (!attributionService || !attributionProcess)) {
+      throw new Error('Model budget attribution scope requires a service and a process');
+    }
     const nowDate = new Date(now);
     const day = dayKey(now);
     const month = monthKey(now);
@@ -452,6 +461,8 @@ export class PostgresModelUsageQueries {
           AND event.recorded_at_ms <= $3
           AND event.call_kind IN ('chat', 'completion')
           AND event.companion_id = $4
+          AND ($6::TEXT IS NULL OR event.service = $6::TEXT)
+          AND ($7::TEXT IS NULL OR event.process = $7::TEXT)
       )
       SELECT
         COALESCE(SUM(resolved_estimated_cost_usd) FILTER (
@@ -465,7 +476,15 @@ export class PostgresModelUsageQueries {
           WHERE resolved_estimated_cost_usd IS NULL
         ) AS monthly_unknown_cost_attempts
       FROM budget_events
-    `, [dayStartMs, monthStartMs, now, budgetCompanionId, JSON.stringify(serializedPricing)]);
+    `, [
+      dayStartMs,
+      monthStartMs,
+      now,
+      budgetCompanionId,
+      JSON.stringify(serializedPricing),
+      attributionService ?? null,
+      attributionProcess ?? null,
+    ]);
     return {
       dayKey: day,
       monthKey: month,

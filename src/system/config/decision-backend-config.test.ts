@@ -22,6 +22,7 @@ function validSettings() {
       timeoutMs: 1_200,
       maxRequestChars: 80_000,
       pricing: { inputPer1MUsd: 0.04, outputPer1MUsd: 0.12, maxOutputTokens: 512 },
+      dailyBudgetUsd: 0.5,
     },
     sites: {
       'participation.appraise': { mode: 'jev' },
@@ -67,11 +68,27 @@ describe('decisionBackend settings', () => {
     ['a Jev output bound of zero', {
       jev: { ...validSettings().jev, pricing: { ...validSettings().jev.pricing, maxOutputTokens: 0 } },
     }, /maxOutputTokens/],
+    ['a negative Jev daily budget', {
+      jev: { ...validSettings().jev, dailyBudgetUsd: -0.01 },
+    }, /dailyBudgetUsd: expected a finite USD amount/],
+    ['a non-numeric Jev daily budget', {
+      jev: { ...validSettings().jev, dailyBudgetUsd: '5' },
+    }, /dailyBudgetUsd: expected a finite USD amount/],
+    ['a Jev daily budget without pricing', {
+      jev: { ...validSettings().jev, pricing: null },
+    }, /dailyBudgetUsd: requires jev.pricing/],
     ['an enabled site without its knobs', { sites: { 'room.ambiguity': { enabled: true } } }, /threshold: required/],
     ['an out-of-range threshold', { sites: { 'room.ambiguity': { enabled: true, threshold: 1.5 } } }, /0-1/],
     ['an unknown key', { extra: true }, /unknown keys: extra/],
   ])('rejects %s', (_label, patch, message) => {
     expect(() => normalizeDecisionBackendSettings({ ...validSettings(), ...patch })).toThrow(message);
+  });
+
+  it('treats an absent Jev daily budget as no ceiling, so existing owner files still load', () => {
+    const { dailyBudgetUsd: _ceiling, ...jevWithoutCeiling } = validSettings().jev;
+    expect(normalizeDecisionBackendSettings({ ...validSettings(), jev: jevWithoutCeiling }).jev.dailyBudgetUsd)
+      .toBeNull();
+    expect(createDefaultDecisionBackendSettings().jev.dailyBudgetUsd).toBeNull();
   });
 
   it('is a structured object field of settings.json', () => {

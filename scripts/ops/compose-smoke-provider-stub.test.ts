@@ -246,6 +246,34 @@ describe('Compose smoke provider double over HTTP', () => {
     expect(body.trimEnd().endsWith('data: [DONE]')).toBe(true);
   });
 
+  it('streams the delayed scenario as separate chunks long before completion (mg891)', async () => {
+    const startedAt = Date.now();
+    const response = await postCompletion({
+      model: 'smoke-stub-chat',
+      messages: [{ role: 'user', content: 'SMOKE_PROVIDER_STREAM probe-1' }],
+      stream: true,
+      stream_options: { include_usage: true },
+    }, STUB_KEY);
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    const first = decoder.decode((await reader.read()).value);
+    const firstAt = Date.now();
+    expect(first).toContain('Streamed reply probe-1 begins,');
+    expect(first).not.toContain('ends here');
+    let rest = '';
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      rest += decoder.decode(chunk.value);
+    }
+    expect(Date.now() - firstAt).toBeGreaterThanOrEqual(2_000);
+    expect(firstAt - startedAt).toBeLessThan(1_000);
+    expect(rest).toContain(' continues after a pause,');
+    expect(rest).toContain(' and ends here.');
+    expect(rest.trimEnd().endsWith('data: [DONE]')).toBe(true);
+  });
+
   it('cannot answer the memory oracle from old history or a missing retrieval', async () => {
     const fact = 'API Principal\'s project orchard123 has launch phrase violet-456.';
     for (const retrieved of [false, true]) {

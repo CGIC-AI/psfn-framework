@@ -4,7 +4,11 @@ import type { PcmAudioStreamPort } from './pcm-audio.js';
 import { BrowserEmbodimentRequests, type BrowserEmbodimentPort } from './primary-embodiment.js';
 import type { HubToClientMessage } from '../protocol/events.js';
 import { buildSatelliteHello } from './auth.js';
-import { COMPANION_APPROVALS_V2_CAPABILITY } from '../../../../src/shared/contracts/companion-relay.js';
+import {
+  COMPANION_APPROVALS_V2_CAPABILITY,
+  COMPANION_UI_REPLY_DELTAS_CAPABILITY,
+  COMPANION_UI_THREAD_HISTORY_CAPABILITY,
+} from '../../../../src/shared/contracts/companion-relay.js';
 import {
   encodeCompanionUiAudioChunk,
   parseCompanionUiAudioServerFrame,
@@ -31,10 +35,12 @@ import {
   parseGatewayEvent,
   parseGatewayResult,
   parseInterruptResult,
+  parseReplyDelta,
   parseShardAgentResponse,
   parseShardDirectory,
   parseShardHistory,
   parseShardInterruptResult,
+  parseThreadHistory,
   validCompanionRequestId,
   type AttachmentReady,
   type CompanionUiResource,
@@ -81,6 +87,17 @@ interface ActiveInteraction {
   readonly shardId?: string;
 }
 
+/** Correlation state of one pending main-thread reply that may stream deltas. */
+interface ReplyStream {
+  nextSequence: number;
+  rendered: boolean;
+}
+
+const STREAMED_REPLY_RESOURCES: ReadonlySet<CompanionUiResource> = new Set([
+  'conversation.interact',
+  'conversation.touch',
+]);
+
 export interface CompanionGatewayClientOptions {
   readonly url: string;
   readonly webSocketFactory?: SatelliteHubWebSocketFactory;
@@ -125,6 +142,9 @@ export class CompanionGatewayClient {
   private activeAudio: ActiveAudioStream | null = null;
   private authorizedShardId: string | null = null;
   private session: SatelliteHubSession = {};
+  private readonly replyStreams = new Map<string, ReplyStream>();
+  // Deltas still in flight for an interrupted reply are dropped until its terminal.
+  private interruptedReplyId: string | null = null;
 
   constructor(private readonly options: CompanionGatewayClientOptions) {
     this.clock = options.clock ?? (() => new Date());
@@ -209,7 +229,11 @@ export class CompanionGatewayClient {
         socket.send(JSON.stringify({
           schemaVersion: 1,
           type: 'session.configure',
-          eventCapabilities: [COMPANION_APPROVALS_V2_CAPABILITY],
+          eventCapabilities: [
+            COMPANION_APPROVALS_V2_CAPABILITY,
+            COMPANION_UI_REPLY_DELTAS_CAPABILITY,
+            COMPANION_UI_THREAD_HISTORY_CAPABILITY,
+          ],
         }));
       });
       this.attachSocketListener(socket, 'message', (raw) => {
@@ -232,6 +256,8 @@ export class CompanionGatewayClient {
         this.socket = null;
         this.ready = false;
         this.pending.clear();
+        this.replyStreams.clear();
+        this.interruptedReplyId = null;
         this.activeInteraction = null;
         this.lastCompletedInteraction = null;
         this.authorizedShardId = null;
@@ -249,6 +275,8 @@ export class CompanionGatewayClient {
     this.socket = null;
     this.ready = false;
     this.pending.clear();
+    this.replyStreams.clear();
+    this.interruptedReplyId = null;
     this.activeInteraction = null;
     this.lastCompletedInteraction = null;
     this.authorizedShardId = null;
@@ -403,6 +431,7 @@ export class CompanionGatewayClient {
     const interaction = this.activeInteraction ?? this.lastCompletedInteraction;
     if (!interaction) return;
     const { requestId: interactionId, shardId } = interaction;
+    if (this.replyStreams.has(interactionId)) this.interruptedReplyId = interactionId;
     this.sendAction(
       shardId ? 'shards.interrupt' : 'conversation.interrupt',
       'companion.interact',
@@ -416,6 +445,25 @@ export class CompanionGatewayClient {
 
   refreshShards(): void {
     this.sendAction('shards.list', 'companion.read', {});
+  }
+
+  /** True when the gateway granted this session its main-thread history read. */
+  canReadThreadHistory(): boolean {
+    return this.ready
+      && Boolean(this.session.eventCapabilities?.includes(COMPANION_UI_THREAD_HISTORY_CAPABILITY));
+  }
+
+  /**
+   * Request the authorized durable main-thread transcript. The server derives
+   * the thread from this session's own authority; a shard selection made
+   * before the result arrives discards it.
+   */
+  readThreadHistory(): void {
+    if (!this.canReadThreadHistory()) {
+      throw this.emitLocalError('Companion gateway did not grant thread history', true);
+    }
+    if (this.session.activeShardId) return;
+    this.sendAction('conversation.history', 'companion.read', {});
   }
 
   selectShard(shardId: string | null): void {
@@ -496,6 +544,10 @@ export class CompanionGatewayClient {
       throw this.emitLocalError('Companion request identifier is invalid', false);
     }
     const frame = { schemaVersion: 1, requestId, action, resource, body };
+    if (STREAMED_REPLY_RESOURCES.has(resource)
+      && this.session.eventCapabilities?.includes(COMPANION_UI_REPLY_DELTAS_CAPABILITY)) {
+      this.replyStreams.set(requestId, { nextSequence: 0, rendered: false });
+    }
     this.pending.set(requestId, {
       resource,
       ...(options.artifactId ? { artifactId: options.artifactId } : {}),
@@ -506,6 +558,7 @@ export class CompanionGatewayClient {
       socket.send(JSON.stringify(frame));
     } catch (error) {
       this.pending.delete(requestId);
+      this.replyStreams.delete(requestId);
       throw this.emitLocalError('Companion action could not be sent', false, error);
     }
     return requestId;
@@ -538,8 +591,11 @@ export class CompanionGatewayClient {
       this.emitInbound(event);
       return false;
     }
+    const delta = parseReplyDelta(value);
+    if (delta) return this.consumeReplyDelta(delta.requestId, delta.sequence, delta.text);
     const result = parseGatewayResult(value);
     if (!result) return this.failProtocol('Companion gateway frame was malformed');
+    if (!result.ok && result.failure === 'cancelled') return this.consumeCancelled(result.requestId);
     if (!result.ok) {
       if (result.failure === 'internal_error') {
         this.embodimentRequests.reset(new Error('The embodiment request failed on the server. Refresh its status before trying again.'));
@@ -555,6 +611,53 @@ export class CompanionGatewayClient {
     this.pending.delete(result.requestId);
     this.consumeResult(result.requestId, pending, result.result);
     return false;
+  }
+
+  /**
+   * Render one correlated reply chunk as the live assistant message. A delta
+   * for a request that is not a pending streamed reply, or out of sequence,
+   * is a protocol violation. A shard selection hides main-thread text exactly
+   * as it hides the final reply.
+   */
+  private consumeReplyDelta(requestId: string, sequence: number, text: string): false {
+    const stream = this.replyStreams.get(requestId);
+    if (!this.ready || !stream || !this.pending.has(requestId)) {
+      return this.failProtocol('Companion reply delta did not match a pending reply');
+    }
+    if (sequence !== stream.nextSequence) {
+      return this.failProtocol('Companion reply delta arrived out of sequence');
+    }
+    stream.nextSequence += 1;
+    if (this.interruptedReplyId === requestId || this.session.activeShardId) return false;
+    stream.rendered = true;
+    this.emitInbound({
+      type: 'message',
+      data: { role: 'assistant', content: text, live: true, final: false },
+    });
+    return false;
+  }
+
+  /** An interrupted turn's terminal: stop rendering it and keep the socket. */
+  private consumeCancelled(requestId: string): false {
+    const pending = this.pending.get(requestId);
+    if (!pending || !STREAMED_REPLY_RESOURCES.has(pending.resource)) {
+      return this.failProtocol('Companion cancellation did not match a pending reply');
+    }
+    this.pending.delete(requestId);
+    this.replyStreams.delete(requestId);
+    if (this.interruptedReplyId === requestId) this.interruptedReplyId = null;
+    if (this.activeInteraction?.requestId === requestId) this.activeInteraction = null;
+    if (this.lastCompletedInteraction?.requestId === requestId) this.lastCompletedInteraction = null;
+    this.emitAssistantInterrupted();
+    return false;
+  }
+
+  /** Close one streamed reply at its terminal; true when live text must be cleared. */
+  private finishReplyStream(requestId: string): boolean {
+    const stream = this.replyStreams.get(requestId);
+    this.replyStreams.delete(requestId);
+    if (this.interruptedReplyId === requestId) this.interruptedReplyId = null;
+    return stream?.rendered === true;
   }
 
   private applyReady(ready: AttachmentReady): void {
@@ -652,8 +755,19 @@ export class CompanionGatewayClient {
           this.failProtocol('Primary embodiment result was malformed');
         }
         return;
+      case 'conversation.history': {
+        const messages = parseThreadHistory(result);
+        if (!messages) {
+          this.failProtocol('Companion thread history was malformed');
+          return;
+        }
+        if (this.session.activeShardId) return;
+        this.emit('history', { messages });
+        return;
+      }
       case 'conversation.interact':
       case 'conversation.touch': {
+        const liveRendered = this.finishReplyStream(requestId);
         const response = parseAgentResponse(result);
         if (!response) {
           this.failProtocol('Companion response was malformed');
@@ -668,6 +782,9 @@ export class CompanionGatewayClient {
         if (response.content
           && (pending.resource !== 'conversation.interact' || !this.session.activeShardId)) {
           this.emitInbound({ type: 'message', data: { role: 'assistant', content: response.content, final: true } });
+        } else if (liveRendered) {
+          // No final text (intentional no-reply): clear the streamed partial.
+          this.emitAssistantInterrupted();
         }
         return;
       }
@@ -797,6 +914,11 @@ export class CompanionGatewayClient {
         });
       }
     }
+  }
+
+  /** Clears the live assistant partial through the store's existing reducer. */
+  private emitAssistantInterrupted(): void {
+    this.emitInbound({ type: 'assistant.interrupted', sessionId: this.session.sessionId ?? '' });
   }
 
   private emitInbound(message: HubToClientMessage): void {

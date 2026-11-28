@@ -46,6 +46,27 @@ export type CompanionEventKind = typeof COMPANION_EVENT_KINDS[number];
 /** Explicit wire capability for the complete approval-request envelope. */
 export const COMPANION_APPROVALS_V2_CAPABILITY = 'approvals.v2' as const;
 
+/**
+ * Opt-in Companion UI wire capability for correlated main-conversation reply
+ * deltas (psfn-framework-mg891). A browser that does not request it at
+ * `session.configure` receives only the terminal `result` frame.
+ */
+export const COMPANION_UI_REPLY_DELTAS_CAPABILITY = 'reply.deltas.v1' as const;
+
+/**
+ * Opt-in Companion UI wire capability for the authorized main-thread history
+ * read (psfn-framework-jtr6e). The server echoes it in `session.ready` only
+ * when the session's source channel is durable (operator-key sessions); a
+ * browser sends `conversation.history` only when echoed.
+ */
+export const COMPANION_UI_THREAD_HISTORY_CAPABILITY = 'thread.history.v1' as const;
+
+/** Optional Companion UI capabilities, in their canonical negotiation order. */
+export const COMPANION_UI_OPTIONAL_EVENT_CAPABILITIES = Object.freeze([
+  COMPANION_UI_REPLY_DELTAS_CAPABILITY,
+  COMPANION_UI_THREAD_HISTORY_CAPABILITY,
+] as const);
+
 export const COMPANION_APPROVAL_RESOLUTION_STATUSES = [
   'approved',
   'denied',

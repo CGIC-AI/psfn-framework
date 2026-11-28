@@ -8,13 +8,24 @@ import { HubDeviceAssertionRejectedError } from '../../boundary/fleet-auth/hub-d
  * client caused or cannot overcome by retrying; `internal_error` is a server
  * fault (provider outage, preview crash) behind an admitted action. Both close
  * the socket; only the code differs, and neither carries error text.
+ * `cancelled` (psfn-framework-mg891) is the terminal of an admitted turn that
+ * an interrupt stopped: it is an expected outcome, so the socket stays open
+ * and the next request on it proceeds normally.
  */
-export type CompanionUiActionFailureCode = 'denied' | 'internal_error';
+export type CompanionUiActionFailureCode = 'denied' | 'internal_error' | 'cancelled';
 
 /** A socket-local authority or protocol refusal (duplicate request id, closed session, ...). */
 export class CompanionUiSocketDeniedError extends Error {
   constructor(message: string) {
     super(message);
+    this.name = new.target.name;
+  }
+}
+
+/** An admitted conversation turn ended because its interaction was interrupted. */
+export class CompanionUiInteractionCancelledError extends Error {
+  constructor() {
+    super('Companion UI interaction was cancelled');
     this.name = new.target.name;
   }
 }
@@ -36,6 +47,7 @@ export function classifyCompanionUiActionFailure(
   dispatching: boolean,
 ): CompanionUiActionFailureCode {
   if (!dispatching) return 'denied';
+  if (error instanceof CompanionUiInteractionCancelledError) return 'cancelled';
   return isDenial(error) ? 'denied' : 'internal_error';
 }
 

@@ -88,10 +88,14 @@ async function socketOutcome(page: Page, path: string, sendAction = false): Prom
   }), { path, sendAction });
 }
 
-test('key owner receives a real reply, verifies durable storage after reload, then clears browser authority', async ({ page, context }, testInfo) => {
-  const message = `Browser durability probe ${randomUUID()}. Please acknowledge this message.`;
+test('key owner streams a real reply, rehydrates the durable transcript after reload, then clears browser authority', async ({ page, context }, testInfo) => {
+  // The provider double streams this probe in delayed chunks (SMOKE_PROVIDER_STREAM).
+  const probe = randomUUID();
+  const message = `Browser durability probe SMOKE_PROVIDER_STREAM ${probe} please acknowledge.`;
+  const partial = `Streamed reply ${probe} begins,`;
   const requests = new Set<string>();
   const replies: Reply[] = [];
+  const deltas: string[] = [];
   page.on('websocket', socket => {
     socket.on('framesent', ({ payload }) => {
       if (typeof payload !== 'string') return;
@@ -100,7 +104,10 @@ test('key owner receives a real reply, verifies durable storage after reload, th
     });
     socket.on('framereceived', ({ payload }) => {
       if (typeof payload !== 'string') return;
-      const frame = JSON.parse(payload) as { type?: string; requestId: string; ok?: boolean; result?: Reply };
+      const frame = JSON.parse(payload) as {
+        type?: string; requestId: string; ok?: boolean; result?: Reply; text?: string;
+      };
+      if (frame.type === 'delta' && requests.has(frame.requestId) && replies.length === 0) deltas.push(frame.text!);
       if (frame.type === 'result' && requests.has(frame.requestId) && frame.ok && frame.result) replies.push(frame.result);
     });
   });
@@ -109,18 +116,27 @@ test('key owner receives a real reply, verifies durable storage after reload, th
   expect(authCookie).toMatchObject({ httpOnly: true, secure: true, sameSite: 'Strict' });
   await page.getByRole('textbox', { name: 'Message your companion' }).fill(message);
   await page.getByRole('button', { name: 'Send message' }).click();
+  // The partial reply is visible in the browser before the terminal result frame.
+  await expect(page.getByRole('log')).toContainText(partial, { timeout: 30_000 });
+  const partialVisibleBeforeResult = replies.length === 0;
+  expect(partialVisibleBeforeResult).toBe(true);
   await expect.poll(() => replies.length, { timeout: 30_000 }).toBe(1);
   const reply = replies[0]!;
-  expect(reply.content.length).toBeGreaterThan(0);
+  expect(reply.content).toBe(`${partial} continues after a pause, and ends here.`);
+  expect(deltas.length).toBeGreaterThan(1);
   await expect(page.getByRole('log').getByText(reply.content, { exact: true })).toBeVisible();
   await expect.poll(async () => (await durableTurn(page, reply.channelId, message))?.record.status).toBe('completed');
   const beforeReload = (await durableTurn(page, reply.channelId, message))!.record;
   expect(beforeReload.assistantMessage.content).toBe(reply.content);
 
-  // The current browser has no transcript hydration API. This checks reconnect
-  // plus durable server data; it deliberately makes no UI-history-restored claim.
+  // A reload starts from empty browser memory; the transcript must come back
+  // from the gateway's authorized history read, not from browser storage.
   await page.reload();
   await expect(page.getByLabel('Connection ready', { exact: true })).toBeVisible();
+  await expect(page.getByRole('log').getByText(message, { exact: true })).toBeVisible();
+  await expect(page.getByRole('log').getByText(reply.content, { exact: true })).toBeVisible();
+  const storage = await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }));
+  expect(storage).not.toContain(probe);
   expect((await durableTurn(page, reply.channelId, message))?.record).toMatchObject({
     turnId: beforeReload.turnId, requestId: beforeReload.requestId, status: 'completed',
     userMessage: { content: message }, assistantMessage: { content: reply.content },
@@ -137,7 +153,8 @@ test('key owner receives a real reply, verifies durable storage after reload, th
     body: JSON.stringify({
       turnId: beforeReload.turnId, requestId: beforeReload.requestId,
       responseHash: createHash('sha256').update(reply.content).digest('hex'),
-      durableRereadAfterReload: true, logoutDeniedNewSocket: true,
+      deltaFramesBeforeResult: deltas.length, partialVisibleBeforeResult,
+      transcriptHydratedAfterReload: true, durableRereadAfterReload: true, logoutDeniedNewSocket: true,
     }, null, 2), contentType: 'application/json',
   });
 });

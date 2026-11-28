@@ -1332,6 +1332,20 @@ export class SessionManager implements SessionManagerTypeSurface {
     return this.store.findTurnRecord(resolvedChannelId, turnId);
   }
 
+  /**
+   * Durable turns that originated in exactly `sourceChannelId`, read over the
+   * same owned session-history window the companion's own context uses. The
+   * read is channel-exact (never widened through an active-context or routed
+   * logical session), so a caller authorized for one source channel never
+   * reads another channel's transcript; tombstoned turns are excluded.
+   */
+  getSourceTurnRecordsInHistoryWindow(sourceChannelId: string): TurnRecord[] {
+    return this.store.getRecentSourceTurnRecords(
+      sourceChannelId,
+      resolveSessionHistoryBudget(this.config).estimatedCount,
+    );
+  }
+
   findSourceRecordedTurn(
     sourceChannelId: string,
     logicalSessionId: string,

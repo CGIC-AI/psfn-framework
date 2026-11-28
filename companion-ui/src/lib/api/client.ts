@@ -92,8 +92,18 @@ export interface SatelliteHubErrorEvent {
   cause?: unknown;
 }
 
+/** Authorized durable main-thread transcript read from the gateway, oldest first. */
+export interface SatelliteHubThreadHistoryEvent {
+  messages: ReadonlyArray<Readonly<{
+    role: 'user' | 'assistant';
+    content: string;
+    createdAt: number;
+  }>>;
+}
+
 export interface SatelliteHubClientEventMap {
   state: SatelliteHubStateEvent;
+  history: SatelliteHubThreadHistoryEvent;
   inbound: SatelliteHubInboundEvent;
   outbound: SatelliteHubOutboundEvent;
   conversation: SatelliteHubConversationEvent;

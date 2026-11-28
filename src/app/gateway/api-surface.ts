@@ -88,6 +88,7 @@ import {
 } from '../../boundary/gateway/companion-ui-primary-embodiment.js';
 import { dispatchCompanionUiApproval } from '../../boundary/gateway/companion-ui-approvals.js';
 import { dispatchCompanionUiKeyShard } from '../../boundary/gateway/companion-ui-key-shards.js';
+import { runCompanionUiConversationTurn } from '../../boundary/gateway/companion-ui-conversation-turn.js';
 import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
 import type { GatewayOperatorAccountAuthorityService } from '../../boundary/fleet-auth/operator-account-authority.js';
 import type { FleetEscalationCoordinator } from '../../boundary/fleet-auth/escalation.js';
@@ -964,22 +965,15 @@ export async function startOptionalGatewayApiServer(
               }
               const interaction = beginCompanionUiInteraction(frame.requestId, input.signal);
               try {
-                const result = await gatewayApiRuntime.handleChatCompletion({
+                return await runCompanionUiConversationTurn({
+                  runtime: gatewayApiRuntime,
                   companionId: input.companionId,
-                  request: {
-                    model: input.companionId,
-                    messages: [{ role: 'user', content }],
-                    system_prompt_mode: 'default',
-                  },
-                  principal: input.principal,
-                  headers: {},
+                  routeCompanionId: input.companionId,
+                  content,
+                  authority: { principal: input.principal, headers: {} },
                   signal: interaction.signal,
+                  ...(input.onReplyDelta ? { onReplyDelta: input.onReplyDelta } : {}),
                 });
-                if (!result.ok) throw new Error(result.error.type);
-                // Routing provenance stays at the gateway; the browser receives
-                // only its canonical response fields for the selected socket.
-                const { companionId: _companionId, ...response } = result.response;
-                return response;
               } finally {
                 interaction.release();
               }
@@ -1009,6 +1003,9 @@ export async function startOptionalGatewayApiServer(
             dispatch: async input => {
               const frame = input.compiled.frame;
               const body = frame.body as Record<string, unknown>;
+              // A Hub attachment channel is per connection, so it has no
+              // durable thread to read yet (the gateway never grants it).
+              if (frame.resource === 'conversation.history') throw new CompanionUiActionDeniedError();
               if (frame.resource === 'shards.list'
                 || frame.resource === 'shards.history'
                 || frame.resource === 'shards.interact'
@@ -1074,29 +1071,28 @@ export async function startOptionalGatewayApiServer(
               if (!content) throw new Error('Companion UI action has no dispatcher');
               const interaction = beginCompanionUiInteraction(frame.requestId, input.signal);
               try {
-                const result = await gatewayApiRuntime.handleChatCompletion({
-                  request: {
-                    model: input.compiled.target.companionId,
-                    messages: [{ role: 'user', content }],
-                    system_prompt_mode: 'default',
-                  },
-                  principal: input.deviceTransport.principal,
-                  headers: { ...input.deviceTransport.headers },
-                  ...(input.deviceTransport.clientCert ? { clientCert: input.deviceTransport.clientCert } : {}),
-                  hubDevicePrincipal: input.attachment.deviceActor.principal,
-                  hubDeviceAttachment: input.attachment,
-                  companionUiCapability: {
-                    token: input.childAssertion.token,
-                    requestId: input.childAssertion.requestId,
-                    decisionId: input.childAssertion.decisionId,
-                    versions: input.childAssertion.versions,
-                    parent: input.childAssertion.parent,
-                    rawBodyBase64Url: Buffer.from(input.compiled.target.body).toString('base64url'),
+                return await runCompanionUiConversationTurn({
+                  runtime: gatewayApiRuntime,
+                  companionId: input.compiled.target.companionId,
+                  content,
+                  authority: {
+                    principal: input.deviceTransport.principal,
+                    headers: { ...input.deviceTransport.headers },
+                    ...(input.deviceTransport.clientCert ? { clientCert: input.deviceTransport.clientCert } : {}),
+                    hubDevicePrincipal: input.attachment.deviceActor.principal,
+                    hubDeviceAttachment: input.attachment,
+                    companionUiCapability: {
+                      token: input.childAssertion.token,
+                      requestId: input.childAssertion.requestId,
+                      decisionId: input.childAssertion.decisionId,
+                      versions: input.childAssertion.versions,
+                      parent: input.childAssertion.parent,
+                      rawBodyBase64Url: Buffer.from(input.compiled.target.body).toString('base64url'),
+                    },
                   },
                   signal: interaction.signal,
+                  ...(input.onReplyDelta ? { onReplyDelta: input.onReplyDelta } : {}),
                 });
-                if (!result.ok) throw new Error(result.error.type);
-                return result.response;
               } finally {
                 interaction.release();
               }
@@ -1130,21 +1126,20 @@ export async function startOptionalGatewayApiServer(
               if (!content) throw new Error('Companion UI guest action has no dispatcher');
               const interaction = beginCompanionUiInteraction(frame.requestId, input.signal);
               try {
-                const result = await gatewayApiRuntime.handleChatCompletion({
-                  request: {
-                    model: input.companionId,
-                    messages: [{ role: 'user', content }],
-                    system_prompt_mode: 'default',
+                return await runCompanionUiConversationTurn({
+                  runtime: gatewayApiRuntime,
+                  companionId: input.companionId,
+                  content,
+                  authority: {
+                    principal: input.deviceTransport.principal,
+                    headers: { ...input.deviceTransport.headers },
+                    ...(input.deviceTransport.clientCert ? { clientCert: input.deviceTransport.clientCert } : {}),
+                    hubDevicePrincipal: input.attachment.deviceActor.principal,
+                    hubDeviceAttachment: input.attachment,
                   },
-                  principal: input.deviceTransport.principal,
-                  headers: { ...input.deviceTransport.headers },
-                  ...(input.deviceTransport.clientCert ? { clientCert: input.deviceTransport.clientCert } : {}),
-                  hubDevicePrincipal: input.attachment.deviceActor.principal,
-                  hubDeviceAttachment: input.attachment,
                   signal: interaction.signal,
+                  ...(input.onReplyDelta ? { onReplyDelta: input.onReplyDelta } : {}),
                 });
-                if (!result.ok) throw new Error(result.error.type);
-                return result.response;
               } finally {
                 interaction.release();
               }

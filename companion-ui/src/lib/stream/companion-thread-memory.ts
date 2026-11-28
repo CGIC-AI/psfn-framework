@@ -3,6 +3,7 @@ import {
   type HubStreamMessage,
   type HubStreamState,
 } from './hub-stream.js';
+import { REMEMBERED_ID_PREFIX } from './thread-history.js';
 
 type RememberedMessage = Pick<HubStreamMessage, 'role' | 'content' | 'receivedAt'>;
 
@@ -35,7 +36,7 @@ export class CompanionThreadMemory {
       ...message,
       // Original IDs embed session authority. Start fresh local correlation
       // from the array order rather than retaining transport event sequences.
-      id: `remembered:${index + 1}:${message.role}`,
+      id: `${REMEMBERED_ID_PREFIX}${index + 1}:${message.role}`,
       sequence: index + 1,
       live: false,
       final: true,

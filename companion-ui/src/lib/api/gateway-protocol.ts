@@ -10,7 +10,10 @@ import type {
   SatelliteOutputCapability,
 } from '../protocol/events.js';
 import type { SatelliteHubSession } from './client.js';
-import { COMPANION_APPROVALS_V2_CAPABILITY } from '../../../../src/shared/contracts/companion-relay.js';
+import {
+  COMPANION_APPROVALS_V2_CAPABILITY,
+  COMPANION_UI_OPTIONAL_EVENT_CAPABILITIES,
+} from '../../../../src/shared/contracts/companion-relay.js';
 import { parseHubToClientMessage } from '../protocol/framing.js';
 import type { HubToClientMessage } from '../protocol/events.js';
 import { hasExactKeys } from '../protocol/validation.js';
@@ -23,11 +26,15 @@ import type {
 import { parseCompanionId } from '../../../../src/shared/routing/companion-id.js';
 
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+// Mirrors the gateway's COMPANION_UI_PROTOCOL_LIMITS reply and frame ceilings.
+const MAX_TEXT_CHARACTERS = 65_536;
+const MAX_HISTORY_CHARACTERS = 1_048_576;
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
 const SATELLITE_CAPABILITIES = new Set<string>(REGISTRY_CAPABILITIES);
 const TELEMETRY_SCOPES = new Set<string>(REGISTRY_TELEMETRY_SCOPES);
 
 export type CompanionUiResource =
+  | 'conversation.history'
   | 'conversation.interact'
   | 'conversation.interrupt'
   | 'conversation.touch'
@@ -48,8 +55,24 @@ export interface AttachmentReady {
   readonly eventCapabilities: readonly string[];
 }
 
-/** `denied`: an authority/protocol refusal; `internal_error`: a server fault. */
-export type GatewayFailureCode = 'denied' | 'internal_error';
+/**
+ * `denied`: an authority/protocol refusal; `internal_error`: a server fault;
+ * `cancelled`: an interrupted turn's terminal (the socket stays open).
+ */
+export type GatewayFailureCode = 'denied' | 'internal_error' | 'cancelled';
+
+/** One correlated reply chunk; the terminal `result` carries the authoritative text. */
+export interface GatewayReplyDelta {
+  readonly requestId: string;
+  readonly sequence: number;
+  readonly text: string;
+}
+
+export interface GatewayThreadHistoryMessage {
+  readonly role: 'user' | 'assistant';
+  readonly content: string;
+  readonly createdAt: number;
+}
 
 export interface GatewayResult {
   readonly requestId: string;
@@ -94,7 +117,7 @@ export function parseAttachmentReady(value: unknown): AttachmentReady | undefine
   const telemetryScopes = closedStringArray(value.telemetryScopes, TELEMETRY_SCOPES);
   const eventCapabilities = closedStringArray(
     value.eventCapabilities,
-    new Set([COMPANION_APPROVALS_V2_CAPABILITY]),
+    new Set([COMPANION_APPROVALS_V2_CAPABILITY, ...COMPANION_UI_OPTIONAL_EVENT_CAPABILITIES]),
   );
   if (!device || (value.place !== undefined && !place)
     || !capabilities || !telemetryScopes || !eventCapabilities) return undefined;
@@ -139,8 +162,41 @@ export function parseGatewayResult(value: unknown): GatewayResult | undefined {
     || typeof value.requestId !== 'string'
     || (value.requestId !== '' && !REQUEST_ID.test(value.requestId))
     || !isRecord(value.error) || !hasExactKeys(value.error, ['code'])
-    || (value.error.code !== 'denied' && value.error.code !== 'internal_error')) return undefined;
+    || (value.error.code !== 'denied' && value.error.code !== 'internal_error'
+      && value.error.code !== 'cancelled')) return undefined;
   return { requestId: value.requestId, ok: false, failure: value.error.code };
+}
+
+export function parseReplyDelta(value: unknown): GatewayReplyDelta | undefined {
+  if (!isRecord(value) || value.schemaVersion !== 1 || value.type !== 'delta'
+    || !hasExactKeys(value, ['schemaVersion', 'type', 'requestId', 'sequence', 'text'])
+    || typeof value.requestId !== 'string' || !REQUEST_ID.test(value.requestId)
+    || !Number.isSafeInteger(value.sequence) || Number(value.sequence) < 0
+    || typeof value.text !== 'string' || value.text.length === 0
+    || value.text.length > MAX_TEXT_CHARACTERS) return undefined;
+  return { requestId: value.requestId, sequence: Number(value.sequence), text: value.text };
+}
+
+/** Bounded by size, not count: the server sizes the window from its own settings. */
+export function parseThreadHistory(value: unknown): readonly GatewayThreadHistoryMessage[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const messages: GatewayThreadHistoryMessage[] = [];
+  let characters = 0;
+  for (const item of value) {
+    if (!isRecord(item) || !hasExactKeys(item, ['role', 'content', 'createdAt'])
+      || (item.role !== 'user' && item.role !== 'assistant')
+      || typeof item.content !== 'string' || item.content.length === 0
+      || item.content.length > MAX_TEXT_CHARACTERS
+      || !Number.isSafeInteger(item.createdAt) || Number(item.createdAt) < 0) return undefined;
+    characters += item.content.length;
+    if (characters > MAX_HISTORY_CHARACTERS) return undefined;
+    messages.push(Object.freeze({
+      role: item.role,
+      content: item.content,
+      createdAt: Number(item.createdAt),
+    }));
+  }
+  return Object.freeze(messages);
 }
 
 export function parseAgentResponse(value: unknown): { content: string } | undefined {

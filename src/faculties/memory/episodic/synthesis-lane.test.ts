@@ -3,7 +3,7 @@ import type { SessionEntry } from '../../../core/session/types.js';
 import type { Episode } from '../../../shared/contracts/episodic-memory.js';
 import type {
   ConversationalActivityWorkItem,
-  ConversationalActivityWorksetPort,
+  RecoverableConversationalActivityWorksetPort,
 } from '../../../core/session/conversational-activity-workset.js';
 import type { EpisodeSynthesisLaneConfig } from '../../../system/config/scheduler-config.js';
 import {
@@ -53,6 +53,8 @@ function gateConfig(overrides: Partial<EpisodeSynthesisLaneConfig> = {}): Episod
     maxEntriesPerEpisode: 14,
     minConversationalEntries: 2,
     minSingleEntryChars: 120,
+    sessionFailure: { maxAttempts: 3, retryBaseDelayMinutes: 30 },
+    finalPassIdleMinutes: 180,
     ...overrides,
   };
 }
@@ -91,7 +93,7 @@ function mentionEntries(count: number, startId = 1): SessionEntry[] {
   }));
 }
 
-function makeStatefulWorkset(sessionIds: readonly string[]): ConversationalActivityWorksetPort {
+function makeStatefulWorkset(sessionIds: readonly string[]): RecoverableConversationalActivityWorksetPort {
   const items = sessionIds.map((logicalSessionId, index): ConversationalActivityWorkItem => ({
     purpose: 'episodic_synthesis',
     logicalSessionId,
@@ -104,14 +106,25 @@ function makeStatefulWorkset(sessionIds: readonly string[]): ConversationalActiv
   const claims = new Map<string, { claimantId: string; claimedAtMs: number; revision: number }>();
   const completedStages = new Map<string, string[]>();
   const failures = new Map<string, { stage: string; message: string; failedAtMs: number }>();
+  const failureState = new Map<string, { failureCount: number; retryAfterMs?: number }>();
+  const quarantined = new Map<string, number>();
+  const releaseClaim = (input: { logicalSessionId: string; claimantId: string; revision: number }) => {
+    const claim = claims.get(input.logicalSessionId);
+    if (!claim || claim.claimantId !== input.claimantId || claim.revision !== input.revision) {
+      throw new Error('release does not match claim');
+    }
+    claims.delete(input.logicalSessionId);
+  };
   return {
     enumerate: vi.fn(async () => items
       .filter(item => item.revision > (checkpoints.get(item.logicalSessionId) ?? 0))
+      .filter(item => item.revision > (quarantined.get(item.logicalSessionId) ?? 0))
       .map(item => ({
         ...item,
         checkpointRevision: checkpoints.get(item.logicalSessionId) ?? 0,
         completedStages: completedStages.get(item.logicalSessionId) ?? [],
         ...(claims.get(item.logicalSessionId) ?? {}),
+        ...(failureState.get(item.logicalSessionId) ?? {}),
         ...(failures.has(item.logicalSessionId)
           ? { lastFailure: failures.get(item.logicalSessionId) }
           : {}),
@@ -149,6 +162,7 @@ function makeStatefulWorkset(sessionIds: readonly string[]): ConversationalActiv
         checkpointRevision: checkpoints.get(item.logicalSessionId) ?? 0,
         completedStages: completedStages.get(item.logicalSessionId) ?? [],
         ...claim,
+        ...(failureState.get(item.logicalSessionId) ?? {}),
         ...(failures.has(item.logicalSessionId)
           ? { lastFailure: failures.get(item.logicalSessionId) }
           : {}),
@@ -174,7 +188,18 @@ function makeStatefulWorkset(sessionIds: readonly string[]): ConversationalActiv
         message: input.message,
         failedAtMs: WATERMARK_END_MS,
       });
+      failureState.set(input.logicalSessionId, {
+        failureCount: (failureState.get(input.logicalSessionId)?.failureCount ?? 0) + 1,
+        ...(input.retryAfterMs === undefined ? {} : { retryAfterMs: input.retryAfterMs }),
+      });
     }),
+    releaseClaim: vi.fn(async (input) => releaseClaim(input)),
+    quarantineClaim: vi.fn(async (input) => {
+      releaseClaim(input);
+      quarantined.set(input.logicalSessionId, input.revision);
+    }),
+    listQuarantined: vi.fn(async () => []),
+    releaseQuarantine: vi.fn(async (input) => quarantined.delete(input.logicalSessionId)),
     checkpoint: vi.fn(async (input) => {
       const claim = claims.get(input.logicalSessionId);
       if (!claim || claim.claimantId !== input.claimantId || claim.revision !== input.revision) {
@@ -184,6 +209,7 @@ function makeStatefulWorkset(sessionIds: readonly string[]): ConversationalActiv
       claims.delete(input.logicalSessionId);
       completedStages.delete(input.logicalSessionId);
       failures.delete(input.logicalSessionId);
+      failureState.delete(input.logicalSessionId);
     }),
   };
 }
@@ -273,6 +299,7 @@ function makeHarness(options: {
     checkpointStage: vi.fn().mockResolvedValue(undefined),
     recordFailure: vi.fn().mockResolvedValue(undefined),
     checkpoint: vi.fn().mockResolvedValue(undefined),
+    releaseClaim: vi.fn().mockResolvedValue(undefined),
   };
   const gateEvents: EpisodeSynthesisGateEvent[] = [];
   const lane = new EpisodeSynthesisLane({
@@ -286,7 +313,9 @@ function makeHarness(options: {
     companionAuthorIds: [COMPANION_AUTHOR_ID],
     ...(options.memoryWriter ? { memoryWriter: options.memoryWriter } : {}),
     onGateEvent: (event) => { gateEvents.push(event); },
-    ...(options.now ? { now: options.now } : {}),
+    // An hour after the fixture conversation: recent enough that a short
+    // session is held, not given its idle final pass (d5e0p.2).
+    now: options.now ?? (() => WATERMARK_END_MS + 60 * 60_000),
   });
   return { lane, entriesRef, sessionManager, synthesizer, watermarkStore, workset, scopeClassifier, gateEvents };
 }
@@ -442,7 +471,9 @@ describe('EpisodeSynthesisLane', () => {
       linkedArcs: [],
       heldBackEntryCount: 0,
       segmentationFailedChunkCount: 1,
+      segmentationFailure: 'segments must be contiguous; segment 1 leaves a gap or overlap',
     });
+    const clock = { now: WATERMARK_END_MS };
     const options = {
       sessionManager: harness.sessionManager,
       synthesizer: harness.synthesizer,
@@ -450,16 +481,26 @@ describe('EpisodeSynthesisLane', () => {
       workset,
       config: gateConfig(),
       scopeClassifier: harness.scopeClassifier,
+      now: () => clock.now,
     };
 
-    await expect(new EpisodeSynthesisLane(options).execute(timerAction())).rejects.toThrow(
-      'Episode synthesis drain failed for 1 session(s)',
-    );
+    // The failure is recorded on the workset row (bounded retry), not rethrown.
+    await expect(new EpisodeSynthesisLane(options).execute(timerAction())).resolves.toEqual({ outcome: 'complete' });
     expect(workset.checkpoint).not.toHaveBeenCalled();
     expect(await workset.enumerate('episodic_synthesis')).toEqual([
-      expect.objectContaining({ logicalSessionId: sessionId, checkpointRevision: 0 }),
+      expect.objectContaining({
+        logicalSessionId: sessionId,
+        checkpointRevision: 0,
+        failureCount: 1,
+        // iu7v0: the validator's root cause, not only the lane's wrapper, is durable.
+        lastFailure: expect.objectContaining({
+          message: 'Episode topic segmentation failed; unprocessed source remains retryable'
+            + ' <- caused by: segments must be contiguous; segment 1 leaves a gap or overlap',
+        }),
+      }),
     ]);
 
+    clock.now += 31 * 60_000;
     await expect(new EpisodeSynthesisLane(options).execute(timerAction())).resolves.toEqual({ outcome: 'complete' });
     expect(harness.synthesizer.run).toHaveBeenCalledTimes(2);
     expect(workset.checkpoint).toHaveBeenCalledOnce();
@@ -480,6 +521,7 @@ describe('EpisodeSynthesisLane', () => {
         linkedArcs: [],
       };
     });
+    const clock = { now: WATERMARK_END_MS };
     const firstLane = new EpisodeSynthesisLane({
       sessionManager: first.sessionManager,
       synthesizer: first.synthesizer,
@@ -487,11 +529,10 @@ describe('EpisodeSynthesisLane', () => {
       workset,
       config: gateConfig(),
       scopeClassifier: first.scopeClassifier,
+      now: () => clock.now,
     });
 
-    await expect(firstLane.execute(timerAction())).rejects.toThrow(
-      'Episode synthesis drain failed for 1 session(s)',
-    );
+    await expect(firstLane.execute(timerAction())).resolves.toEqual({ outcome: 'complete' });
     expect(first.synthesizer.run.mock.calls.map(([input]) => input.sessionId)).toEqual(sessionIds);
     expect(await workset.enumerate('episodic_synthesis')).toEqual([
       expect.objectContaining({
@@ -508,7 +549,12 @@ describe('EpisodeSynthesisLane', () => {
       workset,
       config: gateConfig(),
       scopeClassifier: restarted.scopeClassifier,
+      now: () => clock.now,
     });
+    // Inside the backoff window the held claim is left alone.
+    await restartedLane.execute(timerAction());
+    expect(restarted.synthesizer.run).not.toHaveBeenCalled();
+    clock.now += 31 * 60_000;
     await restartedLane.execute(timerAction());
 
     expect(workset.resumeClaim).toHaveBeenCalledWith({
@@ -652,6 +698,9 @@ describe('EpisodeSynthesisLane', () => {
       minRelevantTurns: 10,
     });
     expect(getRecentDiagnosticLogRecords()[0]?.message).toContain('below the relevance minimum');
+    // d5e0p.2: held, not checkpointed away — the revision stays eligible.
+    expect(harness.workset.releaseClaim).toHaveBeenCalledOnce();
+    expect(harness.workset.checkpoint).not.toHaveBeenCalled();
 
     // Synthesis never ran, so the watermark did not advance; the next period
     // sees the full accumulated chunk (9 held + 16 new = 25 relevant turns).
@@ -670,10 +719,50 @@ describe('EpisodeSynthesisLane', () => {
     });
   });
 
+  it('gives a short session its final pass once it has been idle (d5e0p.2)', async () => {
+    const clock = { now: WATERMARK_END_MS + 60 * 60_000 };
+    const harness = makeHarness({ entries: mentionEntries(4), now: () => clock.now });
+
+    await harness.lane.execute(timerAction());
+    expect(harness.synthesizer.run).not.toHaveBeenCalled();
+    expect(harness.workset.releaseClaim).toHaveBeenCalledOnce();
+
+    // No new turns arrive; once the newest turn is finalPassIdleMinutes old the
+    // session is synthesized and checkpointed instead of held forever.
+    clock.now = WATERMARK_END_MS + 4 * 60_000 + 180 * 60_000;
+    await harness.lane.execute(timerAction());
+    expect(harness.synthesizer.run).toHaveBeenCalledOnce();
+    expect(harness.synthesizer.run).toHaveBeenCalledWith(expect.objectContaining({ finalPass: true }));
+    expect(harness.workset.checkpoint).toHaveBeenCalledOnce();
+    expect(harness.gateEvents.at(-1)).toMatchObject({ outcome: 'processed', relevantTurnCount: 4 });
+  });
+
+  it('keeps a session eligible when synthesis held back an open trailing topic (d5e0p.2)', async () => {
+    const harness = makeHarness({ entries: mentionEntries(12) });
+    harness.synthesizer.run.mockResolvedValueOnce({
+      consideredEntries: 12,
+      candidateEpisodeCount: 1,
+      createdEpisodes: [],
+      skippedEpisodeIds: [],
+      linkedArcs: [],
+      heldBackEntryCount: 2,
+      segmentationFailedChunkCount: 0,
+    });
+
+    await harness.lane.execute(timerAction());
+
+    expect(harness.synthesizer.run).toHaveBeenCalledWith({ sessionId: 'discord:room-1', sourceMessageId: 'timer-1' });
+    expect(harness.workset.releaseClaim).toHaveBeenCalledOnce();
+    expect(harness.workset.checkpoint).not.toHaveBeenCalled();
+  });
+
   it('async group traffic around the companion produces no episode', async () => {
     const harness = makeHarness({ entries: bystanderEntries(20) });
 
     await harness.lane.execute(timerAction());
+    // Nothing relevant to episodize: terminal for this revision, never a final pass.
+    expect(harness.workset.checkpoint).toHaveBeenCalledOnce();
+    expect(harness.workset.releaseClaim).not.toHaveBeenCalled();
 
     expect(harness.synthesizer.run).not.toHaveBeenCalled();
     expect(harness.gateEvents[0]).toMatchObject({
@@ -908,15 +997,13 @@ describe('EpisodeSynthesisLane', () => {
       }],
     });
 
-    await expect(harness.lane.execute(timerAction())).rejects.toMatchObject({
-      message: 'Episode synthesis drain failed for 1 session(s)',
-      errors: [expect.objectContaining({ message: 'memory store unavailable' })],
-    });
+    await expect(harness.lane.execute(timerAction())).resolves.toEqual({ outcome: 'complete' });
 
     expect(memoryWriter.write).toHaveBeenCalledTimes(1);
     expect(harness.workset.recordFailure).toHaveBeenCalledWith(expect.objectContaining({
       stage: expect.stringMatching(/^behavioral_summary:/u),
       message: 'memory store unavailable',
+      retryAfterMs: expect.any(Number),
     }));
     expect(harness.workset.checkpoint).not.toHaveBeenCalled();
     expect(harness.gateEvents).toEqual([]);
@@ -975,6 +1062,7 @@ describe('EpisodeSynthesisLane', () => {
         };
       }),
     };
+    const clock = { now: WATERMARK_END_MS };
     const laneOptions = {
       sessionManager: {
         resolveSessionChannelId: (channelId: string) => channelId,
@@ -988,12 +1076,12 @@ describe('EpisodeSynthesisLane', () => {
       companionNames: [COMPANION_NAME],
       companionAuthorIds: [COMPANION_AUTHOR_ID],
       memoryWriter,
+      now: () => clock.now,
     };
     const firstLane = new EpisodeSynthesisLane({ ...laneOptions, synthesizer: firstSynthesizer });
 
-    await expect(firstLane.execute(timerAction())).rejects.toThrow(
-      'Episode synthesis drain failed for 1 session(s)',
-    );
+    await expect(firstLane.execute(timerAction())).resolves.toEqual({ outcome: 'complete' });
+    clock.now += 31 * 60_000;
 
     const restartedSynthesizer = { run: vi.fn() };
     const restartedLane = new EpisodeSynthesisLane({ ...laneOptions, synthesizer: restartedSynthesizer });
@@ -1063,6 +1151,7 @@ describe('EpisodeSynthesisLane', () => {
         };
       }),
     };
+    const clock = { now: WATERMARK_END_MS };
     const laneOptions = {
       sessionManager: {
         resolveSessionChannelId: (channelId: string) => channelId,
@@ -1076,11 +1165,11 @@ describe('EpisodeSynthesisLane', () => {
       companionNames: [COMPANION_NAME],
       companionAuthorIds: [COMPANION_AUTHOR_ID],
       memoryWriter,
+      now: () => clock.now,
     };
     const firstLane = new EpisodeSynthesisLane({ ...laneOptions, synthesizer: firstSynthesizer });
-    await expect(firstLane.execute(timerAction())).rejects.toThrow(
-      'Episode synthesis drain failed for 1 session(s)',
-    );
+    await expect(firstLane.execute(timerAction())).resolves.toEqual({ outcome: 'complete' });
+    clock.now += 31 * 60_000;
 
     // Nightly consolidation merged/superseded the arc before retry.
     arcSuperseded = true;
@@ -1202,7 +1291,7 @@ describe('EpisodeSynthesisLane', () => {
     expect(getRecentDiagnosticLogRecords()[0]?.message).toContain('retired or quarantined session');
   });
 
-  it('logs per-session failure details and preserves inner session errors in the thrown AggregateError (d5e0p.4)', async () => {
+  it('logs and durably records per-session failure details without failing the drain (d5e0p.4 / d5e0p.3)', async () => {
     const sessionIds = ['discord:fail-a', 'discord:fail-b'];
     const workset = makeStatefulWorkset(sessionIds);
     const harness = makeHarness({ entries: mentionEntries(12), scope: 'direct' });
@@ -1219,14 +1308,7 @@ describe('EpisodeSynthesisLane', () => {
       scopeClassifier: harness.scopeClassifier,
     });
 
-    let caught: unknown;
-    try {
-      await lane.execute(timerAction());
-    } catch (error) {
-      caught = error;
-    }
-
-    expect(caught).toBeInstanceOf(AggregateError);
+    await expect(lane.execute(timerAction())).resolves.toEqual({ outcome: 'complete' });
     const records = getRecentDiagnosticLogRecords();
     const failureLogs = records.filter(record => record.message === 'Episode synthesis failed for session');
     expect(failureLogs).toHaveLength(2);
@@ -1241,10 +1323,38 @@ describe('EpisodeSynthesisLane', () => {
       }),
     ]));
 
-    const { toErrorMessage } = await import('../../../shared/utils/errors.js');
-    const serialized = toErrorMessage(caught);
-    expect(serialized).toContain('discord:fail-a/episode_synthesis: upstream rate limit');
-    expect(serialized).toContain('discord:fail-b/episode_synthesis: segmentation schema mismatch');
+    expect(workset.recordFailure).toHaveBeenCalledWith(expect.objectContaining({
+      logicalSessionId: 'discord:fail-a',
+      stage: 'episode_synthesis',
+      message: 'upstream rate limit',
+    }));
+    expect(workset.recordFailure).toHaveBeenCalledWith(expect.objectContaining({
+      logicalSessionId: 'discord:fail-b',
+      stage: 'episode_synthesis',
+      message: 'segmentation schema mismatch',
+    }));
+  });
+
+  it('rethrows only when the failure itself cannot be recorded', async () => {
+    const workset = makeStatefulWorkset(['discord:unrecordable']);
+    vi.mocked(workset.recordFailure).mockRejectedValueOnce(new Error('workset unavailable'));
+    const harness = makeHarness({ entries: mentionEntries(12), scope: 'direct' });
+    harness.synthesizer.run.mockRejectedValue(new Error('provider unavailable'));
+    const lane = new EpisodeSynthesisLane({
+      sessionManager: harness.sessionManager,
+      synthesizer: harness.synthesizer,
+      watermarkStore: harness.watermarkStore as never,
+      workset,
+      config: gateConfig(),
+      scopeClassifier: harness.scopeClassifier,
+    });
+
+    await expect(lane.execute(timerAction())).rejects.toMatchObject({
+      message: 'Episode synthesis drain failed for 1 session(s)',
+      errors: [expect.objectContaining({
+        message: 'Episode synthesis failure could not be recorded for discord:unrecordable',
+      })],
+    });
   });
 
   it('attributes behavioral summary writes to single counterparty contacts and companion_private for self-directed sessions (d5e0p.16)', async () => {

@@ -4,11 +4,16 @@ import {
   type ChannelGroupMemoryConfig,
   type GroupMemorySettings,
 } from '../../../system/config/group-memory-config.js';
+import type { GroupMemoryExtractionFailureRetryConfig } from '../../../system/config/scheduler-config.js';
+import { formatErrorCauseChain } from '../../../shared/utils/errors.js';
 import type { ObservedGroupExtractionOptions } from '../extraction.js';
 import type { ExtractionTriggerReason } from './types.js';
 import {
   buildGroupMemoryRangePlan,
+  isGroupMemoryFailureRetryDue,
+  type GroupMemoryFailedWatermarkSource,
   type GroupMemoryRangeChunk,
+  type GroupMemoryRangePlan,
   type GroupMemoryRangeSessionReader,
   type GroupMemoryWatermarkStorePort,
 } from './group-ranges.js';
@@ -32,7 +37,9 @@ export type ObservedGroupMemorySkipReason =
   | 'cooldown'
   | 'threshold_not_met'
   | 'extractor_rejected'
-  | 'extraction_failed';
+  | 'extraction_failed'
+  /** A failed range is waiting out its bounded retry backoff (d5e0p.15). */
+  | 'failure_backoff';
 
 export type ObservedGroupMemoryScheduleDecision =
   | {
@@ -54,6 +61,16 @@ export type ObservedGroupMemoryScheduleDecision =
     error?: string;
   };
 
+/** One recorded group-range failure under the bounded retry policy (d5e0p.15). */
+export interface GroupMemoryRangeFailureEvent {
+  channelId: string;
+  attemptCount: number;
+  maxAttempts: number;
+  /** This failure exhausted the attempt budget; timed retries stop. */
+  terminal: boolean;
+  timestamp: number;
+}
+
 export interface ObservedGroupMemoryExtractorPort {
   extractObservedGroupRange(options: ObservedGroupExtractionOptions): Promise<boolean>;
   getPendingExtractionPromise?(channelId: string): Promise<void> | null;
@@ -63,8 +80,11 @@ export interface ObservedGroupMemorySchedulerOptions {
   groupMemory?: GroupMemorySettings;
   channelGroupMemory?: ChannelGroupMemoryConfig;
   sessionReader: GroupMemoryRangeSessionReader & GroupMemorySessionReader;
-  watermarkStore: GroupMemoryWatermarkStorePort;
+  watermarkStore: GroupMemoryWatermarkStorePort & GroupMemoryFailedWatermarkSource;
   memoryExtractor: ObservedGroupMemoryExtractorPort;
+  /** scheduler.json groupMemoryExtraction.failureRetry. */
+  failureRetry: GroupMemoryExtractionFailureRetryConfig;
+  onRangeFailure?: (event: GroupMemoryRangeFailureEvent) => void;
   contactStore?: Pick<ContactStorePort, 'getByChannelIdentity'>;
   companionNames?: readonly string[];
   companionAuthorIds?: readonly string[];
@@ -72,12 +92,16 @@ export interface ObservedGroupMemorySchedulerOptions {
   estimateEntryTokens?: (entry: GroupMemoryRangeChunk['entries'][number]) => number;
 }
 
+const MINUTE_MS = 60_000;
+
 export class ObservedGroupMemoryScheduler {
   private readonly groupMemory?: GroupMemorySettings;
   private readonly channelGroupMemory?: ChannelGroupMemoryConfig;
   private readonly sessionReader: GroupMemoryRangeSessionReader & GroupMemorySessionReader;
-  private readonly watermarkStore: GroupMemoryWatermarkStorePort;
+  private readonly watermarkStore: GroupMemoryWatermarkStorePort & GroupMemoryFailedWatermarkSource;
   private readonly memoryExtractor: ObservedGroupMemoryExtractorPort;
+  private readonly failureRetry: GroupMemoryExtractionFailureRetryConfig;
+  private readonly onRangeFailure?: (event: GroupMemoryRangeFailureEvent) => void;
   private readonly contactStore?: Pick<ContactStorePort, 'getByChannelIdentity'>;
   private readonly companionNames: readonly string[];
   private readonly companionAuthorIds: readonly string[];
@@ -92,6 +116,11 @@ export class ObservedGroupMemoryScheduler {
     this.sessionReader = options.sessionReader;
     this.watermarkStore = options.watermarkStore;
     this.memoryExtractor = options.memoryExtractor;
+    if (options.failureRetry.maxAttempts < 1 || options.failureRetry.baseDelayMinutes < 1) {
+      throw new Error('ObservedGroupMemoryScheduler requires a positive failure retry policy');
+    }
+    this.failureRetry = options.failureRetry;
+    this.onRangeFailure = options.onRangeFailure;
     this.contactStore = options.contactStore;
     this.companionNames = options.companionNames ?? [];
     this.companionAuthorIds = options.companionAuthorIds ?? [];
@@ -174,13 +203,7 @@ export class ObservedGroupMemoryScheduler {
       };
     }
 
-    const plan = buildGroupMemoryRangePlan({
-      channelId: message.channelId,
-      sessionReader: this.sessionReader,
-      watermarkStore: this.watermarkStore,
-      settings,
-      ...(this.estimateEntryTokens ? { estimateEntryTokens: this.estimateEntryTokens } : {}),
-    });
+    const plan = this.planRange(message.channelId, settings);
     const chunk = plan.chunks[0];
     if (chunk === undefined) {
       return {
@@ -192,6 +215,20 @@ export class ObservedGroupMemoryScheduler {
     }
 
     const now = this.nowMs();
+    // A failing range honours its backoff for traffic-triggered attempts too,
+    // so a busy room cannot hammer a persistently failing extraction.
+    const backoffRemainingMs = plan.watermark.status === 'failed'
+      ? (plan.watermark.nextFailureRetryAt ?? 0) - now
+      : 0;
+    if (backoffRemainingMs > 0) {
+      return {
+        status: 'skipped',
+        channelId: message.channelId,
+        reason: 'failure_backoff',
+        watermarkLagMessageIds: plan.watermarkLagMessageIds,
+        cooldownRemainingMs: backoffRemainingMs,
+      };
+    }
     if (!this.firstPendingObservedAtByChannel.has(message.channelId)) {
       this.firstPendingObservedAtByChannel.set(message.channelId, now);
     }
@@ -227,9 +264,79 @@ export class ObservedGroupMemoryScheduler {
       }
     }
 
+    return await this.extractChunk(message.channelId, triggerReason, plan, chunk, settings, now);
+  }
+
+  /**
+   * Channels whose failed range is due for a bounded timed retry (d5e0p.15).
+   * Legacy failed records without retry state are due immediately.
+   */
+  listDueFailureRetries(): string[] {
+    const now = this.nowMs();
+    return this.watermarkStore.listFailed()
+      .filter(record => isGroupMemoryFailureRetryDue(record, now))
+      .filter(record => this.resolveSettingsForChannel(record.channelId).enabled)
+      .map(record => record.channelId);
+  }
+
+  /**
+   * Timed retry of a channel's failed range without new traffic. The range is
+   * re-planned from the watermark (not replayed from the stored span) and run
+   * as backlog recovery. Channel classification is not re-run: a failed group
+   * watermark exists only for a channel already classified as a group room,
+   * and the retry has no observed message to classify.
+   */
+  async retryFailedRange(channelId: string): Promise<ObservedGroupMemoryScheduleDecision> {
+    const settings = this.resolveSettingsForChannel(channelId);
+    if (!settings.enabled) {
+      return { status: 'skipped', channelId, reason: 'disabled' };
+    }
+    if (this.memoryExtractor.getPendingExtractionPromise?.(channelId)) {
+      return { status: 'skipped', channelId, reason: 'in_flight' };
+    }
+    const plan = this.planRange(channelId, settings);
+    const now = this.nowMs();
+    if (!isGroupMemoryFailureRetryDue(plan.watermark, now)) {
+      return {
+        status: 'skipped',
+        channelId,
+        reason: 'failure_backoff',
+        watermarkLagMessageIds: plan.watermarkLagMessageIds,
+      };
+    }
+    const chunk = plan.chunks[0];
+    if (chunk === undefined) {
+      return {
+        status: 'skipped',
+        channelId,
+        reason: 'no_backlog',
+        watermarkLagMessageIds: plan.watermarkLagMessageIds,
+      };
+    }
+    return await this.extractChunk(channelId, 'backlog_lag', plan, chunk, settings, now);
+  }
+
+  private planRange(channelId: string, settings: GroupMemorySettings): GroupMemoryRangePlan {
+    return buildGroupMemoryRangePlan({
+      channelId,
+      sessionReader: this.sessionReader,
+      watermarkStore: this.watermarkStore,
+      settings,
+      ...(this.estimateEntryTokens ? { estimateEntryTokens: this.estimateEntryTokens } : {}),
+    });
+  }
+
+  private async extractChunk(
+    channelId: string,
+    triggerReason: ObservedGroupMemoryTriggerReason,
+    plan: GroupMemoryRangePlan,
+    chunk: GroupMemoryRangeChunk,
+    settings: GroupMemorySettings,
+    now: number,
+  ): Promise<ObservedGroupMemoryScheduleDecision> {
     try {
       const accepted = await this.memoryExtractor.extractObservedGroupRange({
-        channelId: message.channelId,
+        channelId,
         triggerReason,
         recoveredEntries: chunk.entries,
         groupWriteCaps: settings.writeCaps,
@@ -238,23 +345,23 @@ export class ObservedGroupMemoryScheduler {
       if (!accepted) {
         return {
           status: 'skipped',
-          channelId: message.channelId,
+          channelId,
           reason: 'extractor_rejected',
           watermarkLagMessageIds: plan.watermarkLagMessageIds,
         };
       }
       this.watermarkStore.markProcessed({
-        channelId: message.channelId,
+        channelId,
         startMessageId: chunk.spanStartMessageId,
         endMessageId: chunk.spanEndMessageId,
         entryCount: chunk.newEntryCount,
         recordedAt: now,
       });
-      this.lastScheduledAtByChannel.set(message.channelId, now);
-      this.firstPendingObservedAtByChannel.delete(message.channelId);
+      this.lastScheduledAtByChannel.set(channelId, now);
+      this.firstPendingObservedAtByChannel.delete(channelId);
       return {
         status: 'scheduled',
-        channelId: message.channelId,
+        channelId,
         triggerReason,
         spanStartMessageId: chunk.spanStartMessageId,
         spanEndMessageId: chunk.spanEndMessageId,
@@ -263,20 +370,38 @@ export class ObservedGroupMemoryScheduler {
         hasDeferredBacklog: plan.hasDeferredBacklog,
       };
     } catch (error) {
+      // The extractor wraps its root cause (ExtractionIntegrityError.cause);
+      // keep the whole chain so the durable record outlives pod logs.
+      const errorText = formatErrorCauseChain(error);
+      const { maxAttempts, baseDelayMinutes } = this.failureRetry;
+      const attemptCount = (plan.watermark.consecutiveFailureCount ?? 0) + 1;
+      const backoffExponent = Math.min(attemptCount, maxAttempts) - 1;
       this.watermarkStore.markFailed({
-        channelId: message.channelId,
+        channelId,
         startMessageId: chunk.spanStartMessageId,
         endMessageId: chunk.spanEndMessageId,
         entryCount: chunk.newEntryCount,
         recordedAt: now,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorText,
+        retry: {
+          consecutiveFailureCount: attemptCount,
+          nextRetryAt: now + baseDelayMinutes * MINUTE_MS * 2 ** backoffExponent,
+          exhausted: attemptCount >= maxAttempts,
+        },
+      });
+      this.onRangeFailure?.({
+        channelId,
+        attemptCount,
+        maxAttempts,
+        terminal: attemptCount === maxAttempts,
+        timestamp: now,
       });
       return {
         status: 'skipped',
-        channelId: message.channelId,
+        channelId,
         reason: 'extraction_failed',
         watermarkLagMessageIds: plan.watermarkLagMessageIds,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorText,
       };
     }
   }

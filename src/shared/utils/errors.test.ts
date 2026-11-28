@@ -1,7 +1,36 @@
 import { describe, expect, it } from 'vitest';
-import { abortError, formatErrorSummary, toError, toErrorMessage } from './errors.js';
+import {
+  abortError,
+  formatErrorCauseChain,
+  formatErrorSummary,
+  toError,
+  toErrorMessage,
+} from './errors.js';
 
 describe('error helpers', () => {
+  it('formats a wrapper error with its root cause chain', () => {
+    const root = new Error('duplicate key value violates unique constraint');
+    const middle = new Error('episode claim conflict', { cause: root });
+    const wrapper = new Error('Extraction orchestration failed', { cause: middle });
+
+    expect(formatErrorCauseChain(wrapper)).toBe(
+      'Extraction orchestration failed <- caused by: episode claim conflict'
+        + ' <- caused by: duplicate key value violates unique constraint',
+    );
+    expect(formatErrorCauseChain('plain')).toBe('plain');
+  });
+
+  it('stops at a cyclic cause chain and keeps aggregate inner errors visible', () => {
+    const cyclic = new Error('outer');
+    const inner = new Error('inner', { cause: cyclic });
+    Object.defineProperty(cyclic, 'cause', { value: inner });
+    expect(formatErrorCauseChain(cyclic)).toBe('outer <- caused by: inner');
+
+    const aggregate = new AggregateError([new Error('provider 503')], 'drain failed');
+    expect(formatErrorCauseChain(new Error('wrapper', { cause: aggregate })))
+      .toBe('wrapper <- caused by: drain failed [provider 503]');
+  });
+
   it('preserves Error instances and normalizes non-Error values', () => {
     const existing = new TypeError('typed failure');
 

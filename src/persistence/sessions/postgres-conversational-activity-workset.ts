@@ -7,9 +7,11 @@ import {
   type ConversationalActivityFailureInput,
   type ConversationalActivityPurpose,
   type ConversationalActivityResumeInput,
+  type ConversationalActivitySessionInput,
   type ConversationalActivityStageCheckpointInput,
   type ConversationalActivityWorkItem,
-  type ConversationalActivityWorksetPort,
+  type QuarantinedConversationalActivityWorkItem,
+  type RecoverableConversationalActivityWorksetPort,
 } from '../../core/session/conversational-activity-workset.js';
 import type { ProcessableConversationKind } from '../../core/session/conversational-activity.js';
 import { queryRows } from '../postgres.js';
@@ -27,6 +29,13 @@ interface WorkItemRow extends QueryResultRow {
   failed_stage: string | null;
   failure_message: string | null;
   failed_at_ms: number | string | null;
+  failure_count: number | string | null;
+  retry_after_ms: number | string | null;
+}
+
+interface QuarantinedWorkItemRow extends WorkItemRow {
+  quarantined_revision: number | string;
+  quarantined_at_ms: number | string;
 }
 
 const VALID_PURPOSES = new Set<string>(CONVERSATIONAL_ACTIVITY_PURPOSES);
@@ -93,6 +102,12 @@ function mapWorkItem(row: WorkItemRow): ConversationalActivityWorkItem {
       failedAtMs: failedAtMs as number,
     }
     : undefined;
+  const failureCount = row.failure_count === null
+    ? 0
+    : requireRevision(row.failure_count, 'failureCount', true);
+  const retryAfterMs = row.retry_after_ms === null
+    ? undefined
+    : requireRevision(row.retry_after_ms, 'retryAfterMs', true);
   return {
     purpose: requirePurpose(row.purpose),
     logicalSessionId: requireText(row.logical_session_id, 'logicalSessionId'),
@@ -104,8 +119,28 @@ function mapWorkItem(row: WorkItemRow): ConversationalActivityWorkItem {
     ...(row.claimed_by === null ? {} : { claimantId: requireText(row.claimed_by, 'claimantId') }),
     ...(claimedAtMs === undefined ? {} : { claimedAtMs }),
     ...(lastFailure ? { lastFailure } : {}),
+    ...(failureCount > 0 ? { failureCount } : {}),
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
   };
 }
+
+function mapQuarantinedWorkItem(row: QuarantinedWorkItemRow): QuarantinedConversationalActivityWorkItem {
+  return {
+    ...mapWorkItem(row),
+    quarantinedRevision: requireRevision(row.quarantined_revision, 'quarantinedRevision'),
+    quarantinedAtMs: requireRevision(row.quarantined_at_ms, 'quarantinedAtMs', true),
+  };
+}
+
+/** Every work-item read selects the same state columns. */
+const STATE_COLUMNS = `
+        state.claimed_by,
+        state.claimed_at_ms,
+        state.failed_stage,
+        state.failure_message,
+        state.failed_at_ms,
+        state.failure_count,
+        state.retry_after_ms`;
 
 function mapClaimedWorkItem(row: WorkItemRow): ClaimedConversationalActivityWorkItem {
   const item = mapWorkItem(row);
@@ -119,7 +154,7 @@ function mapClaimedWorkItem(row: WorkItemRow): ClaimedConversationalActivityWork
   };
 }
 
-export class PostgresConversationalActivityWorkset implements ConversationalActivityWorksetPort {
+export class PostgresConversationalActivityWorkset implements RecoverableConversationalActivityWorksetPort {
   constructor(
     private readonly pool: Pool,
     private readonly flushActivityWrites: () => Promise<void>,
@@ -147,17 +182,16 @@ export class PostgresConversationalActivityWorkset implements ConversationalActi
         latest.activity_kind,
         latest.occurred_at_ms,
         COALESCE(state.checkpoint_revision, 0) AS checkpoint_revision,
-        COALESCE(state.completed_stages, '[]'::jsonb) AS completed_stages,
-        state.claimed_by,
-        state.claimed_at_ms,
-        state.failed_stage,
-        state.failure_message,
-        state.failed_at_ms
+        COALESCE(state.completed_stages, '[]'::jsonb) AS completed_stages,${STATE_COLUMNS}
       FROM latest_activity AS latest
       LEFT JOIN session_conversational_workset AS state
         ON state.purpose = $1
        AND state.logical_session_id = latest.logical_session_id
       WHERE latest.revision > COALESCE(state.checkpoint_revision, 0)
+        AND (
+          state.quarantined_revision IS NULL
+          OR latest.revision > state.quarantined_revision
+        )
       ORDER BY latest.logical_session_id ASC
     `, [normalizedPurpose]);
     return rows.map(mapWorkItem);
@@ -202,12 +236,20 @@ export class PostgresConversationalActivityWorkset implements ConversationalActi
           completed_stages = '[]'::jsonb,
           failed_stage = NULL,
           failure_message = NULL,
-          failed_at_ms = NULL
+          failed_at_ms = NULL,
+          failure_count = 0,
+          retry_after_ms = NULL,
+          quarantined_revision = NULL,
+          quarantined_at_ms = NULL
         WHERE session_conversational_workset.checkpoint_revision < EXCLUDED.claimed_revision
           AND session_conversational_workset.claimed_by IS NULL
+          AND (
+            session_conversational_workset.quarantined_revision IS NULL
+            OR EXCLUDED.claimed_revision > session_conversational_workset.quarantined_revision
+          )
         RETURNING purpose, logical_session_id, checkpoint_revision,
           claimed_revision, claimed_by, claimed_at_ms, completed_stages,
-          failed_stage, failure_message, failed_at_ms
+          failed_stage, failure_message, failed_at_ms, failure_count, retry_after_ms
       )
       SELECT
         claimed.purpose,
@@ -221,7 +263,9 @@ export class PostgresConversationalActivityWorkset implements ConversationalActi
         claimed.claimed_at_ms,
         claimed.failed_stage,
         claimed.failure_message,
-        claimed.failed_at_ms
+        claimed.failed_at_ms,
+        claimed.failure_count,
+        claimed.retry_after_ms
       FROM claimed
       JOIN latest_activity AS latest ON latest.revision = claimed.claimed_revision
     `, [purpose, logicalSessionId, revision, claimantId, claimedAtMs]);
@@ -243,12 +287,7 @@ export class PostgresConversationalActivityWorkset implements ConversationalActi
         activity.activity_kind,
         activity.occurred_at_ms,
         state.checkpoint_revision,
-        state.completed_stages,
-        state.claimed_by,
-        state.claimed_at_ms,
-        state.failed_stage,
-        state.failure_message,
-        state.failed_at_ms
+        state.completed_stages,${STATE_COLUMNS}
       FROM session_conversational_workset AS state
       JOIN session_conversational_activity AS activity
         ON activity.logical_session_id = state.logical_session_id
@@ -279,6 +318,7 @@ export class PostgresConversationalActivityWorkset implements ConversationalActi
           failed_stage = NULL,
           failure_message = NULL,
           failed_at_ms = NULL,
+          retry_after_ms = NULL,
           updated_at_ms = $6
       WHERE purpose = $1
         AND logical_session_id = $2
@@ -299,18 +339,23 @@ export class PostgresConversationalActivityWorkset implements ConversationalActi
     const stage = requireText(input.stage, 'stage');
     const message = requireText(input.message, 'failureMessage');
     const failedAtMs = requireRevision(this.now(), 'failedAtMs', true);
+    const retryAfterMs = input.retryAfterMs === undefined
+      ? null
+      : requireRevision(input.retryAfterMs, 'retryAfterMs', true);
     const result = await this.pool.query(`
       UPDATE session_conversational_workset
       SET failed_stage = $5,
           failure_message = $6,
           failed_at_ms = $7,
+          failure_count = failure_count + 1,
+          retry_after_ms = $8,
           updated_at_ms = $7
       WHERE purpose = $1
         AND logical_session_id = $2
         AND claimed_revision = $3
         AND claimed_by = $4
         AND checkpoint_revision < $3
-    `, [purpose, logicalSessionId, revision, claimantId, stage, message, failedAtMs]);
+    `, [purpose, logicalSessionId, revision, claimantId, stage, message, failedAtMs, retryAfterMs]);
     if (result.rowCount !== 1) {
       throw new Error('Conversational activity failure does not match an active claim');
     }
@@ -332,6 +377,8 @@ export class PostgresConversationalActivityWorkset implements ConversationalActi
           failed_stage = NULL,
           failure_message = NULL,
           failed_at_ms = NULL,
+          failure_count = 0,
+          retry_after_ms = NULL,
           updated_at_ms = $5
       WHERE purpose = $1
         AND logical_session_id = $2
@@ -341,6 +388,97 @@ export class PostgresConversationalActivityWorkset implements ConversationalActi
     `, [purpose, logicalSessionId, revision, claimantId, updatedAtMs]);
     if (result.rowCount !== 1) {
       throw new Error('Conversational activity checkpoint does not match an active claim');
+    }
+  }
+
+  async releaseClaim(input: ConversationalActivityCheckpointInput): Promise<void> {
+    await this.endClaimWithoutCheckpoint(input, 'release');
+  }
+
+  async quarantineClaim(input: ConversationalActivityCheckpointInput): Promise<void> {
+    await this.endClaimWithoutCheckpoint(input, 'quarantine');
+  }
+
+  async listQuarantined(
+    purpose: ConversationalActivityPurpose,
+  ): Promise<QuarantinedConversationalActivityWorkItem[]> {
+    const normalizedPurpose = requirePurpose(purpose);
+    const rows = await queryRows<QuarantinedWorkItemRow>(this.pool, `
+      SELECT
+        state.purpose,
+        state.logical_session_id,
+        state.quarantined_revision AS revision,
+        activity.activity_kind,
+        activity.occurred_at_ms,
+        state.checkpoint_revision,
+        state.completed_stages,${STATE_COLUMNS},
+        state.quarantined_revision,
+        state.quarantined_at_ms
+      FROM session_conversational_workset AS state
+      JOIN session_conversational_activity AS activity
+        ON activity.logical_session_id = state.logical_session_id
+       AND activity.message_revision = state.quarantined_revision
+      WHERE state.purpose = $1
+        AND state.quarantined_revision IS NOT NULL
+      ORDER BY state.quarantined_at_ms ASC, state.logical_session_id ASC
+    `, [normalizedPurpose]);
+    return rows.map(mapQuarantinedWorkItem);
+  }
+
+  async releaseQuarantine(input: ConversationalActivitySessionInput): Promise<boolean> {
+    const purpose = requirePurpose(input.purpose);
+    const logicalSessionId = requireText(input.logicalSessionId, 'logicalSessionId');
+    const updatedAtMs = requireRevision(this.now(), 'updatedAtMs', true);
+    const result = await this.pool.query(`
+      UPDATE session_conversational_workset
+      SET quarantined_revision = NULL,
+          quarantined_at_ms = NULL,
+          failure_count = 0,
+          retry_after_ms = NULL,
+          failed_stage = NULL,
+          failure_message = NULL,
+          failed_at_ms = NULL,
+          updated_at_ms = $3
+      WHERE purpose = $1
+        AND logical_session_id = $2
+        AND quarantined_revision IS NOT NULL
+    `, [purpose, logicalSessionId, updatedAtMs]);
+    return result.rowCount === 1;
+  }
+
+  /**
+   * Give an active claim back without advancing `checkpoint_revision`. A
+   * release leaves the session eligible for the next drain; a quarantine parks
+   * it at the claimed revision (keeping the recorded failure visible) until
+   * newer activity or an operator release.
+   */
+  private async endClaimWithoutCheckpoint(
+    input: ConversationalActivityCheckpointInput,
+    mode: 'release' | 'quarantine',
+  ): Promise<void> {
+    const purpose = requirePurpose(input.purpose);
+    const logicalSessionId = requireText(input.logicalSessionId, 'logicalSessionId');
+    const revision = requireRevision(input.revision, 'revision');
+    const claimantId = requireText(input.claimantId, 'claimantId');
+    const updatedAtMs = requireRevision(this.now(), 'updatedAtMs', true);
+    const quarantine = mode === 'quarantine';
+    const result = await this.pool.query(`
+      UPDATE session_conversational_workset
+      SET claimed_revision = NULL,
+          claimed_by = NULL,
+          claimed_at_ms = NULL,
+          retry_after_ms = NULL,
+          quarantined_revision = CASE WHEN $6 THEN claimed_revision ELSE NULL END,
+          quarantined_at_ms = CASE WHEN $6 THEN $5::bigint ELSE NULL END,
+          updated_at_ms = $5
+      WHERE purpose = $1
+        AND logical_session_id = $2
+        AND claimed_revision = $3
+        AND claimed_by = $4
+        AND checkpoint_revision < $3
+    `, [purpose, logicalSessionId, revision, claimantId, updatedAtMs, quarantine]);
+    if (result.rowCount !== 1) {
+      throw new Error(`Conversational activity ${mode} does not match an active claim`);
     }
   }
 }

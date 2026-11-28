@@ -198,6 +198,22 @@ const HEALTH_EVENT_CODES = [
    * tells an operator the channel is down.
    */
   'channel_surface_disabled', // psfn-framework-6cs5j
+  /**
+   * One unit of a durable memory pipeline (an episode-synthesis session, a
+   * group-memory extraction range) failed and its failure was recorded with a
+   * bounded retry (psfn-framework-d5e0p.3 / d5e0p.15). Grouped by a digest of
+   * the PIPELINE, so a pipeline that keeps failing accumulates into one episode
+   * in the background-failure detector. The failure text stays on the durable
+   * workset/watermark record and in the agent log.
+   */
+  'memory_pipeline_failed', // psfn-framework-d5e0p.3
+  /**
+   * That unit exhausted its owner-file attempt cap and was quarantined: it no
+   * longer retries on its own, its unprocessed source is kept, and it waits for
+   * newer activity or an operator release. A standalone incident keyed per
+   * unit, so each quarantined session or channel range is one incident.
+   */
+  'memory_pipeline_quarantined', // psfn-framework-d5e0p.3
 ] as const;
 
 export type HealthEventCode = typeof HEALTH_EVENT_CODES[number];

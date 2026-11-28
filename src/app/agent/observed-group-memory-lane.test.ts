@@ -31,7 +31,11 @@ const skipped = (channelId: string): ObservedGroupMemoryScheduleDecision => ({
 function lane(observe: (message: SubstrateMessage) => Promise<ObservedGroupMemoryScheduleDecision>) {
   const audit = { append: vi.fn() };
   const log = { warn: vi.fn() };
-  const scheduler = { observeMessage: vi.fn(observe) };
+  const scheduler = {
+    observeMessage: vi.fn(observe),
+    listDueFailureRetries: vi.fn((): string[] => []),
+    retryFailedRange: vi.fn(async (channelId: string) => skipped(channelId)),
+  };
   return { lane: new ObservedGroupMemoryLane({ scheduler, audit, log }), scheduler, audit, log };
 }
 

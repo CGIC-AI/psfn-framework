@@ -26,7 +26,7 @@ import type { DreamMeaningPass } from '../../faculties/memory/episodic/dream-mea
 import type { SleeptimeWikiPassPort } from '../../shared/contracts/wiki-context.js';
 import type { AutomataClassLifecycleRuntime } from '../../faculties/automata/bus/class-lifecycle.js';
 import type { NearTurnMemoryScopeClassifierPort } from '../../faculties/memory/near-turn-memory-lane.js';
-import type { ConversationalActivityWorksetPort } from '../session/conversational-activity-workset.js';
+import type { RecoverableConversationalActivityWorksetPort } from '../session/conversational-activity-workset.js';
 import type { FleetMaintenanceCoordinator } from './fleet-maintenance-coordinator.js';
 import type { FleetSlotStagger } from './types.js';
 import type { ProactiveOutboundDispatcher } from '../intention/proactive-outbound.js';
@@ -129,7 +129,7 @@ export interface ReflectionRuntimeOptions {
     SessionManager,
     'getConversationEvidenceWindow' | 'recordSystemMessage' | 'recordAssistantMessage'
   >>;
-  conversationalActivityWorkset?: ConversationalActivityWorksetPort;
+  conversationalActivityWorkset?: RecoverableConversationalActivityWorksetPort;
   emotionState?: { getState(): EmotionStateSnapshot };
   contactStore?: Pick<ContactStorePort, 'getById' | 'getEmotionalSnapshot' | 'getEmotionalTimeSeries'>
     & Partial<Pick<

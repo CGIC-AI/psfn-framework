@@ -60,6 +60,10 @@ const COUNTED_FAILURE_CODES: readonly HealthEventCode[] = [
   // channel failing its bounded retries becomes one episode that closes once
   // the channel recovers and its observations age out of the window.
   'channel_surface_failed',
+  // psfn-framework-d5e0p.3 / d5e0p.15: grouped by a digest of the memory
+  // PIPELINE, so episode synthesis or group extraction failing session after
+  // session becomes one episode rather than one incident per session.
+  'memory_pipeline_failed',
 ];
 
 interface FailureGroup {

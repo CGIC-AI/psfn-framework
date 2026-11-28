@@ -1,6 +1,7 @@
 import type { ChannelType } from '../../../shared/contracts/runtime.js';
 import { inferSessionChannelType } from '../../../core/session/session-id.js';
 import type { SessionEntry } from '../../../core/session/types.js';
+import { formatErrorCauseChain } from '../../../shared/utils/errors.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import {
   type ChannelGroupMemoryConfig,
@@ -323,7 +324,8 @@ export class GroupMemoryBackfillRunner {
           action: 'processed',
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        // Keep the wrapped root cause (ExtractionIntegrityError.cause), d5e0p.15.
+        const message = formatErrorCauseChain(error);
         watermarkAfter = this.watermarkStore.markFailed({
           channelId,
           startMessageId: chunk.spanStartMessageId,

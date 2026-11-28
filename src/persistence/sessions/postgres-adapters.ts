@@ -12,7 +12,7 @@ import { POSTGRES_TRANSCRIPT_MIGRATIONS } from '../postgres/migrations.js';
 import type { SessionArchivePort } from '../journals/journal/port.js';
 import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
 import { isCogSecTombstoneSessionEntry } from '../../core/cogsec/tombstones.js';
-import type { ConversationalActivityWorksetPort } from '../../core/session/conversational-activity-workset.js';
+import type { RecoverableConversationalActivityWorksetPort } from '../../core/session/conversational-activity-workset.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type { RedactionProjectionDriftObserver } from '../../shared/contracts/projection-drift.js';
@@ -123,7 +123,7 @@ export interface PostgresSessionAdapters {
   transcriptSearch: KeywordSearchableTranscriptProjection;
   turnRecordStore: TurnRecordStorePort;
   turnRecordEligibilityFence: TurnRecordEligibilityFencePort;
-  conversationalActivityWorkset: ConversationalActivityWorksetPort;
+  conversationalActivityWorkset: RecoverableConversationalActivityWorksetPort;
   /** Production exact-purge seam; deliberately excludes the testing purge port. */
   exactSessionProjection: {
     pool: Pool;

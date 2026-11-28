@@ -479,6 +479,19 @@ export interface EventMap {
     minRelevantTurns: number;
     timestamp: number;
   };
+  // One durably recorded failure of a memory pipeline unit (psfn-framework-
+  // d5e0p.3 / d5e0p.15): an episode-synthesis session or a group-memory
+  // extraction range. `subjectId` is the session or channel id and never leaves
+  // this process unhashed; the failure text stays on the durable record.
+  // `terminal` marks the attempt that exhausted the owner-file cap.
+  'memory.pipeline.failure': {
+    pipeline: 'episode_synthesis' | 'group_extraction';
+    subjectId: string;
+    attemptCount: number;
+    maxAttempts: number;
+    terminal: boolean;
+    timestamp: number;
+  };
   // Contextual topic-cutting outcome per gated chunk (E5.4). A malformed
   // segmentation proposal fails closed: outcome 'failed', no episode written
   // for the chunk, nothing claimed, watermark not advanced past the chunk.
@@ -489,6 +502,9 @@ export interface EventMap {
     chunkEntryCount: number;
     segmentCount: number;
     heldBackEntryCount: number;
+    // iu7v0: deterministic repairs applied, or a corrective retry accepted.
+    repairs?: string[];
+    correctiveRetry?: boolean;
     error?: string;
     timestamp: number;
   };

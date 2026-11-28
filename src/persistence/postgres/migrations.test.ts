@@ -42,6 +42,10 @@ describe('Postgres live schema migrations', () => {
     expectAddColumn(sql, 'session_conversational_workset', 'failed_stage');
     expectAddColumn(sql, 'session_conversational_workset', 'failure_message');
     expectAddColumn(sql, 'session_conversational_workset', 'failed_at_ms');
+    expectAddColumn(sql, 'session_conversational_workset', 'failure_count');
+    expectAddColumn(sql, 'session_conversational_workset', 'retry_after_ms');
+    expectAddColumn(sql, 'session_conversational_workset', 'quarantined_revision');
+    expectAddColumn(sql, 'session_conversational_workset', 'quarantined_at_ms');
   });
 
   it('drops the retired Buzz recovery tables from the gateway schema idempotently', () => {

@@ -149,6 +149,8 @@ describe('reflection post-turn lane split (E5.2)', () => {
           maxEntriesPerEpisode: 14,
           minConversationalEntries: 2,
           minSingleEntryChars: 120,
+          sessionFailure: { maxAttempts: 5, retryBaseDelayMinutes: 60 },
+          finalPassIdleMinutes: 180,
         },
         episodicWatermarkStore: fromAny(episodicWatermarkStore),
         conversationalActivityWorkset: fromAny(conversationalActivityWorkset),

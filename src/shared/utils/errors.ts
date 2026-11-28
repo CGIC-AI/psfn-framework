@@ -79,6 +79,26 @@ export function formatErrorSummary(error: unknown): string {
   return String(error);
 }
 
+/**
+ * Formats an error together with its `cause` chain for durable failure
+ * records. A wrapper such as "Extraction orchestration failed" is useless once
+ * logs rotate; the record must carry the root cause it wraps. Each link reuses
+ * {@link toErrorMessage} (so AggregateError inner errors stay visible), cycles
+ * stop the walk, and the result keeps the aggregate total-length bound.
+ */
+export function formatErrorCauseChain(error: unknown): string {
+  const links: string[] = [];
+  const visited = new Set<unknown>();
+  let current: unknown = error;
+  while (current !== undefined && current !== null && !visited.has(current)) {
+    visited.add(current);
+    const message = toErrorMessage(current);
+    if (message && links.at(-1) !== message) links.push(message);
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return truncateText(links.join(' <- caused by: '), AGGREGATE_ERROR_TOTAL_CHARS);
+}
+
 // `name` may be an own property or inherited from a prototype (DOMException
 // defines a getter-only `name` on its prototype). An assignment is safe only
 // when the resolved property is a writable data property or an accessor with a

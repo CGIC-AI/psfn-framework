@@ -871,6 +871,7 @@ describe('group-room memory conformance', () => {
       sessionReader: makeReader(entries),
       watermarkStore: new FakeWatermarkStore(),
       memoryExtractor: extractor,
+      failureRetry: { maxAttempts: 6, baseDelayMinutes: 15, sweepIntervalMinutes: 5 },
       companionNames: ['Lyra'],
       nowMs: () => 1_000,
     });

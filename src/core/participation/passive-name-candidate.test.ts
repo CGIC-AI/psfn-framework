@@ -546,6 +546,7 @@ describe('PassiveNameCandidateBuilder connector topology (nfmdd)', () => {
         sessionReader: { getRecent: () => entries, getRange: () => [] },
         watermarkStore: {},
         memoryExtractor: {},
+        failureRetry: { maxAttempts: 6, baseDelayMinutes: 15, sweepIntervalMinutes: 5 },
         companionNames: [COMPANION_NAME],
         companionAuthorIds: [COMPANION_BOT_ID],
       }));

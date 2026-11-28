@@ -8,8 +8,16 @@ import { runEpisodicJudgment } from './judgment-runner.js';
  *
  * Deterministic pre-cuts (UTC day boundary, long-gap split, entry cap) remain
  * the outer bounds; within one gated chunk an LLM proposes contiguous topic
- * segments via schema-bound structured output. Parsing is fail-closed: any
- * schema violation throws, and the synthesizer writes nothing for that chunk.
+ * segments via schema-bound structured output.
+ *
+ * Parsing repairs only defects whose correction is unambiguous (iu7v0): an
+ * uncovered leading or trailing tail joins its adjacent segment, a final
+ * segment that runs past the chunk is clamped to it, an over-long label is
+ * cut to the label cap, and an "open" status on a non-final segment is closed
+ * (a later segment already started). Every repair is reported. Anything else
+ * (interior gaps or overlaps, missing labels, malformed JSON) gets one
+ * corrective retry that names the violation; a second violation fails closed
+ * and the synthesizer writes nothing for that chunk.
  */
 
 export type TopicSegmentStatus = 'closed' | 'open';
@@ -27,6 +35,36 @@ export interface TopicSegment {
    * back (not claimed, no episode) and roll into the next synthesis pass.
    */
   status: TopicSegmentStatus;
+}
+
+/** A deterministic correction applied to an otherwise valid proposal. */
+export type TopicSegmentRepair =
+  | 'leading_gap_extended'
+  | 'trailing_gap_extended'
+  | 'final_segment_clamped'
+  | 'topic_truncated'
+  | 'non_final_open_closed';
+
+export interface TopicSegmentProposal {
+  segments: TopicSegment[];
+  repairs: TopicSegmentRepair[];
+}
+
+export interface TopicSegmentationResult extends TopicSegmentProposal {
+  /** True when the first proposal was rejected and the corrective retry succeeded. */
+  correctiveRetry: boolean;
+}
+
+/**
+ * A model proposal that violates the segmentation schema in a way no
+ * deterministic repair can settle. Provider/transport errors are not this
+ * type: they propagate unchanged and never trigger the corrective retry.
+ */
+export class TopicSegmentationValidationError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'TopicSegmentationValidationError';
+  }
 }
 
 const MAX_TOPIC_LABEL_CHARS = 80;
@@ -68,84 +106,121 @@ export function formatSegmentationTranscript(entries: readonly SessionEntry[]): 
     .join('\n');
 }
 
+function invalid(message: string): TopicSegmentationValidationError {
+  return new TopicSegmentationValidationError(message);
+}
+
 function extractJsonObject(content: string): Record<string, unknown> {
   const start = content.indexOf('{');
   const end = content.lastIndexOf('}');
   if (start === -1 || end <= start) {
-    throw new Error('segmentation response contains no JSON object');
+    throw invalid('segmentation response contains no JSON object');
   }
-  const parsed: unknown = JSON.parse(content.slice(start, end + 1));
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content.slice(start, end + 1));
+  } catch (error) {
+    throw new TopicSegmentationValidationError('segmentation response JSON is malformed', { cause: error });
+  }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('segmentation response JSON is not an object');
+    throw invalid('segmentation response JSON is not an object');
   }
   return parsed as Record<string, unknown>;
 }
 
-function parseSegmentEntry(entry: unknown, entryCount: number, position: number): TopicSegment {
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+function parseSegmentEntry(
+  entry: unknown,
+  entryCount: number,
+  position: number,
+  isFinal: boolean,
+  repairs: Set<TopicSegmentRepair>,
+): TopicSegment {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-    throw new Error(`segment ${position} must be an object`);
+    throw invalid(`segment ${position} must be an object`);
   }
   const record = entry as Record<string, unknown>;
   const startIndex = record.start_index;
-  const endIndex = record.end_index;
-  if (typeof startIndex !== 'number' || !Number.isInteger(startIndex) || startIndex < 0 || startIndex >= entryCount) {
-    throw new Error(`segment ${position} start_index must be an integer in [0, ${entryCount - 1}]`);
+  const proposedEndIndex = record.end_index;
+  if (!isNonNegativeInteger(startIndex) || startIndex >= entryCount) {
+    throw invalid(`segment ${position} start_index must be an integer in [0, ${entryCount - 1}]`);
   }
-  if (typeof endIndex !== 'number' || !Number.isInteger(endIndex) || endIndex < 0 || endIndex >= entryCount) {
-    throw new Error(`segment ${position} end_index must be an integer in [0, ${entryCount - 1}]`);
+  if (!isNonNegativeInteger(proposedEndIndex)) {
+    throw invalid(`segment ${position} end_index must be an integer in [0, ${entryCount - 1}]`);
+  }
+  let endIndex = proposedEndIndex;
+  if (endIndex >= entryCount) {
+    if (!isFinal) {
+      throw invalid(`segment ${position} end_index must be an integer in [0, ${entryCount - 1}]`);
+    }
+    endIndex = entryCount - 1;
+    repairs.add('final_segment_clamped');
   }
   if (startIndex > endIndex) {
-    throw new Error(`segment ${position} start_index must not exceed end_index`);
+    throw invalid(`segment ${position} start_index must not exceed end_index`);
   }
-  const topic = typeof record.topic === 'string' ? record.topic.trim() : '';
-  if (!topic || topic.length > MAX_TOPIC_LABEL_CHARS) {
-    throw new Error(`segment ${position} topic must be a non-empty string up to ${MAX_TOPIC_LABEL_CHARS} chars`);
+  let topic = typeof record.topic === 'string' ? record.topic.replace(/\s+/gu, ' ').trim() : '';
+  if (!topic) {
+    throw invalid(`segment ${position} topic must be a non-empty string up to ${MAX_TOPIC_LABEL_CHARS} chars`);
   }
-  const status = record.status;
-  if (status !== 'closed' && status !== 'open') {
-    throw new Error(`segment ${position} status must be "closed" or "open"`);
+  if (topic.length > MAX_TOPIC_LABEL_CHARS) {
+    topic = topic.slice(0, MAX_TOPIC_LABEL_CHARS).trimEnd();
+    repairs.add('topic_truncated');
+  }
+  const proposedStatus = record.status;
+  if (proposedStatus !== 'closed' && proposedStatus !== 'open') {
+    throw invalid(`segment ${position} status must be "closed" or "open"`);
+  }
+  let status: TopicSegmentStatus = proposedStatus;
+  if (status === 'open' && !isFinal) {
+    status = 'closed';
+    repairs.add('non_final_open_closed');
   }
   return { startIndex, endIndex, topic, status };
 }
 
 /**
- * Schema-bound parse of the segmentation output. Fail closed: any violation
- * (non-contiguous cover, out-of-range indices, open non-final segment, bad
- * labels) throws — no partial acceptance for a malformed chunk proposal.
+ * Schema-bound parse of the segmentation output with deterministic repair of
+ * unambiguous boundary/label defects (see the module header). Any other
+ * violation throws {@link TopicSegmentationValidationError}.
  */
-export function parseTopicSegments(content: string, entryCount: number): TopicSegment[] {
+export function parseTopicSegments(content: string, entryCount: number): TopicSegmentProposal {
   if (!Number.isInteger(entryCount) || entryCount < 1) {
-    throw new Error('segmentation requires a non-empty chunk');
+    throw invalid('segmentation requires a non-empty chunk');
   }
   const raw = extractJsonObject(content);
   if (!Array.isArray(raw.segments) || raw.segments.length === 0) {
-    throw new Error('segmentation response must contain a non-empty segments array');
+    throw invalid('segmentation response must contain a non-empty segments array');
   }
-  const segments = raw.segments.map((entry, position) => parseSegmentEntry(entry, entryCount, position));
-  const [firstSegment, ...restSegments] = segments;
-  if (firstSegment === undefined) {
-    throw new Error('segmentation response must contain a non-empty segments array');
+  const repairs = new Set<TopicSegmentRepair>();
+  const lastPosition = raw.segments.length - 1;
+  const segments = raw.segments.map((entry, position) => (
+    parseSegmentEntry(entry, entryCount, position, position === lastPosition, repairs)
+  ));
+  const firstSegment = segments[0];
+  const lastSegment = segments[lastPosition];
+  if (firstSegment === undefined || lastSegment === undefined) {
+    throw invalid('segmentation response must contain a non-empty segments array');
   }
   if (firstSegment.startIndex !== 0) {
-    throw new Error('segments must start at entry index 0');
+    firstSegment.startIndex = 0;
+    repairs.add('leading_gap_extended');
   }
-
-  let previous = firstSegment;
-  for (const [index, segment] of restSegments.entries()) {
-    if (segment.startIndex !== previous.endIndex + 1) {
-      throw new Error(`segments must be contiguous; segment ${index + 1} leaves a gap or overlap`);
-    }
-    previous = segment;
-  }
-  if (previous.endIndex !== entryCount - 1) {
-    throw new Error(`segments must cover every entry through index ${entryCount - 1}`);
-  }
-  for (const [index, segment] of segments.slice(0, -1).entries()) {
-    if (segment.status === 'open') {
-      throw new Error(`segment ${index} is marked open but only the final segment may be open`);
+  for (let index = 1; index < segments.length; index += 1) {
+    const previous = segments[index - 1];
+    const segment = segments[index];
+    if (!previous || !segment || segment.startIndex !== previous.endIndex + 1) {
+      throw invalid(`segments must be contiguous; segment ${index} leaves a gap or overlap`);
     }
   }
-  return segments;
+  if (lastSegment.endIndex !== entryCount - 1) {
+    lastSegment.endIndex = entryCount - 1;
+    repairs.add('trailing_gap_extended');
+  }
+  return { segments, repairs: [...repairs] };
 }
 
 export interface TopicSegmentationRequest {
@@ -154,48 +229,84 @@ export interface TopicSegmentationRequest {
   entries: readonly SessionEntry[];
 }
 
+function correctiveRequestPrompt(
+  requestPrompt: string,
+  entryCount: number,
+  rejection: TopicSegmentationValidationError,
+): string {
+  return [
+    requestPrompt,
+    '',
+    `Your previous answer was rejected: ${rejection.message}.`,
+    `Return corrected segments JSON only. Cover every entry index from 0 through ${entryCount - 1}`
+      + ' exactly once, in order, with no gaps or overlaps, and give every segment a non-empty topic.',
+  ].join('\n');
+}
+
 /**
- * One schema-bound LLM call proposing topic boundaries inside one chunk.
- * Provider and parse errors propagate to the caller — the synthesizer owns
- * the fail-closed handling (typed error event, nothing claimed, watermark
- * not advanced past the chunk).
+ * Schema-bound LLM topic proposal for one chunk, with one corrective retry
+ * when the proposal violates the schema in a way repair cannot settle.
+ * Provider and transport errors propagate unchanged on either attempt; the
+ * synthesizer owns the fail-closed handling (typed event, nothing claimed,
+ * watermark not advanced past the chunk) and the lane bounds its retries.
  */
 export async function proposeTopicSegments(
   llmProvider: Pick<LLMProviderPort, 'complete'>,
   request: TopicSegmentationRequest,
   personaPreamble?: PersonaPreamblePort | null,
-): Promise<TopicSegment[]> {
+): Promise<TopicSegmentationResult> {
   if (request.entries.length === 0) {
-    throw new Error('segmentation requires a non-empty chunk');
+    throw invalid('segmentation requires a non-empty chunk');
   }
   const first = request.entries[0];
   const last = request.entries[request.entries.length - 1];
   if (first === undefined || last === undefined) {
-    throw new Error('segmentation requires a non-empty chunk');
+    throw invalid('segmentation requires a non-empty chunk');
   }
+  const entryCount = request.entries.length;
   const requestPrompt = [
     'Transcript chunk:',
     formatSegmentationTranscript(request.entries),
     '',
     'Return the segments JSON only.',
   ].join('\n');
+  const requestIdBase = `episode-segmentation:${request.sessionId}:${String(first.id)}-${String(last.id)}`;
 
   // E6.1: soft persona framing precedes the strict task instructions and JSON
   // schema; the schema/format sections stay byte-identical.
-  return runEpisodicJudgment({
+  const propose = (prompt: string, requestId: string) => runEpisodicJudgment({
     llmProvider,
     personaPreamble,
     personaSubsystem: 'topic_segmentation',
     systemPrompt: TOPIC_SEGMENTATION_SYSTEM_PROMPT,
-    requestPrompt,
+    requestPrompt: prompt,
     correlation: {
-      requestId: `episode-segmentation:${request.sessionId}:${String(first.id)}-${String(last.id)}`,
+      requestId,
       channelId: request.channelId,
       callType: 'memory',
       purpose: 'memory.episode_synthesis.segmentation',
       originType: 'memory',
       originStage: 'memory.episode_synthesis.topic_cutting',
     },
-    parse: content => parseTopicSegments(content, request.entries.length),
+    parse: content => parseTopicSegments(content, entryCount),
   });
+
+  try {
+    return { ...(await propose(requestPrompt, requestIdBase)), correctiveRetry: false };
+  } catch (error) {
+    if (!(error instanceof TopicSegmentationValidationError)) throw error;
+    try {
+      const corrected = await propose(
+        correctiveRequestPrompt(requestPrompt, entryCount, error),
+        `${requestIdBase}:corrective`,
+      );
+      return { ...corrected, correctiveRetry: true };
+    } catch (retryError) {
+      if (!(retryError instanceof TopicSegmentationValidationError)) throw retryError;
+      throw new TopicSegmentationValidationError(
+        `${retryError.message} (after one corrective retry; first rejection: ${error.message})`,
+        { cause: retryError },
+      );
+    }
+  }
 }

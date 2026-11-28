@@ -448,6 +448,32 @@ describe('retrieveEpisodicChains rolled-out session breadcrumbs', () => {
       .toEqual(['visible-latest', 'visible-older']);
   });
 
+  it('returns every independent ranked chain up to the cap when no breadcrumbs exist', async () => {
+    const store = makeStore();
+    for (const [id, day] of [['kiln-first', '05'], ['kiln-second', '06'], ['kiln-third', '07']] as const) {
+      await createEpisode(store, {
+        id,
+        title: `Kiln firing ${id}`,
+        landmark: `The kiln firing on day ${day}.`,
+        startedAt: `2026-06-${day}T18:00:00.000Z`,
+        endedAt: `2026-06-${day}T20:00:00.000Z`,
+      });
+    }
+
+    const chains = await retrieveEpisodicChains(store, {
+      contextText: 'kiln firing',
+      channelId: 'discord:current',
+      trustLevel: 'regular',
+      channelDisclosure: classifyChannelDisclosure('discord:current', { isDirectMessage: true }),
+      maxChains: 2,
+    });
+
+    // psfn-framework-ik47b.4: the breadcrumb merge once kept a single ranked
+    // chain whenever a turn had no rolled-out boundary.
+    expect(chains).toHaveLength(2);
+    expect(new Set(chains.map(chain => chain.rootEpisodeId)).size).toBe(2);
+  });
+
   it('fails closed when a rolled-out cutoff has no logical session binding', async () => {
     const store = makeStore();
     await createEpisode(store, {

@@ -34,6 +34,7 @@ import {
 } from './session-quarantine.js';
 import type {
   EpisodicLexicalSearchResult,
+  EpisodicQuarantineWithheld,
   EpisodicRetrievalChain,
   EpisodicRetrievalStore,
 } from './episodic-types.js';
@@ -85,6 +86,12 @@ export interface EpisodicRetrievalInput {
    * (psfn-framework-eoj3s.1 / ik47b.4).
    */
   sessionQuarantineFilter?: MemorySessionQuarantineFilter | null;
+  /**
+   * Receives each quarantined episode that would have matched as a root and
+   * each quarantined episode or arc the chain walk reached and removed, so
+   * callers can count withheld material without its contents (ik47b.4).
+   */
+  onQuarantineWithheld?: (withheld: EpisodicQuarantineWithheld) => void;
   /**
    * Receives the id of each candidate episode the visibility gate withholds
    * from this turn, so deliberate tool results can report a content-free
@@ -264,7 +271,15 @@ async function retrieveRankedEpisodicChains(
   const roots = episodes
     .map((episode) => parseEpisode(episode))
     .filter((episode) => {
-      if (isEpisodeQuarantined(quarantineFilter, episode)) return false;
+      if (isEpisodeQuarantined(quarantineFilter, episode)) {
+        if (
+          input.onQuarantineWithheld
+          && isRootCandidate(scoreEpisode(episode, queryTokens, normalizedQuery, input.scopeQuery))
+        ) {
+          input.onQuarantineWithheld({ kind: 'episode', id: episode.id });
+        }
+        return false;
+      }
       if (isEpisodeVisibleForTurn(episode, input)) return true;
       // Report only withheld episodes that would have matched the query.
       if (
@@ -370,6 +385,7 @@ export async function buildEpisodicChainFromRoot(
   const parsedRoot = parseEpisode(cloneEpisode(root));
   const quarantineFilter = input.sessionQuarantineFilter ?? null;
   if (isEpisodeQuarantined(quarantineFilter, parsedRoot)) {
+    input.onQuarantineWithheld?.({ kind: 'episode', id: parsedRoot.id });
     return null;
   }
   const rootVisibilityInput = { ...input, contextText: input.contextText ?? '' };
@@ -646,14 +662,20 @@ async function buildEpisodeChain(input: {
     const quarantineFilter = input.input.sessionQuarantineFilter ?? null;
     for (const arc of relatedArcs) {
       if (episodes.length >= input.maxEpisodesPerChain) break;
-      if (isEpisodeArcQuarantined(quarantineFilter, arc)) continue;
+      if (isEpisodeArcQuarantined(quarantineFilter, arc)) {
+        input.input.onQuarantineWithheld?.({ kind: 'arc', id: arc.id });
+        continue;
+      }
       const relatedEpisodeId = arc.sourceEpisodeId === current.episode.id
         ? arc.targetEpisodeId
         : arc.sourceEpisodeId;
       if (visited.has(relatedEpisodeId)) continue;
 
       const related = await resolveEpisode(input.store, input.episodeIndex, relatedEpisodeId, arc.id);
-      if (isEpisodeQuarantined(quarantineFilter, related)) continue;
+      if (isEpisodeQuarantined(quarantineFilter, related)) {
+        input.input.onQuarantineWithheld?.({ kind: 'episode', id: related.id });
+        continue;
+      }
       if (!isEpisodeVisibleForTurn(related, input.input)) continue;
       if (input.input.scopeQuery?.mode === 'only' && !episodeMatchesScopeQuery(related, input.input.scopeQuery)) {
         continue;

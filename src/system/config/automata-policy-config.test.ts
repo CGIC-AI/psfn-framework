@@ -1,6 +1,6 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CanonicalModelRegistry } from '../../shared/contracts/runtime.js';
 import {
@@ -9,6 +9,7 @@ import {
   saveAutomataPolicyConfig,
 } from './automata-policy-config.js';
 import { saveModelsConfig } from './models-config.js';
+import { migrateRequiredOwnerAdditions } from './required-owner-additions-migration.js';
 
 describe('Automata reviewer model owner reference', () => {
   let root: string;
@@ -57,5 +58,85 @@ describe('Automata reviewer model owner reference', () => {
     expect(readFileSync(join(root, 'models.json'), 'utf8')).toBe(before);
     saveAutomataPolicyConfig(root, policy(false, selected.id));
     expect(() => saveModelsConfig(root, registry)).not.toThrow();
+  });
+});
+
+describe('Automata reviewer seed change preserves owner selections (ik47b.13)', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'psfn-reviewer-owner-'));
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  const seedRegistry = (): CanonicalModelRegistry => JSON.parse(
+    readFileSync(new URL('../../../config/models.seed.json', import.meta.url), 'utf8'),
+  );
+
+  /** An owner installed before the Luna slot existed, bound to `reviewerModel`. */
+  function writeOwner(reviewerModel: string | null, extraSlot?: string): { models: string; automata: string } {
+    const registry = seedRegistry();
+    registry.models = registry.models.filter(entry => entry.id !== 'gpt-6-luna');
+    if (extraSlot) {
+      const extraction = registry.models.find(entry => entry.id === 'extraction')!;
+      registry.models.push({ ...extraction, id: extraSlot, rank: 70, purposes: [{ purpose: 'background', primary: false }] });
+    }
+    const automata = JSON.parse(JSON.stringify(loadAutomataPolicySeedDefaults())) as {
+      bus: { reviewer?: Record<string, unknown> };
+    };
+    if (reviewerModel === null) delete automata.bus.reviewer;
+    else automata.bus.reviewer = { ...automata.bus.reviewer, model: reviewerModel };
+    writeFileSync(join(root, 'models.json'), `${JSON.stringify(registry, null, 2)}\n`);
+    writeFileSync(join(root, 'automata-policy.json'), `${JSON.stringify(automata, null, 2)}\n`);
+    writeFileSync(join(root, 'settings.json'), `${JSON.stringify({}, null, 2)}\n`);
+    writeFileSync(
+      join(root, 'intake-policy.json'),
+      readFileSync(new URL('../../../config/intake-policy.seed.json', import.meta.url), 'utf8'),
+    );
+    return {
+      models: readFileSync(join(root, 'models.json'), 'utf8'),
+      automata: readFileSync(join(root, 'automata-policy.json'), 'utf8'),
+    };
+  }
+
+  function migrate(): void {
+    const options = { dataDir: root, seedDir: resolve('config'), apply: true };
+    migrateRequiredOwnerAdditions(options);
+    migrateRequiredOwnerAdditions(options);
+  }
+
+  it('resolves the fresh-install reviewer to the GPT-6 Luna OpenRouter slot', () => {
+    const registry = seedRegistry();
+    writeFileSync(join(root, 'models.json'), JSON.stringify(registry));
+    const seed = loadAutomataPolicySeedDefaults();
+    writeFileSync(join(root, 'automata-policy.json'), JSON.stringify(seed));
+
+    expect(loadAutomataPolicyConfig(root).bus.reviewer.model).toBe('gpt-6-luna');
+    expect(registry.models.find(entry => entry.id === 'gpt-6-luna')).toMatchObject({
+      apiKind: 'openai-completions',
+      identity: { provider: 'openrouter', model: 'openai/gpt-6-luna', source: { type: 'openrouter' } },
+    });
+  });
+
+  it.each([
+    ['a different selected slot', 'deepseek-v4-flash-0731', 'deepseek-v4-flash-0731'],
+    ['an explicitly nano-bound reviewer', 'gpt-5.4-nano', undefined],
+  ])('keeps %s byte-identical through load and required-owner migration', (_name, reviewerModel, extraSlot) => {
+    const before = writeOwner(reviewerModel, extraSlot);
+
+    migrate();
+
+    expect(readFileSync(join(root, 'models.json'), 'utf8')).toBe(before.models);
+    expect(readFileSync(join(root, 'automata-policy.json'), 'utf8')).toBe(before.automata);
+    expect(loadAutomataPolicyConfig(root).bus.reviewer.model).toBe(reviewerModel);
+    expect(before.models).not.toContain('gpt-6-luna');
+  });
+
+  it('fails closed on an owner without a reviewer block instead of resolving an absent seed slot', () => {
+    const before = writeOwner(null);
+
+    expect(() => loadAutomataPolicyConfig(root)).toThrow(/bus\.reviewer/);
+    expect(() => migrate()).toThrow(/bus\.reviewer/);
+    expect(readFileSync(join(root, 'models.json'), 'utf8')).toBe(before.models);
+    expect(readFileSync(join(root, 'automata-policy.json'), 'utf8')).toBe(before.automata);
   });
 });

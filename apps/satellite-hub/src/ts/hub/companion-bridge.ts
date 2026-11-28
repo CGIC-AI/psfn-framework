@@ -11,6 +11,7 @@ import type {
   TouchRegion,
   TouchStimulusKind,
 } from "../shared/protocol.js";
+import { TOOL_ACTIVITY_PHASES } from "../shared/protocol.js";
 import { canReceiveStreamingAudio } from "./embodied-session.js";
 
 export type CompanionEvent =
@@ -33,13 +34,6 @@ const APPROVAL_RESOLUTION_STATUSES: readonly ApprovalResolutionStatus[] = [
   "denied",
   "expired",
   "blocked",
-];
-
-const TOOL_ACTIVITY_PHASES: readonly ToolActivityPhase[] = [
-  "started",
-  "progress",
-  "completed",
-  "failed",
 ];
 
 export class CompanionRequestError extends Error {

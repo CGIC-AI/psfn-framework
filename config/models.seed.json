@@ -196,6 +196,24 @@
       "tuning": { "maxOutputTokens": 32768 }
     },
     {
+      "id": "gpt-6-luna",
+      "rank": 101,
+      "apiKind": "openai-completions",
+      "identity": {
+        "provider": "openrouter",
+        "model": "openai/gpt-6-luna",
+        "source": { "type": "openrouter" }
+      },
+      "purposes": [{ "purpose": "chat", "primary": false }],
+      "capabilities": {
+        "maxOutputTokens": 128000,
+        "contextWindow": 1050000,
+        "supportsReasoning": true,
+        "rejectsTemperature": true
+      },
+      "tuning": { "maxOutputTokens": 8192, "thinkingEffort": "none" }
+    },
+    {
       "id": "shared-router-exacto-example",
       "enabled": false,
       "rank": 900,

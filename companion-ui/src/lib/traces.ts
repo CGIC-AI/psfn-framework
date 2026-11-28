@@ -1,5 +1,5 @@
 import type { HubStreamEventLogEntry, HubStreamState } from './stream/hub-stream.js';
-import type { HubToClientMessage } from './protocol/events.js';
+import type { HubToClientMessage, ToolActivityPhase } from './protocol/events.js';
 
 export type OperationalTraceStatus = 'info' | 'active' | 'done' | 'failed';
 
@@ -267,7 +267,7 @@ function eventToTrace(
   }
 }
 
-function toolActivityStatus(phase: 'started' | 'progress' | 'completed' | 'failed'): OperationalTraceStatus {
+function toolActivityStatus(phase: ToolActivityPhase): OperationalTraceStatus {
   switch (phase) {
     case 'started':
     case 'progress':
@@ -275,6 +275,12 @@ function toolActivityStatus(phase: 'started' | 'progress' | 'completed' | 'faile
     case 'completed':
       return 'done';
     case 'failed':
+    // A validation or policy refusal (or withheld content) did not do the
+    // requested work; the trace summary and metadata keep the exact phase.
+    case 'rejected':
       return 'failed';
+    // A duplicate or unmet-dependency skip never ran: neither done nor failed.
+    case 'skipped':
+      return 'info';
   }
 }

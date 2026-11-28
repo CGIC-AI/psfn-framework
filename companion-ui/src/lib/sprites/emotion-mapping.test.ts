@@ -170,6 +170,8 @@ describe('tool-domain mapping (mirror of registry.ts)', () => {
     expect(toolPhaseForActivity('progress')).toBe('started');
     expect(toolPhaseForActivity('completed')).toBe('completed');
     expect(toolPhaseForActivity('failed')).toBe('failed');
+    expect(toolPhaseForActivity('rejected')).toBe('failed');
+    expect(toolPhaseForActivity('skipped')).toBe('completed');
   });
 });
 

@@ -124,7 +124,9 @@ Delete `/openwiki/memory.md`, `/openwiki/SPEC_L01_LANDMARK_SCHEMA.md`,
 - `/openwiki/faculties/emotion.md` — companion emotion, `src/core/emotion/`
 - `/openwiki/faculties/partner-affect.md`
 - `/openwiki/faculties/file-ingest.md` — `src/faculties/file-ingest/`
-- `/openwiki/faculties/mirrors-and-letters.md` — introspection / context-feedback
+- `/openwiki/faculties/mirrors-and-letters.md` — introspection / context-feedback,
+  `src/core/letters/`, `src/core/doing-mirror/` (the removed root
+  `mirrors-and-letters.md` is not a source)
 - `/openwiki/faculties/journal.md` — companion-authored Markdown journal only
 
 ### channels/

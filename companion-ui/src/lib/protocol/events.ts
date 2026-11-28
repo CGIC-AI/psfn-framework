@@ -27,7 +27,10 @@ import type {
   ApprovalGrantMode,
   ApprovalSourceSystem,
 } from '../../../../src/shared/contracts/approval-envelope.js';
-import { COMPANION_APPROVALS_V2_CAPABILITY } from '../../../../src/shared/contracts/companion-relay.js';
+import {
+  COMPANION_APPROVALS_V2_CAPABILITY,
+  type CompanionToolActivityPhase,
+} from '../../../../src/shared/contracts/companion-relay.js';
 import type { AcacAxis } from '../../../../src/shared/contracts/emotion-contracts.js';
 
 export type { AcacAxis } from '../../../../src/shared/contracts/emotion-contracts.js';
@@ -399,7 +402,8 @@ export interface ArtifactPreviewErrorMessage {
 // advertise the `tool_activity` output capability.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type ToolActivityPhase = 'started' | 'progress' | 'completed' | 'failed';
+/** The relay phase list is the single source (psfn-framework-ik47b.15). */
+export type ToolActivityPhase = CompanionToolActivityPhase;
 
 export interface ToolActivityMessage {
   type: 'tool.activity';

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { COMPANION_TOOL_ACTIVITY_PHASES } from '../../../../src/shared/contracts/companion-relay.js';
 import type { ClientToHubMessage, HubToClientMessage } from './events.js';
 import {
   HubFramingError,
@@ -194,6 +195,21 @@ describe('hub websocket framing', () => {
 
   it.each(clientMessages)('serializes known client message %s', (message) => {
     expect(JSON.parse(serializeClientToHubMessage(message))).toEqual(message);
+  });
+
+  it.each(COMPANION_TOOL_ACTIVITY_PHASES)('accepts every relay tool-activity phase %s (ik47b.15)', (phase) => {
+    const message: HubToClientMessage = {
+      type: 'tool.activity',
+      data: { id: 'tool-1', tool: 'renderer', phase, timestamp: '2026-06-17T00:00:02.000Z' },
+    };
+    expect(parseHubToClientMessage(JSON.stringify(message))).toEqual(message);
+  });
+
+  it('rejects an unknown tool-activity phase', () => {
+    expect(() => parseHubToClientMessage(JSON.stringify({
+      type: 'tool.activity',
+      data: { id: 'tool-1', tool: 'renderer', phase: 'paused', timestamp: '2026-06-17T00:00:02.000Z' },
+    }))).toThrow(HubFramingError);
   });
 
   it('rejects unknown hub message types', () => {

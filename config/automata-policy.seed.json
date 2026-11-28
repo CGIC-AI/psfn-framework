@@ -45,7 +45,7 @@
     "reviewer": {
       "enabled": true,
       "cadenceMs": 21600000,
-      "model": "gpt-5.4-nano",
+      "model": "gpt-6-luna",
       "similarityThreshold": 0.9,
       "maxFindingsPerRun": 100,
       "maxNominationsPerRun": 80,

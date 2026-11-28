@@ -35,7 +35,11 @@ async function listen(server: Server): Promise<string> {
   return `http://127.0.0.1:${address.port}`;
 }
 
-async function fixture(options: { microphone?: boolean; spokenAudio?: boolean } = {}) {
+async function fixture(options: {
+  microphone?: boolean;
+  spokenAudio?: boolean;
+  eventCapabilities?: readonly string[];
+} = {}) {
   const keys = generateKeyPairSync('ed25519');
   let nowSeconds = Math.floor(Date.now() / 1000);
   const initialTime = nowSeconds;
@@ -155,7 +159,9 @@ async function fixture(options: { microphone?: boolean; spokenAudio?: boolean } 
   const messages: Array<Record<string, unknown>> = [];
   socket.on('message', data => messages.push(JSON.parse(data.toString()) as Record<string, unknown>));
   await once(socket, 'open');
-  socket.send(JSON.stringify({ schemaVersion: 1, type: 'session.configure', eventCapabilities: ['approvals.v2'] }));
+  socket.send(JSON.stringify({
+    schemaVersion: 1, type: 'session.configure', eventCapabilities: options.eventCapabilities ?? ['approvals.v2'],
+  }));
   await vi.waitFor(() => expect(messages[0]?.type).toBe('session.ready'));
   return { socket, messages, execute, assertions, spoken, device, peer, capturedPcm,
     utterance: (text: string) => audioCallbacks!.onUtterance(text),
@@ -184,6 +190,28 @@ describe('Companion browser through Hub and gateway sockets', () => {
       for (const secret of [apiKey, credential, cookie, ...f.assertions, 'hub.session.renew']) expect(browserTraffic).not.toContain(secret);
       f.device.enrollmentStatus = 'revoked';
       await vi.waitFor(() => expect(f.socket.readyState).toBe(WebSocket.CLOSED));
+    } finally { await f.close(); }
+  });
+
+  it('grants a fleet SSO human thread history and relays correlated reply deltas through the Hub (mg891, jtr6e)', async () => {
+    const f = await fixture({ eventCapabilities: ['approvals.v2', 'reply.deltas.v1', 'thread.history.v1'] });
+    try {
+      // This endpoint has no approvals telemetry scope, so only the opt-ins are echoed.
+      expect(f.messages[0]?.eventCapabilities).toEqual(['reply.deltas.v1', 'thread.history.v1']);
+      f.execute.mockImplementationOnce(async (input: { onReplyDelta?: (text: string) => void }) => {
+        input.onReplyDelta?.('Hello from ');
+        input.onReplyDelta?.('the companion.');
+        return { content: 'Hello from the companion.', channelId: 'chat', inputTokens: 1, outputTokens: 3 };
+      });
+      f.socket.send(JSON.stringify({ schemaVersion: 1, requestId: 'chat-stream', action: 'companion.interact', resource: 'conversation.interact', body: { content: 'Hello' } }));
+      await vi.waitFor(() => expect(f.messages.some(value => value.requestId === 'chat-stream' && value.type === 'result')).toBe(true));
+      const correlated = f.messages.filter(value => value.requestId === 'chat-stream');
+      expect(correlated.map(value => value.type)).toEqual(['delta', 'delta', 'result']);
+      expect(correlated.slice(0, 2)).toEqual([
+        { schemaVersion: 1, type: 'delta', requestId: 'chat-stream', sequence: 0, text: 'Hello from ' },
+        { schemaVersion: 1, type: 'delta', requestId: 'chat-stream', sequence: 1, text: 'the companion.' },
+      ]);
+      expect(f.execute).toHaveBeenCalledWith(expect.objectContaining({ onReplyDelta: expect.any(Function) }));
     } finally { await f.close(); }
   });
 

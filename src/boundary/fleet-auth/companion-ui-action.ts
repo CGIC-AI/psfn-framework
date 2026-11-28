@@ -7,10 +7,16 @@ import type { CompiledGardenRequestTarget } from './request-capability-target.js
 import type { GardenRouteAuthorization } from './garden-route-authorization.js';
 import { FLEET_AUTH_ACTION_BASE_ROLE } from './role-action-policy.js';
 import { PRIMARY_EMBODIMENT_HANDOFF_REASONS } from './primary-embodiment.js';
-import { COMPANION_APPROVALS_V2_CAPABILITY } from '../../shared/contracts/companion-relay.js';
+import {
+  COMPANION_APPROVALS_V2_CAPABILITY,
+  COMPANION_UI_OPTIONAL_EVENT_CAPABILITIES,
+  COMPANION_UI_REPLY_DELTAS_CAPABILITY,
+  COMPANION_UI_THREAD_HISTORY_CAPABILITY,
+} from '../../shared/contracts/companion-relay.js';
 
 export const COMPANION_UI_ACTION_RESOURCES = [
   'conversation.status',
+  'conversation.history',
   'conversation.interact',
   'conversation.interrupt',
   'conversation.touch',
@@ -37,6 +43,7 @@ export const COMPANION_UI_PROTOCOL_LIMITS = Object.freeze({
 
 const RESOURCE_ACTION: Readonly<Record<CompanionUiActionResource, FleetAuthAction>> = Object.freeze({
   'conversation.status': 'companion.read',
+  'conversation.history': 'companion.read',
   'conversation.interact': 'companion.interact',
   'conversation.interrupt': 'companion.interact',
   'conversation.touch': 'companion.interact',
@@ -65,6 +72,8 @@ const RESOURCE_PHYSICAL_CEILING: Readonly<Record<CompanionUiActionResource, Read
   telemetryScopes: readonly SatelliteTelemetryScope[];
 }>>> = Object.freeze({
   'conversation.status': physicalCeiling([], ['status']),
+  // Reading the text thread needs exactly the capability that wrote it.
+  'conversation.history': physicalCeiling(['text'], []),
   'conversation.interact': physicalCeiling(['text'], []),
   'conversation.interrupt': physicalCeiling(['audio_output'], []),
   'conversation.touch': physicalCeiling(['touch'], []),
@@ -126,6 +135,10 @@ export interface CompanionUiSessionConfigureFrame {
   readonly schemaVersion: 1;
   readonly type: 'session.configure';
   readonly eventCapabilities: readonly [typeof COMPANION_APPROVALS_V2_CAPABILITY];
+  /** The browser opted into correlated reply `delta` frames before its terminal `result`. */
+  readonly replyDeltas: boolean;
+  /** The browser asked to read its main-thread history (granted to humans only). */
+  readonly threadHistory: boolean;
 }
 
 export interface CompanionUiPhysicalCapabilityCeiling {
@@ -192,6 +205,7 @@ function parseBody(resource: CompanionUiActionResource, value: unknown): Compani
   if (!isRecord(value)) deny();
   switch (resource) {
     case 'conversation.status':
+    case 'conversation.history':
     case 'shards.list':
     case 'confirmations.list':
     case 'embodiment.status':
@@ -306,15 +320,24 @@ export function parseCompanionUiSessionConfigureFrame(
     || !hasExactKeys(value, ['schemaVersion', 'type', 'eventCapabilities'])
     || value.schemaVersion !== 1
     || value.type !== 'session.configure'
-    || !Array.isArray(value.eventCapabilities)
-    || value.eventCapabilities.length !== 1
-    || value.eventCapabilities[0] !== COMPANION_APPROVALS_V2_CAPABILITY) {
+    || !Array.isArray(value.eventCapabilities)) {
+    deny();
+  }
+  // approvals.v2 is mandatory and first; optional capabilities follow once
+  // each, in canonical order. Anything else is an unknown capability.
+  const [approvals, ...optional] = value.eventCapabilities as unknown[];
+  const order = optional.map(capability => COMPANION_UI_OPTIONAL_EVENT_CAPABILITIES
+    .indexOf(capability as typeof COMPANION_UI_OPTIONAL_EVENT_CAPABILITIES[number]));
+  if (approvals !== COMPANION_APPROVALS_V2_CAPABILITY
+    || order.some((position, index) => position < 0 || (index > 0 && position <= order[index - 1]!))) {
     deny();
   }
   return Object.freeze({
     schemaVersion: 1,
     type: 'session.configure',
     eventCapabilities: Object.freeze([COMPANION_APPROVALS_V2_CAPABILITY] as const),
+    replyDeltas: optional.includes(COMPANION_UI_REPLY_DELTAS_CAPABILITY),
+    threadHistory: optional.includes(COMPANION_UI_THREAD_HISTORY_CAPABILITY),
   });
 }
 

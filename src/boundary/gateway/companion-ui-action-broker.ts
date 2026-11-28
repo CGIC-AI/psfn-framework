@@ -25,6 +25,8 @@ export interface CompanionUiAgentDispatchInput {
   readonly compiled: CompiledCompanionUiAction;
   readonly attachment: HubDeviceAttachmentSnapshot;
   readonly signal?: AbortSignal;
+  /** Server-owned reply-delta sink of the socket that sent this frame. */
+  readonly onReplyDelta?: (text: string) => void;
   /** Agent-only assertion. The operator token is deliberately absent. */
   readonly childAssertion: GatewayChildAssertionExchangeResult;
   readonly deviceTransport: Readonly<{
@@ -47,6 +49,8 @@ export interface CompanionUiActionBrokerInput {
   readonly deviceTransport: CompanionUiAgentDispatchInput['deviceTransport'];
   /** Server-owned cancellation only; never parsed from the browser frame. */
   readonly signal?: AbortSignal;
+  /** Server-owned reply-delta sink; present only when the socket negotiated deltas. */
+  readonly onReplyDelta?: (text: string) => void;
 }
 
 export class CompanionUiActionDeniedError extends Error {
@@ -177,6 +181,7 @@ export class GatewayCompanionUiActionBroker {
       childAssertion,
       deviceTransport: input.deviceTransport,
       ...(input.signal ? { signal: input.signal } : {}),
+      ...(input.onReplyDelta ? { onReplyDelta: input.onReplyDelta } : {}),
     });
   }
 }

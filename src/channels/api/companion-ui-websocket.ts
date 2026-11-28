@@ -26,6 +26,8 @@ import {
 } from '../../boundary/fleet-auth/companion-ui-action.js';
 import {
   COMPANION_APPROVALS_V2_CAPABILITY,
+  COMPANION_UI_REPLY_DELTAS_CAPABILITY,
+  COMPANION_UI_THREAD_HISTORY_CAPABILITY,
   companionEventKindsForScopes,
   type CompanionApprovalRequestedPayload,
   type CompanionApprovalResolvedPayload,
@@ -66,6 +68,7 @@ import {
   parseCompanionUiSessionRenewal,
 } from './companion-ui-session-renewal.js';
 import { proxyCompanionUiBrowserUpgrade } from './companion-ui-hub-proxy.js';
+import { CompanionUiReplyDeltaStream } from './companion-ui-reply-deltas.js';
 
 const log = createComponentLogger('CompanionUiWebSocket');
 const PATH_PATTERN = /^\/companion-ui\/companions\/([0-9a-f-]+)\/ws$/u;
@@ -109,6 +112,8 @@ interface CompanionUiOperatorActionBroker {
     }>;
     /** Server-owned cancellation only; never parsed from the browser frame. */
     signal?: AbortSignal;
+    /** Server-owned reply-delta sink of the requesting socket. */
+    onReplyDelta?: (text: string) => void;
   }>): Promise<unknown>;
 }
 
@@ -240,6 +245,61 @@ function rawDataBytes(raw: RawData): Uint8Array {
 
 function sendJson(socket: WebSocket, value: unknown): void {
   if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(value));
+}
+
+interface ActionFailureContext {
+  requestId: string;
+  dispatching: boolean;
+  deltas?: CompanionUiReplyDeltaStream;
+}
+
+/**
+ * Report one failed action frame. A denial or internal failure closes the
+ * socket; a cancelled turn is the expected terminal of an interrupt, so the
+ * socket stays open for the next request (psfn-framework-mg891).
+ */
+function reportActionFailure(
+  target: Readonly<{
+    socket: WebSocket;
+    companionId: CompanionId;
+    close: (code: number, reason: string) => void;
+  }>,
+  error: unknown,
+  failure: ActionFailureContext,
+): void {
+  const code = classifyCompanionUiActionFailure(error, failure.dispatching);
+  const details = {
+    companionId: target.companionId,
+    requestId: failure.requestId,
+    code,
+    error: toErrorMessage(error),
+  };
+  sendJson(target.socket, companionUiActionFailureFrame(failure.requestId, code));
+  if (code === 'cancelled') {
+    log.info('Companion UI interaction cancelled', details);
+    return;
+  }
+  if (code === 'denied') log.warn('Companion UI action denied', details);
+  else log.error('Companion UI action failed', details);
+  target.close(CLOSE.denied, code === 'denied' ? 'action denied' : 'action failed');
+}
+
+/**
+ * Echo of the negotiated wire capabilities in `session.ready`. Thread history
+ * is granted only to a human session: a guest has no durable thread, and an
+ * action it may not run would close its socket.
+ */
+function readyEventCapabilities(input: Readonly<{
+  approvals: boolean;
+  replyDeltas: boolean;
+  threadHistory: boolean;
+  human: boolean;
+}>): readonly string[] {
+  return [
+    ...(input.approvals ? [COMPANION_APPROVALS_V2_CAPABILITY] : []),
+    ...(input.replyDeltas ? [COMPANION_UI_REPLY_DELTAS_CAPABILITY] : []),
+    ...(input.threadHistory && input.human ? [COMPANION_UI_THREAD_HISTORY_CAPABILITY] : []),
+  ];
 }
 
 function projectCompanionEventFrame(
@@ -577,6 +637,7 @@ export class CompanionUiWebSocketAdapter {
     this.activeSockets.add(socket);
     let closed = false;
     let configured = false;
+    let replyDeltas = false;
     let audioSocket: CompanionUiAudioSocketSession | null = null;
     let unsubscribeEvents: (() => void) | null = null;
     let unsubscribeAudioOutput: (() => void) | null = null;
@@ -637,7 +698,11 @@ export class CompanionUiWebSocketAdapter {
       }
       seenRequestIds.add(requestId);
     };
-    const dispatchAction = async (body: Uint8Array, signal?: AbortSignal): Promise<unknown> => {
+    const dispatchAction = async (
+      body: Uint8Array,
+      signal?: AbortSignal,
+      onReplyDelta?: (text: string) => void,
+    ): Promise<unknown> => {
       await refreshAuthority();
       const common: Omit<CompanionUiActionBrokerInput, 'sessionToken'> = {
         rawBody: body,
@@ -646,6 +711,7 @@ export class CompanionUiWebSocketAdapter {
         physicalCeiling: authority.physicalCeiling,
         deviceTransport: authority.deviceTransport as CompanionUiActionBrokerInput['deviceTransport'],
         ...(signal ? { signal } : {}),
+        ...(onReplyDelta ? { onReplyDelta } : {}),
       };
       const result = authority.sessionToken
         ? await this.config.actionBroker!.execute({ ...common, sessionToken: authority.sessionToken })
@@ -691,10 +757,11 @@ export class CompanionUiWebSocketAdapter {
         return;
       }
       const body = rawDataBytes(raw);
-      const failure = { requestId: '', dispatching: false };
+      const failure: ActionFailureContext = { requestId: '', dispatching: false };
       void (async () => {
         if (!configured) {
-          parseCompanionUiSessionConfigureFrame(body);
+          const negotiated = parseCompanionUiSessionConfigureFrame(body);
+          replyDeltas = negotiated.replyDeltas;
           configured = true;
           const eventCapabilities = authority.sessionToken
             && authority.physicalCeiling.telemetryScopes.includes('approvals')
@@ -755,7 +822,12 @@ export class CompanionUiWebSocketAdapter {
             ...(authority.presentation.place ? { place: authority.presentation.place } : {}),
             capabilities: effectiveAdvertisedCapabilities,
             telemetryScopes: authority.physicalCeiling.telemetryScopes,
-            eventCapabilities,
+            eventCapabilities: readyEventCapabilities({
+              approvals: eventCapabilities.length > 0,
+              replyDeltas,
+              threadHistory: negotiated.threadHistory,
+              human: authority.sessionToken !== undefined,
+            }),
           });
           return;
         }
@@ -773,7 +845,15 @@ export class CompanionUiWebSocketAdapter {
         reserveRequestId(frame.requestId);
         failure.requestId = frame.requestId;
         failure.dispatching = true;
-        const result = await dispatchAction(body);
+        const deltas = CompanionUiReplyDeltaStream.forFrame({
+          negotiated: replyDeltas,
+          resource: frame.resource,
+          requestId: frame.requestId,
+          send: value => { if (!closed) sendJson(socket, value); },
+        });
+        failure.deltas = deltas;
+        const result = await dispatchAction(body, undefined, deltas?.push);
+        deltas?.close();
         sendJson(socket, {
           schemaVersion: 1,
           type: 'result',
@@ -782,17 +862,8 @@ export class CompanionUiWebSocketAdapter {
           result,
         });
       })().catch((error: unknown) => {
-        const code = classifyCompanionUiActionFailure(error, failure.dispatching);
-        const details = {
-          companionId: authority.companionId,
-          requestId: failure.requestId,
-          code,
-          error: toErrorMessage(error),
-        };
-        if (code === 'denied') log.warn('Companion UI action denied', details);
-        else log.error('Companion UI action failed', details);
-        sendJson(socket, companionUiActionFailureFrame(failure.requestId, code));
-        close(CLOSE.denied, code === 'denied' ? 'action denied' : 'action failed');
+        failure.deltas?.close();
+        reportActionFailure({ socket, companionId: authority.companionId, close }, error, failure);
       });
     });
     socket.once('close', () => close(CLOSE.authorityChanged, 'closed'));
@@ -813,6 +884,7 @@ export class CompanionUiWebSocketAdapter {
     this.activeSockets.add(socket);
     let closed = false;
     let configured = false;
+    let replyDeltas = false;
     let audioSocket: CompanionUiAudioSocketSession | null = null;
     let unsubscribeEvents: (() => void) | null = null;
     let eventDelivery = Promise.resolve();
@@ -836,7 +908,11 @@ export class CompanionUiWebSocketAdapter {
       }
       seenRequestIds.add(requestId);
     };
-    const dispatchAction = async (body: Uint8Array, signal?: AbortSignal): Promise<unknown> => {
+    const dispatchAction = async (
+      body: Uint8Array,
+      signal?: AbortSignal,
+      onReplyDelta?: (text: string) => void,
+    ): Promise<unknown> => {
       if (closed || this.stopped) throw new CompanionUiSocketDeniedError('operator session closed');
       return await this.config.operatorActionBroker!.execute({
         rawBody: body,
@@ -844,6 +920,7 @@ export class CompanionUiWebSocketAdapter {
         principal: authority.principal,
         physicalCeiling: authority.physicalCeiling,
         ...(signal ? { signal } : {}),
+        ...(onReplyDelta ? { onReplyDelta } : {}),
       });
     };
     const audioCapable = authority.physicalCeiling.capabilities.includes('speech_to_text');
@@ -880,10 +957,11 @@ export class CompanionUiWebSocketAdapter {
         return;
       }
       const body = rawDataBytes(raw);
-      const failure = { requestId: '', dispatching: false };
+      const failure: ActionFailureContext = { requestId: '', dispatching: false };
       void (async () => {
         if (!configured) {
-          parseCompanionUiSessionConfigureFrame(body);
+          const negotiated = parseCompanionUiSessionConfigureFrame(body);
+          replyDeltas = negotiated.replyDeltas;
           configured = true;
           unsubscribeEvents = this.config.eventRelay.subscribe({
             companionId: authority.companionId,
@@ -902,7 +980,12 @@ export class CompanionUiWebSocketAdapter {
             device: OPERATOR_KEY_DEVICE,
             capabilities: authority.physicalCeiling.capabilities,
             telemetryScopes: authority.physicalCeiling.telemetryScopes,
-            eventCapabilities,
+            eventCapabilities: readyEventCapabilities({
+              approvals: true,
+              replyDeltas,
+              threadHistory: negotiated.threadHistory,
+              human: true,
+            }),
           });
           return;
         }
@@ -912,7 +995,15 @@ export class CompanionUiWebSocketAdapter {
         reserveRequestId(frame.requestId);
         failure.requestId = frame.requestId;
         failure.dispatching = true;
-        const result = await dispatchAction(body);
+        const deltas = CompanionUiReplyDeltaStream.forFrame({
+          negotiated: replyDeltas,
+          resource: frame.resource,
+          requestId: frame.requestId,
+          send: value => { if (!closed) sendJson(socket, value); },
+        });
+        failure.deltas = deltas;
+        const result = await dispatchAction(body, undefined, deltas?.push);
+        deltas?.close();
         sendJson(socket, {
           schemaVersion: 1,
           type: 'result',
@@ -921,17 +1012,8 @@ export class CompanionUiWebSocketAdapter {
           result,
         });
       })().catch((error: unknown) => {
-        const code = classifyCompanionUiActionFailure(error, failure.dispatching);
-        const details = {
-          companionId: authority.companionId,
-          requestId: failure.requestId,
-          code,
-          error: toErrorMessage(error),
-        };
-        if (code === 'denied') log.warn('Companion UI action denied', details);
-        else log.error('Companion UI action failed', details);
-        sendJson(socket, companionUiActionFailureFrame(failure.requestId, code));
-        close(CLOSE.denied, code === 'denied' ? 'action denied' : 'action failed');
+        failure.deltas?.close();
+        reportActionFailure({ socket, companionId: authority.companionId, close }, error, failure);
       });
     });
     socket.once('close', () => close(CLOSE.authorityChanged, 'closed'));

@@ -13,9 +13,10 @@ export interface CompanionUiKeyShardRuntimePort {
 }
 
 /**
- * Key-path shard frames (psfn-framework-m1is8). An ADMIN_TOKEN / API_KEY
- * session is the human authority, exactly as on the REST API, so `shards.*`
- * frames go to the agent's key-authenticated shard route with the key
+ * Key-path agent-owned frames (psfn-framework-m1is8, jtr6e). An ADMIN_TOKEN /
+ * API_KEY session is the human authority, exactly as on the REST API, so
+ * `shards.*` frames and the `conversation.history` read go to the agent's
+ * key-authenticated route with the key
  * principal and the exact raw frame. The agent re-applies the key ceiling and
  * its own parent/shard binding; any failure is surfaced as a denial.
  */
@@ -25,7 +26,10 @@ export async function dispatchCompanionUiKeyShard(input: {
   principal: ApiAuthPrincipal;
   runtime: CompanionUiKeyShardRuntimePort;
 }): Promise<Readonly<{ handled: false }> | Readonly<{ handled: true; result: unknown }>> {
-  if (!input.compiled.frame.resource.startsWith('shards.')) {
+  const resource = input.compiled.frame.resource;
+  // Main-thread history is agent-owned like shard state: the agent derives
+  // the key principal's own channel (psfn-framework-jtr6e).
+  if (!resource.startsWith('shards.') && resource !== 'conversation.history') {
     return Object.freeze({ handled: false });
   }
   if (input.principal.mode !== 'api_key') {

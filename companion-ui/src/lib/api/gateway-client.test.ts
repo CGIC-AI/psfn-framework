@@ -59,7 +59,11 @@ const READY = Object.freeze({
   eventCapabilities: ['approvals.v2'],
 });
 
-async function connectClient(socket: FakeSocket, requestIds = ['request-1']) {
+async function connectClient(
+  socket: FakeSocket,
+  requestIds = ['request-1'],
+  ready: Record<string, unknown> = READY,
+) {
   const client = new CompanionGatewayClient({
     url: 'wss://fleet.example.test/companion-ui/companions/11111111-1111-4111-8111-111111111111/ws',
     webSocketFactory: () => socket,
@@ -70,13 +74,141 @@ async function connectClient(socket: FakeSocket, requestIds = ['request-1']) {
   expect(socket.sent.map(frame => JSON.parse(String(frame)))).toEqual([{
     schemaVersion: 1,
     type: 'session.configure',
-    eventCapabilities: ['approvals.v2'],
+    eventCapabilities: ['approvals.v2', 'reply.deltas.v1', 'thread.history.v1'],
   }]);
-  socket.message(READY);
+  socket.message(ready);
   await connecting;
   socket.sent.length = 0;
   return client;
 }
+
+const STREAMING_READY = Object.freeze({
+  ...READY,
+  eventCapabilities: ['approvals.v2', 'reply.deltas.v1', 'thread.history.v1'],
+});
+
+function delta(requestId: string, sequence: number, text: string) {
+  return { schemaVersion: 1, type: 'delta', requestId, sequence, text };
+}
+
+function reply(requestId: string, content: string) {
+  return {
+    schemaVersion: 1, type: 'result', requestId, ok: true,
+    result: { content, channelId: 'api:key', inputTokens: 1, outputTokens: 2 },
+  };
+}
+
+describe('CompanionGatewayClient reply deltas and thread history (mg891, jtr6e)', () => {
+  it('renders correlated deltas live and replaces them with the authoritative final text', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['turn-1'], STREAMING_READY);
+    const store = new HubStreamStore(client);
+    client.sendUserText('hello');
+    socket.message(delta('turn-1', 0, 'Hel'));
+    socket.message(delta('turn-1', 1, 'lo'));
+    await flushAsyncMessage();
+    expect(store.snapshot().liveAssistant?.content).toBe('Hello');
+    expect(store.snapshot().messages.map(message => message.content)).toEqual(['hello']);
+    socket.message(reply('turn-1', 'Hello there'));
+    await flushAsyncMessage();
+    expect(store.snapshot().liveAssistant).toBeNull();
+    expect(store.snapshot().messages.map(message => message.content)).toEqual(['hello', 'Hello there']);
+    expect(socket.closeCalls).toEqual([]);
+    store.destroy();
+  });
+
+  it.each([
+    ['an unknown request', [delta('turn-other', 0, 'x')]],
+    ['a sequence gap', [delta('turn-1', 0, 'a'), delta('turn-1', 2, 'c')]],
+    ['a malformed delta', [{ ...delta('turn-1', 0, 'a'), extra: true }]],
+  ])('fails closed on %s', async (_label, frames) => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['turn-1'], STREAMING_READY);
+    client.sendUserText('hello');
+    for (const frame of frames) socket.message(frame);
+    await flushAsyncMessage();
+    expect(socket.closeCalls.at(-1)?.[0]).toBe(1002);
+  });
+
+  it('fails closed on a delta after the terminal result', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['turn-1'], STREAMING_READY);
+    client.sendUserText('hello');
+    socket.message(reply('turn-1', 'done'));
+    socket.message(delta('turn-1', 0, 'stale'));
+    await flushAsyncMessage();
+    expect(socket.closeCalls.at(-1)?.[0]).toBe(1002);
+  });
+
+  it('stops rendering an interrupted reply, accepts its cancelled terminal and serves the next request', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['turn-1', 'interrupt-1', 'turn-2'], STREAMING_READY);
+    const store = new HubStreamStore(client);
+    const errors: unknown[] = [];
+    client.on('error', event => errors.push(event));
+    client.sendUserText('long answer please');
+    socket.message(delta('turn-1', 0, 'Once upon'));
+    await flushAsyncMessage();
+    expect(store.snapshot().liveAssistant?.content).toBe('Once upon');
+    client.interrupt();
+    expect(JSON.parse(String(socket.sent.at(-1)))).toMatchObject({
+      requestId: 'interrupt-1', resource: 'conversation.interrupt', body: { interactionId: 'turn-1' },
+    });
+    socket.message(delta('turn-1', 1, ' a time'));
+    socket.message({ schemaVersion: 1, type: 'result', requestId: 'interrupt-1', ok: true, result: { interrupted: true, interactionId: 'turn-1' } });
+    socket.message({ schemaVersion: 1, type: 'result', requestId: 'turn-1', ok: false, error: { code: 'cancelled' } });
+    await flushAsyncMessage();
+    expect(store.snapshot().liveAssistant).toBeNull();
+    expect(errors.map(error => (error as { message: string }).message)).toEqual([]);
+    expect(socket.closeCalls).toEqual([]);
+
+    client.sendUserText('short one');
+    socket.message(delta('turn-2', 0, 'Sure'));
+    socket.message(reply('turn-2', 'Sure.'));
+    await flushAsyncMessage();
+    expect(store.snapshot().messages.map(message => message.content))
+      .toEqual(['long answer please', 'short one', 'Sure.']);
+    store.destroy();
+  });
+
+  it('reads the granted thread history and hydrates the main thread once', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['history-1'], STREAMING_READY);
+    const store = new HubStreamStore(client);
+    expect(store.readThreadHistory()).toBe(true);
+    expect(JSON.parse(String(socket.sent.at(-1)))).toEqual({
+      schemaVersion: 1, requestId: 'history-1', action: 'companion.read', resource: 'conversation.history', body: {},
+    });
+    socket.message({ schemaVersion: 1, type: 'result', requestId: 'history-1', ok: true, result: [
+      { role: 'user', content: 'earlier question', createdAt: 1_800_000_000_000 },
+      { role: 'assistant', content: 'earlier answer', createdAt: 1_800_000_000_005 },
+    ] });
+    await flushAsyncMessage();
+    expect(store.snapshot().messages.map(message => [message.id, message.content])).toEqual([
+      ['history:1:user', 'earlier question'],
+      ['history:2:assistant', 'earlier answer'],
+    ]);
+    store.destroy();
+  });
+
+  it('does not request history unless the gateway granted it, and rejects malformed history', async () => {
+    const plain = new FakeSocket();
+    const plainClient = await connectClient(plain, ['history-1']);
+    const plainStore = new HubStreamStore(plainClient);
+    expect(plainStore.readThreadHistory()).toBe(false);
+    expect(plain.sent).toEqual([]);
+    plainStore.destroy();
+
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, ['history-1'], STREAMING_READY);
+    client.readThreadHistory();
+    socket.message({ schemaVersion: 1, type: 'result', requestId: 'history-1', ok: true, result: [
+      { role: 'system', content: 'not a thread message', createdAt: 1 },
+    ] });
+    await flushAsyncMessage();
+    expect(socket.closeCalls.at(-1)?.[0]).toBe(1002);
+  });
+});
 
 describe('CompanionGatewayClient', () => {
   it('reads redacted embodiment status and sends only an explicit generation-checked handoff', async () => {

@@ -161,22 +161,63 @@ function completionId() {
   return `chatcmpl-compose-smoke-${Date.now()}`;
 }
 
-/** SSE shape pi-ai's openai-completions client consumes (stream_options.include_usage). */
-function sendStream(response, model, content, toolCall) {
-  const id = completionId();
-  const created = Math.floor(Date.now() / MILLISECONDS_PER_SECOND);
+function openStream(response) {
   response.writeHead(HTTP_OK, {
     'Cache-Control': 'no-cache',
     Connection: 'keep-alive',
     'Content-Type': 'text/event-stream',
   });
+}
+
+function writeChunk(response, id, created, model, delta) {
   response.write(`data: ${JSON.stringify({
     id,
     object: 'chat.completion.chunk',
     created,
     model,
-    choices: [{ index: 0, delta: toolCall ? { role: 'assistant', tool_calls: [{ index: 0, id: toolCall.id, type: 'function', function: { name: toolCall.name, arguments: JSON.stringify(toolCall.arguments) } }] } : { role: 'assistant', content }, finish_reason: null }],
+    choices: [{ index: 0, delta, finish_reason: null }],
   })}\n\n`);
+}
+
+/** SSE shape pi-ai's openai-completions client consumes (stream_options.include_usage). */
+function sendStream(response, model, content, toolCall) {
+  const id = completionId();
+  const created = Math.floor(Date.now() / MILLISECONDS_PER_SECOND);
+  openStream(response);
+  writeChunk(response, id, created, model, toolCall
+    ? { role: 'assistant', tool_calls: [{ index: 0, id: toolCall.id, type: 'function', function: { name: toolCall.name, arguments: JSON.stringify(toolCall.arguments) } }] }
+    : { role: 'assistant', content });
+  finishStream(response, id, created, model, toolCall);
+}
+
+/**
+ * A delayed multi-chunk text stream: the headers and each content chunk are
+ * flushed separately, `delayMs` apart, so a client sees a partial reply long
+ * before completion. A client disconnect stops the remaining chunks.
+ */
+function sendChunkedStream(response, model, chunks, delayMs, onCancelled) {
+  const id = completionId();
+  const created = Math.floor(Date.now() / MILLISECONDS_PER_SECOND);
+  openStream(response);
+  let next = 0;
+  let timer;
+  const writeNext = () => {
+    if (next < chunks.length) {
+      writeChunk(response, id, created, model, next === 0 ? { role: 'assistant', content: chunks[0] } : { content: chunks[next] });
+      next += 1;
+      timer = setTimeout(writeNext, delayMs);
+      return;
+    }
+    finishStream(response, id, created, model);
+  };
+  response.once('close', () => {
+    clearTimeout(timer);
+    if (!response.writableEnded) onCancelled();
+  });
+  writeNext();
+}
+
+function finishStream(response, id, created, model, toolCall) {
   response.write(`data: ${JSON.stringify({
     id,
     object: 'chat.completion.chunk',
@@ -246,7 +287,9 @@ function modelCatalog() {
   };
 }
 
-const scenarioEvidence = { failure: 0, hold: 0, cancelled: 0, extraction: 0, recall: 0, memorize: 0, deletion: 0 };
+const scenarioEvidence = {
+  failure: 0, hold: 0, cancelled: 0, extraction: 0, recall: 0, memorize: 0, deletion: 0, stream: 0,
+};
 
 const server = createServer((request, response) => {
   const path = (request.url ?? '/').split('?', 1)[0];
@@ -284,6 +327,12 @@ const server = createServer((request, response) => {
       if (scenario) scenarioEvidence[scenario.kind] += 1;
       if (scenario?.status) {
         sendError(response, scenario.status, 'Synthetic provider failure');
+        return;
+      }
+      if (scenario?.chunks) {
+        sendChunkedStream(response, model, scenario.chunks, scenario.chunkDelayMs, () => {
+          scenarioEvidence.cancelled += 1;
+        });
         return;
       }
       const content = scenario?.content ?? resolveResponseContent(body);

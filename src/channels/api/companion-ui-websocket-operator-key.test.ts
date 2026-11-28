@@ -312,6 +312,107 @@ describe('Companion UI WebSocket operator key path', () => {
     await f.adapter.stop();
   });
 
+  describe('reply deltas and thread history negotiation (mg891, jtr6e)', () => {
+    const configure = (capabilities: unknown[]) => Buffer.from(JSON.stringify({
+      schemaVersion: 1, type: 'session.configure', eventCapabilities: capabilities,
+    }));
+    const interact = (requestId: string) => Buffer.from(JSON.stringify({
+      schemaVersion: 1, requestId, action: 'companion.interact', resource: 'conversation.interact',
+      body: { content: 'stream this' },
+    }));
+
+    it('echoes negotiated capabilities and streams correlated deltas before the terminal result', async () => {
+      const f = fixture();
+      f.operatorExecute.mockImplementationOnce(async (input: { onReplyDelta?: (text: string) => void }) => {
+        input.onReplyDelta?.('Hel');
+        input.onReplyDelta?.('');
+        input.onReplyDelta?.('lo');
+        return { content: 'Hello' };
+      });
+      await admitted(f, keyRequest());
+      f.webSocket.emit('message', configure(['approvals.v2', 'reply.deltas.v1', 'thread.history.v1']), false);
+      await vi.waitFor(() => expect(f.webSocket.sent.length).toBe(1));
+      expect(JSON.parse(f.webSocket.sent[0]!).eventCapabilities)
+        .toEqual(['approvals.v2', 'reply.deltas.v1', 'thread.history.v1']);
+      f.webSocket.emit('message', interact('req-stream'), false);
+      await vi.waitFor(() => expect(f.webSocket.sent.length).toBe(4));
+      expect(f.webSocket.sent.slice(1).map(frame => JSON.parse(frame))).toEqual([
+        { schemaVersion: 1, type: 'delta', requestId: 'req-stream', sequence: 0, text: 'Hel' },
+        { schemaVersion: 1, type: 'delta', requestId: 'req-stream', sequence: 1, text: 'lo' },
+        { schemaVersion: 1, type: 'result', requestId: 'req-stream', ok: true, result: { content: 'Hello' } },
+      ]);
+      await f.adapter.stop();
+    });
+
+    it('sends no deltas without negotiation and never after the terminal', async () => {
+      const f = fixture();
+      let late: ((text: string) => void) | undefined;
+      f.operatorExecute.mockImplementation(async (input: { onReplyDelta?: (text: string) => void }) => {
+        late = input.onReplyDelta;
+        input.onReplyDelta?.('partial');
+        return { content: 'done' };
+      });
+      await admitted(f, keyRequest());
+      f.webSocket.emit('message', CONFIGURE, false);
+      await vi.waitFor(() => expect(f.webSocket.sent.length).toBe(1));
+      expect(JSON.parse(f.webSocket.sent[0]!).eventCapabilities).toEqual(['approvals.v2']);
+      f.webSocket.emit('message', interact('req-plain'), false);
+      await vi.waitFor(() => expect(f.webSocket.sent.length).toBe(2));
+      expect(JSON.parse(f.webSocket.sent[1]!)).toMatchObject({ type: 'result', requestId: 'req-plain' });
+      expect(late).toBeUndefined();
+      await f.adapter.stop();
+
+      const g = fixture();
+      g.operatorExecute.mockImplementation(async (input: { onReplyDelta?: (text: string) => void }) => {
+        late = input.onReplyDelta;
+        return { content: 'done' };
+      });
+      await admitted(g, keyRequest());
+      g.webSocket.emit('message', configure(['approvals.v2', 'reply.deltas.v1']), false);
+      await vi.waitFor(() => expect(g.webSocket.sent.length).toBe(1));
+      g.webSocket.emit('message', interact('req-late'), false);
+      await vi.waitFor(() => expect(g.webSocket.sent.length).toBe(2));
+      late?.('after the terminal');
+      expect(g.webSocket.sent).toHaveLength(2);
+      await g.adapter.stop();
+    });
+
+    it.each([
+      [['reply.deltas.v1']],
+      [['approvals.v2', 'thread.history.v1', 'reply.deltas.v1']],
+      [['approvals.v2', 'reply.deltas.v1', 'reply.deltas.v1']],
+      [['approvals.v2', 'transcript.everyone.v1']],
+    ])('denies the non-canonical capability set %j', async (capabilities) => {
+      const f = fixture();
+      await admitted(f, keyRequest());
+      f.webSocket.emit('message', configure(capabilities), false);
+      await vi.waitFor(() => expect(f.webSocket.closeArgs[0]).toBeDefined());
+      expect(f.webSocket.sent.some(frame => frame.includes('session.ready'))).toBe(false);
+      await f.adapter.stop();
+    });
+
+    it('reports an interrupted turn as cancelled and keeps the socket for the next request', async () => {
+      const f = fixture();
+      const { CompanionUiInteractionCancelledError } = await import('./companion-ui-action-failure.js');
+      f.operatorExecute
+        .mockImplementationOnce(async () => { throw new CompanionUiInteractionCancelledError(); })
+        .mockImplementationOnce(async () => ({ content: 'after cancel' }));
+      await admitted(f, keyRequest());
+      f.webSocket.emit('message', configure(['approvals.v2', 'reply.deltas.v1']), false);
+      await vi.waitFor(() => expect(f.webSocket.sent.length).toBe(1));
+      f.webSocket.emit('message', interact('req-cancelled'), false);
+      await vi.waitFor(() => expect(f.webSocket.sent.length).toBe(2));
+      expect(JSON.parse(f.webSocket.sent[1]!)).toEqual({
+        schemaVersion: 1, type: 'result', requestId: 'req-cancelled', ok: false, error: { code: 'cancelled' },
+      });
+      expect(f.webSocket.closeArgs).toEqual([]);
+      f.webSocket.emit('message', interact('req-next'), false);
+      await vi.waitFor(() => expect(f.webSocket.sent.length).toBe(3));
+      expect(JSON.parse(f.webSocket.sent[2]!)).toMatchObject({ requestId: 'req-next', ok: true });
+      await f.adapter.stop();
+    });
+  });
+
   describe('browser ADMIN_TOKEN cookie (key-or-SSO ruling)', () => {
     const cookieRequest = (cookie: string, extra: Record<string, string> = {}) => request({
       host: '127.0.0.1:10183', origin, cookie, ...extra,

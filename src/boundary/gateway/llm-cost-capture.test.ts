@@ -250,7 +250,7 @@ describe('extractGatewayProviderCost', () => {
 
   it('retains final reconciliation truncation metadata beyond 128 distinct sources', () => {
     const providerCostEvidence = Object.fromEntries(
-      Array.from({ length: 128 }, (_, index) => [
+      Array.from({ length: 129 }, (_, index) => [
         `sse[${index}].usage.cost`,
         { total: 0.1, currency: 'USD' },
       ]),
@@ -261,14 +261,7 @@ describe('extractGatewayProviderCost', () => {
       model: 'test-model',
       inputTokens: 3,
       outputTokens: 2,
-      usageDetails: {
-        input: 3,
-        output: 2,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 5,
-        cost: { total: 0.1, currency: 'USD' },
-      },
+      usageDetails: { input: 3, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 5 },
       stopReason: 'stop',
     }, { providerCostEvidence });
 
@@ -281,7 +274,7 @@ describe('extractGatewayProviderCost', () => {
     });
   });
 
-  it('quarantines contradictory response and gateway-captured cost evidence', () => {
+  it('books only the wire capture, never a cost already attached to the response usage (lomm1)', () => {
     const response = applyGatewayCapturedProviderCost({
       content: 'ok',
       toolCalls: [],
@@ -294,6 +287,7 @@ describe('extractGatewayProviderCost', () => {
         cacheRead: 0,
         cacheWrite: 0,
         totalTokens: 5,
+        // A locally calculated figure (pi-ai calculateCost) is not what the provider billed.
         cost: { total: 0.1, currency: 'USD' },
       },
       stopReason: 'stop',
@@ -304,46 +298,25 @@ describe('extractGatewayProviderCost', () => {
       providerCost: { total: 0.2, currency: 'USD' },
     });
 
-    expect(response.usageDetails.cost).toBeUndefined();
-    expect(response.usageDetails.raw).toMatchObject({
-      providerCostEvidence: {
-        responseUsage: { total: 0.1, currency: 'USD' },
-        gatewayCapture: { total: 0.2, currency: 'USD' },
-      },
-      providerCostEvidenceConflict: {
-        fields: ['total'],
-      },
+    expect(response.usageDetails.cost).toEqual({ total: 0.2, currency: 'USD' });
+    expect(response.usageDetails.raw).toEqual({
+      providerCostEvidence: { gatewayCapture: { total: 0.2, currency: 'USD' } },
     });
   });
 
-  it('quarantines a total contradicted by independently observed components', () => {
+  it('quarantines a wire total contradicted by independently observed wire components', () => {
     const response = applyGatewayCapturedProviderCost({
       content: 'ok',
       toolCalls: [],
       model: 'test-model',
       inputTokens: 3,
       outputTokens: 2,
-      usageDetails: {
-        input: 3,
-        output: 2,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 5,
-        cost: { total: 0.1, currency: 'USD' },
-      },
+      usageDetails: { input: 3, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 5 },
       stopReason: 'stop',
     }, {
       providerCostEvidence: {
-        gatewayCapture: {
-          input: 0.08,
-          output: 0.08,
-          currency: 'USD',
-        },
-      },
-      providerCost: {
-        input: 0.08,
-        output: 0.08,
-        currency: 'USD',
+        'sse[2].usage.cost': { total: 0.1, currency: 'USD' },
+        'sse[2].usage.cost_details': { input: 0.08, output: 0.08, currency: 'USD' },
       },
     });
 

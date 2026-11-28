@@ -428,7 +428,7 @@ describe('LLMClient ICP conversation cost admission', () => {
     }));
   });
 
-  it('does not let a routed endpoint synthetic zero override canonical model pricing', async () => {
+  it('does not let pi-ai\'s calculated zero cost override canonical model pricing (lomm1)', async () => {
     const config = makeIcpConfig();
     const primary = config.modelRegistry?.models.find(
       entry => entry.identity.model === 'z-ai/glm-5',
@@ -480,7 +480,6 @@ describe('LLMClient ICP conversation cost admission', () => {
       estimatedCost: expect.objectContaining({ total: 0.000014 }),
       effectiveCost: expect.objectContaining({ total: 0.000014 }),
       costSource: 'estimate',
-      metadata: expect.objectContaining({ syntheticRoutedEndpointCostIgnored: true }),
     }));
   });
 
@@ -3729,11 +3728,14 @@ describe('LLMClient model budget gates and usage metering', () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig(), {
       usageRecorder,
+      providerCostResolver: () => ({
+        providerCostEvidence: { 'body.usage.cost': { total: 0.123, currency: 'USD' } },
+      }),
     });
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'private result' }],
       model: 'deepseek/deepseek-v3.2',
-      usage: { input: 25, output: 5, cost: 0.123 },
+      usage: { input: 25, output: 5 },
       stopReason: 'stop',
     });
 
@@ -3965,6 +3967,9 @@ describe('LLMClient model budget gates and usage metering', () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig({ companionId: 'gateway-default' }), {
       usageRecorder,
+      providerCostResolver: () => ({
+        providerCostEvidence: { 'sse[3].usage.cost': { total: 0.95, currency: 'USD' } },
+      }),
     });
 
     mocks.streamSimple.mockImplementation(async function* () {
@@ -4016,9 +4021,10 @@ describe('LLMClient model budget gates and usage metering', () => {
         cacheRead: 7,
         cacheWrite: 11,
         totalTokens: 196,
-        cost: { total: 0.95 },
       },
     });
+    // pi-ai's own usage.cost never reaches the response or the ledger (lomm1).
+    expect(response.usageDetails?.cost).toBeUndefined();
     expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
       inputTokens: 176,
       outputTokens: 2,
@@ -4041,10 +4047,7 @@ describe('LLMClient model budget gates and usage metering', () => {
         backendProvider: 'openrouter',
         backendBaseUrl: 'http://litellm.test/v1',
         providerCost: { total: 0.95, currency: 'USD' },
-        rawUsage: expect.objectContaining({
-          cost: 0.95,
-          cost_details: { upstream_inference_cost: 19 },
-        }),
+        rawUsage: expect.not.objectContaining({ cost: expect.anything() }),
       }),
     }));
   });
@@ -4095,6 +4098,9 @@ describe('LLMClient model budget gates and usage metering', () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig(), {
       usageRecorder,
+      providerCostResolver: () => ({
+        providerCostEvidence: { 'sse[3].usage.cost': { total: 0.95, currency: 'USD' } },
+      }),
     });
 
     mocks.streamSimple.mockImplementation(async function* () {
@@ -4133,7 +4139,6 @@ describe('LLMClient model budget gates and usage metering', () => {
         cacheRead: 7,
         cacheWrite: 11,
         totalTokens: 196,
-        cost: { total: 0.95 },
       },
     });
     expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
@@ -4150,6 +4155,9 @@ describe('LLMClient model budget gates and usage metering', () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig(), {
       usageRecorder,
+      providerCostResolver: () => ({
+        providerCostEvidence: { 'jsonBody.usage.cost': { total: 0.123, currency: 'USD' } },
+      }),
     });
 
     mocks.completeSimple.mockResolvedValue({
@@ -4183,7 +4191,6 @@ describe('LLMClient model budget gates and usage metering', () => {
         cacheRead: 3,
         cacheWrite: 0,
         totalTokens: 30,
-        cost: { total: 0.123 },
       },
     });
     expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
@@ -4248,8 +4255,13 @@ describe('LLMClient model budget gates and usage metering', () => {
       ],
     };
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    let recordedAttempts = 0;
     const client = new LLMClient(config, {
       usageRecorder,
+      // Only the fallback's answer carried a wire cost.
+      providerCostResolver: () => (++recordedAttempts === 2
+        ? { providerCostEvidence: { 'jsonBody.usage.cost': { total: 0.25, currency: 'USD' } } }
+        : undefined),
     });
     mocks.completeSimple
       .mockRejectedValueOnce(new Error('503 primary unavailable'))
@@ -4262,7 +4274,6 @@ describe('LLMClient model budget gates and usage metering', () => {
           cacheRead: 3,
           cacheWrite: 2,
           totalTokens: 20,
-          cost: { total: 0.25, currency: 'USD' },
         },
         stopReason: 'stop',
       });
@@ -4620,7 +4631,7 @@ describe('LLMClient model budget gates and usage metering', () => {
     expect(result.providerObservability?.providerResponse).toBeUndefined();
   });
 
-  it('quarantines contradictory response and gateway-captured cost from durable totals', async () => {
+  it('books the gateway-captured wire cost, never pi-ai\'s calculated usage cost (lomm1)', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
       usageRecorder,
@@ -4638,6 +4649,7 @@ describe('LLMClient model budget gates and usage metering', () => {
         input: 20,
         output: 4,
         totalTokens: 24,
+        // pi-ai's calculateCost() over its catalogue snapshot, not the bill.
         cost: { total: 0.21, currency: 'USD' },
       },
       stopReason: 'stop',
@@ -4648,22 +4660,17 @@ describe('LLMClient model budget gates and usage metering', () => {
       messages: [{ role: 'user', content: 'Complete this' }],
     }, 'background', { disableRetry: true });
 
-    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
-      settlement: 'partial',
-      providerCost: {},
-      effectiveCost: {},
-      costSource: 'none',
-      metadata: expect.objectContaining({
-        providerCostEvidence: {
-          responseUsage: { total: 0.21, currency: 'USD' },
-          gatewayCapture: { total: 0.42, currency: 'USD' },
-        },
-        providerCostEvidenceConflict: { fields: ['total'] },
-      }),
-    }));
     const event = usageRecorder.recordUsageEvent.mock.calls[0]?.[0];
-    expect(event.providerCostUsd).toBeUndefined();
-    expect(event.effectiveCostUsd).toBeUndefined();
+    expect(event).toMatchObject({
+      settlement: 'complete',
+      costSource: 'provider',
+      providerCostUsd: 0.42,
+      effectiveCostUsd: 0.42,
+      metadata: expect.objectContaining({
+        providerCostEvidence: { gatewayCapture: { total: 0.42, currency: 'USD' } },
+      }),
+    });
+    expect(event.metadata).not.toHaveProperty('providerCostEvidenceConflict');
   });
 
   it('keeps malformed gateway cost evidence unresolved instead of estimating a complete attempt', async () => {
@@ -4696,7 +4703,7 @@ describe('LLMClient model budget gates and usage metering', () => {
     }));
   });
 
-  it('quarantines malformed direct-provider response cost instead of settling a complete estimate', async () => {
+  it('ignores pi-ai\'s usage cost entirely, even when it is malformed (lomm1)', async () => {
     const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
     const client = new LLMClient(makeConfig({ retryMaxAttempts: 0 }), {
       usageRecorder,
@@ -4718,20 +4725,11 @@ describe('LLMClient model budget gates and usage metering', () => {
       messages: [{ role: 'user', content: 'Complete this' }],
     }, 'background', { disableRetry: true });
 
-    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
-      settlement: 'partial',
-      providerCost: {},
-      costSource: 'none',
-      metadata: expect.objectContaining({
-        rawUsage: expect.objectContaining({
-          cost: { total: 'not-money', currency: 'USD' },
-        }),
-        providerCostEvidenceConflict: { fields: ['responseUsage.cost.total'] },
-      }),
-    }));
     const event = usageRecorder.recordUsageEvent.mock.calls[0]?.[0];
-    expect(event.providerCostUsd).toBeUndefined();
-    expect(event.effectiveCostUsd).toBeUndefined();
+    expect(event).toMatchObject({ settlement: 'complete', providerCost: {} });
+    expect(event.costSource).not.toBe('provider');
+    expect(event.metadata).not.toHaveProperty('providerCostEvidenceConflict');
+    expect(event.metadata.rawUsage).not.toHaveProperty('cost');
   });
 
   it('skips budget-blocked primary candidate and falls back to secondary chat candidate', async () => {

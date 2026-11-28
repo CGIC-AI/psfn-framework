@@ -86,7 +86,7 @@ import {
   capInputTokensToContextWindow,
   extractCompletionToolCalls,
   normalizeContent,
-  normalizeLLMUsageDetails,
+  normalizePiUsageDetails,
   resolveEmptyToolArgumentUsageMetadata,
   normalizeSharedRouteKey,
   stripProviderResponseTerminatorArtifact,
@@ -651,44 +651,27 @@ export class LLMClient {
       options.providerObservability.providerResponse = providerResponse;
     }
     const accountingRates = resolveModelUsageCostRates(this.config, candidate, purpose);
-    const syntheticRoutedEndpointCost = candidate.requestBaseUrl !== undefined
-      && usageDetails?.cost?.total === 0
-      && [
-        usageDetails.cost.input,
-        usageDetails.cost.output,
-        usageDetails.cost.cacheRead,
-        usageDetails.cost.cacheWrite,
-      ].every(value => value === undefined || value === 0)
-      && accountingRates !== undefined
-      && [
-        accountingRates.inputPer1MUsd,
-        accountingRates.outputPer1MUsd,
-        accountingRates.cacheReadPer1MUsd,
-        accountingRates.cacheWritePer1MUsd,
-      ].some(value => value !== undefined && value > 0);
-    const responseUsageEvidence = usageDetails?.cost && !syntheticRoutedEndpointCost
-      ? { responseUsage: usageDetails.cost }
-      : {};
+    // Provider cost is only what the provider put on the wire (body usage.cost,
+    // cost headers), captured by the gateway. pi-ai's `usage.cost` is its own
+    // calculateCost() over model.cost — the bundled catalogue snapshot or the
+    // owner rates, and zeros for an unpriced route — so it is never provider
+    // evidence: counting it quarantined every real OpenRouter charge as a
+    // conflict and booked unpriced routes as a provider-reported $0 (lomm1).
     const providerCostReconciliation = mergeProviderCostEvidenceConflicts(
       reconcileProviderCostEvidence({
-        ...responseUsageEvidence,
         ...(capturedProviderCost?.providerCostEvidence ?? {}),
       }, {
         input: usageDetails?.input ?? inputTokens,
         output: usageDetails?.output ?? outputTokens,
         cacheRead: usageDetails?.cacheRead ?? 0,
         cacheWrite: usageDetails?.cacheWrite ?? 0,
-      }, combineProviderCostEvidenceObservations(
-        { providerCostEvidence: responseUsageEvidence },
-        {
-          providerCostEvidence: capturedProviderCost?.providerCostEvidence ?? {},
-          ...(capturedProviderCost?.providerCostEvidenceSummary
-            ? { providerCostEvidenceSummary: capturedProviderCost.providerCostEvidenceSummary }
-            : {}),
-        },
-      )),
+      }, combineProviderCostEvidenceObservations({
+        providerCostEvidence: capturedProviderCost?.providerCostEvidence ?? {},
+        ...(capturedProviderCost?.providerCostEvidenceSummary
+          ? { providerCostEvidenceSummary: capturedProviderCost.providerCostEvidenceSummary }
+          : {}),
+      })),
       capturedProviderCost?.providerCostEvidenceConflict,
-      usageDetails?.costEvidenceConflict,
     );
     const providerCost = providerCostReconciliation.providerCost;
     const unreportedCharge = resolveUnreportedAttemptCharge({
@@ -756,7 +739,6 @@ export class LLMClient {
         ? { providerCostEvidenceSummary: providerCostReconciliation.providerCostEvidenceSummary }
         : {}),
       ...(providerCost ? { providerCost } : {}),
-      ...(syntheticRoutedEndpointCost ? { syntheticRoutedEndpointCostIgnored: true } : {}),
       ...(unreportedCharge ? { unreportedAttemptCharge: unreportedCharge.basis } : {}),
       ...(correlation?.icpCorrelation
         ? {
@@ -1292,7 +1274,7 @@ export class LLMClient {
               inputTokens?: unknown;
               outputTokens?: unknown;
             };
-            usageDetails = normalizeLLMUsageDetails(
+            usageDetails = normalizePiUsageDetails(
               response.usage,
               typeof responseWithLegacyTokenCounts.inputTokens === 'number'
                 ? responseWithLegacyTokenCounts.inputTokens
@@ -1547,7 +1529,7 @@ export class LLMClient {
     const reasoning = typeof completionResponse.reasoning === 'string'
       ? completionResponse.reasoning
       : extractReasoningContent(contentBlocks);
-    const usageDetails = normalizeLLMUsageDetails(
+    const usageDetails = normalizePiUsageDetails(
       completionResponse.usage,
       completionResponse.inputTokens ?? 0,
       completionResponse.outputTokens ?? 0,

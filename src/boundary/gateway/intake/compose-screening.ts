@@ -202,7 +202,7 @@ export async function composeGatewayIntakeScreening(input: {
    * model copy, one worker pool). Absent: this composition owns its own.
    */
   sharedInjectionClassifier?: SharedInjectionClassifier;
-  /** Gateway-owned remote decision service for the additive intake.l2 signal (epic 4lf3r). */
+  /** Gateway-owned remote decision service for the intake.l2 decision site (epic 4lf3r, vc7vh). */
   jevDecisions?: GatewayJevDecisionService;
   /** Gateway usage ledger; screener dispatches are recorded here (1fyyi). */
   modelUsageRecorder?: ModelUsageRecorder;

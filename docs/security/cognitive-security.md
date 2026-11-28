@@ -440,7 +440,34 @@ and not ledgered, because an unpriced row would count as unknown cost and block
 every later dispatch under an enabled budget.
 A flagged L2 verdict (or an
 L3-mandatory tier) returns an `escalate_l3` outcome; L2 routes, it never decides
-the L3 verdict (`l2-screener.ts#L1-L38`).
+the L3 verdict (`l2-screener.ts#L1-L38`). An `escalate_l3` outcome is binding:
+the escalation port hands L2's reason to `evaluateL3`, which runs on it rather
+than re-deriving its trigger from the L2 labels and confidence.
+
+**Remote L2 verdict (`intake.l2` decision site).** When `settings.json`
+`decisionBackend` enables the `intake.l2` site with a threshold, its mode
+decides who answers L2 (operator decision 2026-11-27):
+
+- `jev`: the Jev decision is the L2 verdict and the local screener is not
+  called. Jev answers one question (is the text a prompt injection?); its
+  probability is the L2 injection confidence. At or above the site threshold,
+  or wherever the tier's own L3 routing triggers (an L3-mandatory tier or the
+  tier's L3 confidence threshold), the item goes to L3, which writes the
+  taxonomy labels and the safe representation. Below both, the item is
+  released on the Jev verdict. Jev mints no taxonomy labels and no content
+  summary, so its verdict carries no labels, a fixed content-free summary, and
+  the answering Jev snapshot as `l2_model`.
+- If Jev fails (refusal, timeout, drift, outage or an unusable answer), the
+  local L2 screener answers instead. If that fails too, the tier's
+  `failClosedActionByTier` applies exactly as for a local-only failure, and the
+  recorded error names both failures.
+- `shadow`: the local screener stays the verdict; the Jev answer is only
+  recorded as a content-free comparison. `local`: no remote call.
+
+The trade-off is explicit: in `jev` mode a single remote vendor can clear an
+untrusted item that is not L3-mandatory. Operators who need two independent
+opinions on every untrusted item keep the site in `shadow` or `local`, or list
+the tier in `l3Screener.mandatoryTiers` (`l2-decision-signal.ts#L1-L22`).
 
 ### L3: the heavy screener
 

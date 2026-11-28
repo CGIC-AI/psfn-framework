@@ -108,7 +108,7 @@ function printReport(report: EmbeddingMigrationResult, schema: string | undefine
 }
 
 async function run(options: CliOptions): Promise<EmbeddingMigrationResult> {
-  const { config } = await bootstrapMaintenanceRuntime();
+  const { config } = await bootstrapMaintenanceRuntime({ hydrateOwnerFiles: true });
   const postgresUrl = options.postgresUrl?.trim() || config.postgresDatabaseUrl?.trim();
   if (!postgresUrl) {
     throw new Error('Missing-embedding backfill requires --postgres-url or config.postgresDatabaseUrl');

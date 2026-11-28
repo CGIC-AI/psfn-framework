@@ -424,7 +424,6 @@ describe('AdminSettingsDataService', () => {
       elevenLabsEndpointBase: 'https://api.elevenlabs.test',
       obsidianVaultName: 'companion',
       obsidianCliPath: '/usr/bin/obsidian',
-      obsidianAutoPublish: true,
       obsidianTimeoutMs: 15_000,
       discordTriggerWords: 'pixie, hey companion',
       discordTriggerReactions: '👆,🔥',
@@ -927,6 +926,7 @@ describe('AdminSettingsDataService', () => {
       memoryRetrievalLimit: 12,
       discordEnabled: true,
       discordHeartbeatChannel: '1234567890',
+      obsidianAutoPublish: true,
     }));
 
     expect(result.ok).toBe(false);
@@ -936,6 +936,7 @@ describe('AdminSettingsDataService', () => {
     expect(result.message).toContain('memoryRetrievalLimit has been removed');
     expect(result.message).toContain('discordEnabled has been removed');
     expect(result.message).toContain('discordHeartbeatChannel has been removed');
+    expect(result.message).toContain('obsidianAutoPublish has been removed');
     expect(result.validationErrors).toEqual(expect.arrayContaining([
       expect.objectContaining({
         field: 'memoryBudgetPct',
@@ -959,6 +960,10 @@ describe('AdminSettingsDataService', () => {
       }),
       expect.objectContaining({
         field: 'discordHeartbeatChannel',
+        code: 'removed_field',
+      }),
+      expect.objectContaining({
+        field: 'obsidianAutoPublish',
         code: 'removed_field',
       }),
     ]));

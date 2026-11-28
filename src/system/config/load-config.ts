@@ -642,7 +642,6 @@ function loadConfigForMode(
     // owner file is loaded and assigned during startup (bootstrap-helpers).
     subagentRoles: createEmptySubagentRoleRegistryConfig(),
     // Obsidian vault
-    obsidianAutoPublish: false,
     obsidianTimeoutMs: DEFAULT_OBSIDIAN_TIMEOUT_MS,
   };
 }

@@ -207,6 +207,7 @@ describe('settings', () => {
         defaultContextWindow: 196_000,
         discordEnabled: true,
         discordHeartbeatChannel: '1234567890',
+        obsidianAutoPublish: true,
       }), 'utf-8');
 
       const loaded = loadSettings(tempDir);
@@ -217,6 +218,7 @@ describe('settings', () => {
       expect((loaded as Record<string, unknown>).defaultContextWindow).toBeUndefined();
       expect((loaded as Record<string, unknown>).discordEnabled).toBeUndefined();
       expect((loaded as Record<string, unknown>).discordHeartbeatChannel).toBeUndefined();
+      expect((loaded as Record<string, unknown>).obsidianAutoPublish).toBeUndefined();
       expect(JSON.parse(readFileSync(path, 'utf-8'))).toEqual({
         sessionHistoryBudgetPct: 7,
         sessionMessageLimit: 44,
@@ -225,6 +227,7 @@ describe('settings', () => {
         defaultContextWindow: 196_000,
         discordEnabled: true,
         discordHeartbeatChannel: '1234567890',
+        obsidianAutoPublish: true,
       });
     });
 
@@ -1694,7 +1697,6 @@ describe('settings', () => {
         telegramAuthorizedUsers: '123, 456',
         obsidianVaultName: 'companion',
         obsidianCliPath: '/usr/local/bin/obsidian',
-        obsidianAutoPublish: true,
         obsidianTimeoutMs: 12_000,
         moaEnabled: true,
         moaReferenceModels: ['openai/gpt-4.1-mini', 'moonshotai/kimi-k2.5'],

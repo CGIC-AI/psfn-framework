@@ -49,6 +49,9 @@ export const REMOVED_RUNTIME_SETTINGS_KEYS = [
   'discordHeartbeatChannel',
   'sessionMessageLimit',
   'memoryRetrievalLimit',
+  // psfn-framework-au0oz: no runtime reader; reflections publish to the local
+  // journal unconditionally.
+  'obsidianAutoPublish',
 ] as const;
 
 export const MODEL_SLOT_KEY_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -336,7 +339,6 @@ export interface EditableSettings {
   // Obsidian vault
   obsidianVaultName?: string;
   obsidianCliPath?: string;
-  obsidianAutoPublish?: boolean;
   obsidianTimeoutMs?: number;
 
   // MoA (Mixture of Agents) configuration
@@ -515,7 +517,6 @@ export const RUNTIME_SETTINGS_KEYS = [
   // Obsidian vault
   'obsidianVaultName',
   'obsidianCliPath',
-  'obsidianAutoPublish',
   'obsidianTimeoutMs',
   // MoA (Mixture of Agents)
   'moaEnabled',

@@ -24,8 +24,8 @@ export function createOptionalJournalAutoPublisher(
   _config?: SubstrateConfig,
 ): JournalAutoPublisher {
   // Local workspace markdown journal publishing writes strictly to
-  // <workspace>/journal/reflections/ via JournalOps (no Obsidian CLI), so it
-  // stays enabled by default rather than gated behind legacy obsidianAutoPublish.
+  // <workspace>/journal/reflections/ via JournalOps (no Obsidian CLI), so it is
+  // always enabled; no setting gates it (psfn-framework-au0oz).
   const journalRoot = resolvePersonalJournalDir(workspaceRoot);
   const publisher = new JournalAutoPublisher(new JournalOps(journalRoot));
   log.info('Local markdown journal auto-publish enabled for reflections', { journalRoot });

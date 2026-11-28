@@ -209,7 +209,6 @@
   // ── External Obsidian Bridge ──
   let obsidianVaultName = $state('');
   let obsidianCliPath = $state('obsidian');
-  let obsidianAutoPublish = $state(false);
   let obsidianTimeoutMs = $state(10000);
 
   // ── Channels ──
@@ -338,7 +337,6 @@
       deepgramModel,
       obsidianVaultName,
       obsidianCliPath,
-      obsidianAutoPublish,
       obsidianTimeoutMs,
       discordTriggerWords,
       discordTriggerReactions,
@@ -408,7 +406,6 @@
     if (next.deepgramModel !== undefined) deepgramModel = next.deepgramModel;
     if (next.obsidianVaultName !== undefined) obsidianVaultName = next.obsidianVaultName;
     if (next.obsidianCliPath !== undefined) obsidianCliPath = next.obsidianCliPath;
-    if (next.obsidianAutoPublish !== undefined) obsidianAutoPublish = next.obsidianAutoPublish;
     if (next.obsidianTimeoutMs !== undefined) obsidianTimeoutMs = next.obsidianTimeoutMs;
     if (next.discordTriggerWords !== undefined) discordTriggerWords = next.discordTriggerWords;
     if (next.discordTriggerReactions !== undefined) discordTriggerReactions = next.discordTriggerReactions;
@@ -1489,7 +1486,7 @@
             {fieldErrors} {toggleSection}
             bind:ttsProvider bind:sttProvider bind:voiceId bind:deepgramModel
             bind:echoTtsUrl bind:echoTtsVoice bind:echoTtsPreset
-            bind:obsidianVaultName bind:obsidianCliPath bind:obsidianAutoPublish bind:obsidianTimeoutMs
+            bind:obsidianVaultName bind:obsidianCliPath bind:obsidianTimeoutMs
             bind:discordTriggerWords bind:discordTriggerReactions bind:discordTriggerListenWindowSeconds
             bind:telegramEnabled bind:telegramAuthorizedUsers
           />

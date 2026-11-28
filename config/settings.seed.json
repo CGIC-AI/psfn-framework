@@ -556,7 +556,6 @@
   "imageFalPollIntervalMs": 1500,
   "imageComfyTimeoutMs": 180000,
   "imageComfyPollIntervalMs": 1500,
-  "obsidianAutoPublish": false,
   "obsidianTimeoutMs": 10000,
   "uiThemeId": "garden",
   "retryMaxAttempts": 3,

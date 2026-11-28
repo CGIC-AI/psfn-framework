@@ -4,7 +4,10 @@ import { sendJson, sendText } from '../../channels/backplane/http/primitives.js'
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
-import type { GatewayOperatorConfirmationClient } from '../../app/startup/support/gateway-operator-confirmation-client.js';
+import {
+  GatewayOperatorConfirmationDeniedError,
+  type GatewayOperatorConfirmationClient,
+} from '../../app/startup/support/gateway-operator-confirmation-client.js';
 import { isResolvedConfirmationDecision } from '../../system/capabilities/confirmation-queue.js';
 import { buildGardenCapabilityHeaders } from './garden-admission.js';
 import {
@@ -254,9 +257,13 @@ export class FleetGardenOperatorRouter {
     try {
       const result = await resolver.resolve(parsed.params, {
         kind: 'fleet_principal',
-        companionId: admitted.companionId,
-        requestId: admitted.context.requestId,
-        decisionId: admitted.context.decisionId,
+        parent: {
+          token: admitted.authority.token,
+          target: admitted.target,
+          requestId: admitted.verified.requestId,
+          decisionId: admitted.verified.decisionId,
+          versions: admitted.verified.versions,
+        },
       });
       if (result.status === 'not_found') return false;
       sendJson(res, 200, {
@@ -267,6 +274,11 @@ export class FleetGardenOperatorRouter {
       });
       return true;
     } catch (error) {
+      if (error instanceof GatewayOperatorConfirmationDeniedError) {
+        // The service-denial observer records this 403 with the admitted actor.
+        sendJson(res, 403, { ok: false, message: 'Confirmation resolve denied' });
+        return true;
+      }
       log.error('Operator confirmation resolution failed', {
         error: toErrorMessage(error),
       });

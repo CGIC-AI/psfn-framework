@@ -107,7 +107,10 @@ import {
 } from './server/auth.js';
 import { handleModelsEndpoint } from './server/models.js';
 import { FleetAuthChildAssertionHttpRoute } from './server/fleet-auth-child-assertion-route.js';
+import { FleetAuthConfirmationResolutionHttpRoute } from './server/fleet-auth-confirmation-route.js';
 import type { GatewayFleetAuthChildAssertionBroker } from '../../boundary/gateway/fleet-auth-child-assertions.js';
+import type { GatewayFleetConfirmationResolution } from '../../boundary/gateway/fleet-auth-confirmation-resolution.js';
+import { parseOperatorConfirmationParams } from '../../boundary/gateway/operator-confirmation-params.js';
 import {
   handleCompanionApprovalDecision,
   handleCompanionArtifactPreview,
@@ -160,7 +163,6 @@ const TELEMETRY_EVENT_TYPE_ALLOWLIST = new Set([
 const ICP_OPERATOR_CANCEL_PATH = /^\/v1\/operator\/icp-autonomy\/companions\/([^/]+)\/cancel$/u;
 const CONFIRMATION_OPERATOR_RESOLVE_PATH = '/v1/operator/confirmations/resolve';
 const CONFIRMATION_OPERATOR_MAX_BODY_BYTES = 16 * 1024;
-const CONFIRMATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u;
 
 export interface IcpAutonomyOperatorPort {
   cancelForCompanion(companionId: string): Promise<number>;
@@ -495,6 +497,8 @@ export interface ApiServerConfig {
   fleetAuthHttpRoutes?: FleetAuthHttpRoutes;
   /** Signed-parent-authenticated operator-to-agent child assertion exchange. */
   fleetAuthChildAssertions?: GatewayFleetAuthChildAssertionBroker;
+  /** Signed-parent-authenticated Fleet Garden resolution of gateway-owned approvals. */
+  fleetAuthConfirmations?: GatewayFleetConfirmationResolution;
   /** Unified browser origin; the only fleet-mode route to Garden processes. */
   fleetSsoRouter?: GatewayFleetSsoRouter;
   /**
@@ -568,6 +572,7 @@ export class ApiServer implements ChannelAdapterPort {
   private confirmationOperator?: ConfirmationOperatorPort;
   private fleetAuthHttpRoutes?: FleetAuthHttpRoutes;
   private fleetAuthChildAssertionRoute?: FleetAuthChildAssertionHttpRoute;
+  private fleetAuthConfirmationRoute?: FleetAuthConfirmationResolutionHttpRoute;
   private fleetSsoRouter?: GatewayFleetSsoRouter;
   private confirmationOperatorRequiresCompanionId: boolean;
   private hubDeviceIngress?: GatewayHubDeviceIngressService;
@@ -618,6 +623,9 @@ export class ApiServer implements ChannelAdapterPort {
     this.fleetAuthHttpRoutes = config.fleetAuthHttpRoutes;
     this.fleetAuthChildAssertionRoute = config.fleetAuthChildAssertions
       ? new FleetAuthChildAssertionHttpRoute(config.fleetAuthChildAssertions)
+      : undefined;
+    this.fleetAuthConfirmationRoute = config.fleetAuthConfirmations
+      ? new FleetAuthConfirmationResolutionHttpRoute(config.fleetAuthConfirmations)
       : undefined;
     this.fleetSsoRouter = config.fleetSsoRouter;
     this.confirmationOperatorRequiresCompanionId = config.confirmationOperatorRequiresCompanionId === true;
@@ -765,6 +773,10 @@ export class ApiServer implements ChannelAdapterPort {
     const path = url.pathname;
     if (this.fleetAuthChildAssertionRoute?.matches(req.method, path)) {
       void this.fleetAuthChildAssertionRoute.handle(req, res);
+      return;
+    }
+    if (this.fleetAuthConfirmationRoute?.matches(req.method, path)) {
+      void this.fleetAuthConfirmationRoute.handle(req, res);
       return;
     }
     if (this.fleetAuthHttpRoutes?.matches(req.method, path)) {
@@ -1187,26 +1199,14 @@ export class ApiServer implements ChannelAdapterPort {
       const companionId = isRecord(body) && isRfc4122Uuid(body.companionId)
         ? body.companionId
         : undefined;
-      if (!isRecord(body)
-        || Object.keys(body).some(key => !['id', 'decision', 'modifiedParams', 'companionId'].includes(key))
-        || typeof body.id !== 'string'
-        || !CONFIRMATION_ID_PATTERN.test(body.id)
-        || (body.decision !== 'approve' && body.decision !== 'deny' && body.decision !== 'modify')
-        || (body.decision === 'modify' && !isRecord(body.modifiedParams))
-        || (body.decision !== 'modify' && body.modifiedParams !== undefined)
+      const params = parseOperatorConfirmationParams(body, ['companionId']);
+      if (!params
         || (this.confirmationOperatorRequiresCompanionId && companionId === undefined)
-        || (body.companionId !== undefined && companionId === undefined)) {
+        || (isRecord(body) && body.companionId !== undefined && companionId === undefined)) {
         sendApiError(res, 400, 'invalid_request', 'Confirmation resolution payload is invalid');
         return;
       }
 
-      const params: ConfirmationResolveRequest = {
-        id: body.id,
-        decision: body.decision,
-        ...(body.decision === 'modify'
-          ? { modifiedParams: body.modifiedParams as Record<string, unknown> }
-          : {}),
-      };
       try {
         const result = await this.confirmationOperator!.resolve(
           params,

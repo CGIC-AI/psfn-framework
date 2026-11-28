@@ -1,15 +1,22 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { collectTelemetry, streamChat } from './evidence.mjs';
+import { fixtureFetch } from './https.mjs';
 import { eventually, gardenJson } from './journeys.mjs';
 import { readCaseTurn } from './memory-journey.mjs';
 
-async function resolveApproval(options, id, decision) {
-  const response = await fetch(`${options.apiBase}/v1/operator/confirmations/resolve`, {
-    method: 'POST', headers: { Authorization: `Bearer ${options.adminToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id, decision, companionId: options.companionId }), signal: AbortSignal.timeout(30_000),
+// The canonical Fleet Garden route, through the gateway's audited ADMIN_TOKEN
+// door, operator admission and the capability-authorized gateway resolution.
+async function resolveThroughGarden(options, id, decision, token = options.adminToken) {
+  return await fixtureFetch(options, `${options.gardenBase}/api/admin/confirmations/resolve`, {
+    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, decision }), signal: AbortSignal.timeout(30_000),
   });
-  assert.equal(response.status, 200, `Confirmation transport returned HTTP ${response.status}`);
+}
+
+async function resolveApproval(options, id, decision) {
+  const response = await resolveThroughGarden(options, id, decision);
+  assert.equal(response.status, 200, `Garden confirmation resolve returned HTTP ${response.status}`);
   return response.json();
 }
 
@@ -49,10 +56,12 @@ export async function runApprovalJourney(options) {
       });
       assert.equal(unauthorized.status, 403, 'Conversation credential gained operator approval authority');
       await unauthorized.body?.cancel();
+      const unauthorizedGarden = await resolveThroughGarden(options, entry.id, 'approve', options.apiKey);
+      assert.ok(unauthorizedGarden.status >= 400 && unauthorizedGarden.status < 500,
+        `Conversation credential reached Garden approval with HTTP ${unauthorizedGarden.status}`);
+      await unauthorizedGarden.body?.cancel();
       assert.deepEqual(await options.readDeletionEffect(options.memoryId), initial);
       options.checkpoint?.(`resolve_${decision}`);
-      // The real key-mode operator endpoint resolves gateway-owned approvals.
-      // Fleet Garden currently has no resolver wired by its auth plan.
       const result = await resolveApproval(options, entry.id, decision);
       assert.equal(result.status, decision === 'approve' ? 'approved' : 'denied');
       assert.equal(result.executed, decision === 'approve');

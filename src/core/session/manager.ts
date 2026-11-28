@@ -2300,6 +2300,7 @@ export class SessionManager implements SessionManagerTypeSurface {
       this.assertMutableSessionReadAllowed('SessionManager.storedSessionTranscriptReader');
       return this.getRecentMessagesForResolvedChannel(this.resolveStoredSessionId(sessionId), limit);
     },
+    getJournalSessionGroup: (sessionId: string): JournalSessionGroup => this.getJournalSessionGroup(sessionId),
   };
 
   private getRecentMessagesAtOrBeforeForResolvedChannel(

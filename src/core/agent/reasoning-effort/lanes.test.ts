@@ -18,6 +18,8 @@ describe('resolveReasoningEffortLane', () => {
     ['internal:heartbeat:custom', 'reflection'],
     ['internal:world-exploration', 'selfDirected'],
     ['internal:planned:prompt-1', 'selfDirected'],
+    ['shard:worker-1', null],
+    ['subagent:researcher', null],
     ['internal:free-time:', null],
     ['internal:reflection:', null],
     ['internal:cogsec-review', null],

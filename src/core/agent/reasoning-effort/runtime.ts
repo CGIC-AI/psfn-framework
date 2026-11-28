@@ -222,7 +222,9 @@ export class ReasoningEffortRuntime {
     candidate: RoutingCandidate,
   ): { requested: ModelThinkingEffort; source: ReasoningEffortSource } {
     const laneLevel = (this.options.getSettings() ?? createDefaultReasoningEffortSettings())[lane];
-    const slotLevel = candidate.thinkingEffort;
+    // The slot's own effort, as main sends it: tuning.thinkingEffort, or
+    // medium for a slot that only enables thinking.
+    const slotLevel = candidate.thinkingEffort ?? (candidate.thinkingEnabled === true ? 'medium' : undefined);
     if (slotLevel && thinkingEffortRank(slotLevel) > thinkingEffortRank(laneLevel)) {
       return { requested: slotLevel, source: 'slot_tuning' };
     }

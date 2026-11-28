@@ -4,13 +4,19 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Context } from '@earendil-works/pi-ai';
 import type { CanonicalModelRegistry, CorrelationMetadata } from '../../../shared/contracts/runtime.js';
-import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import {
+  sanitizeCoreSubstrateConfig,
+  type SubstrateConfig,
+} from '../../../system/config/runtime-config-contracts.js';
 import { LLMClient } from '../../../primitives/llm/client.js';
 import { PiProviderRuntime } from '../../../primitives/llm/provider-runtime.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 import { createEnvCredentialVault, envCredential } from '../../../boundary/custody/credential-vault.js';
 import { buildLLMWorkSpec, completeWithWorkSpec } from '../../../primitives/llm/work-spec.js';
 import { resolveRoutingCandidates } from '../../../primitives/llm/routing.js';
+import { resolveCandidates as resolveHintedCandidates } from '../../../primitives/llm/model-hint-routing.js';
+import { EventBus } from '../../../shared/event-bus.js';
+import { AdminSubsystemHealthDataService } from '../../../operator/garden/services/subsystem-health-service.js';
 import { createSelfStatusTool } from '../../tools/self-status.js';
 import { createSubstrateStreamFn, resolveModel } from '../stream-adapter.js';
 import { withLaneReasoningEffort } from './provider.js';
@@ -133,7 +139,9 @@ function harness(config: SubstrateConfig): Harness {
     logger: { info: (message, fields) => logged.push({ message, ...(fields ? { fields } : {}) }) },
     onChange: change => changes.push(change),
   });
-  const streamFn = createSubstrateStreamFn(config, {
+  // The agent process holds the credential-free core config, as in production.
+  const coreConfig = sanitizeCoreSubstrateConfig(config);
+  const streamFn = createSubstrateStreamFn(coreConfig, {
     reasoningEffort: reasoning,
     transport: { stream: client.stream.bind(client) },
   });
@@ -150,7 +158,7 @@ function harness(config: SubstrateConfig): Harness {
         messages: [{ role: 'user', content: 'hello', timestamp: 0 }],
       };
       await runWithRequestContext(context, async () => {
-        const stream = await streamFn(resolveModel(config, runtime, purpose), llmContext, {});
+        const stream = await streamFn(resolveModel(coreConfig, runtime, purpose), llmContext, {});
         for await (const _event of stream as AsyncIterable<unknown>) {
           // drain
         }
@@ -238,6 +246,10 @@ describe('reasoning effort on the provider wire', () => {
 
     const tuned = harness(makeConfig({ modelRegistry: registry({ tuning: { thinkingEffort: 'high' } }) }));
     expect((await tuned.turnCall(CHAT)).reasoning).toEqual({ effort: 'high' });
+
+    // A slot that only enables thinking is sent medium on main; chat's low floor keeps it.
+    const enabled = harness(makeConfig({ modelRegistry: registry({ tuning: { thinkingEnabled: true } }) }));
+    expect((await enabled.turnCall(CHAT)).reasoning).toEqual({ effort: 'medium' });
   });
 
   it('bounds a lane level to what the model supports, logged once', async () => {
@@ -275,6 +287,68 @@ describe('reasoning effort on the provider wire', () => {
       model: 'deepseek/deepseek-v3.2',
       reasoning: undefined,
       max_tokens: 1024,
+    });
+  });
+});
+
+describe('an effort-only model hint keeps the routed chain', () => {
+  it('leads with the purpose primary, keeps its slot key, and keeps the fallbacks', () => {
+    const base = registry();
+    const config = makeConfig({
+      modelRegistry: {
+        ...base,
+        models: [
+          ...base.models,
+          {
+            id: 'background-fallback',
+            rank: 60,
+            identity: { provider: 'openrouter', model: 'z-ai/glm-5', source: { type: 'openrouter' as const } },
+            purposes: [{ purpose: 'background' as const, primary: false }],
+            capabilities: { maxOutputTokens: 8192, contextWindow: 128000 },
+            tuning: { maxOutputTokens: 8192 },
+          },
+        ],
+      },
+    });
+    const routed = resolveRoutingCandidates(config, 'background');
+    const hinted = resolveHintedCandidates(config, 'background', { thinkingEffort: 'medium' });
+    const view = (candidate: { slotKey?: string; model: string; thinkingEffort?: string }) =>
+      [candidate.slotKey, candidate.model, candidate.thinkingEffort ?? null];
+    expect(routed.length).toBeGreaterThan(1);
+    // The hinted primary leads; the whole routed chain (the un-hinted primary
+    // included, as for any knob-only hint) follows as transient fallbacks.
+    expect(hinted.map(view)).toEqual([
+      ['extraction', 'deepseek/deepseek-v3.2', 'medium'],
+      ...routed.map(view),
+    ]);
+  });
+});
+
+describe('Garden sees the companion\'s choices', () => {
+  it('records a reasoning_set made through the tool in the reasoning_effort lane', async () => {
+    const config = makeConfig();
+    captureWire();
+    const bus = new EventBus();
+    const garden = new AdminSubsystemHealthDataService({ eventBus: bus });
+    const runtime = new PiProviderRuntime(undefined, config);
+    const reasoning = new ReasoningEffortRuntime({
+      getSettings: () => config.reasoningEffort,
+      catalogue: runtime,
+      resolvePurposeCandidate: (purpose) => resolveRoutingCandidates(config, purpose)[0],
+      logger: { info: () => undefined },
+      onChange: (change) => { void bus.emit('agent.reasoning_effort.changed', change); },
+    });
+    const selfStatus = createSelfStatusTool({ config, reasoning });
+    await runWithRequestContext(FREE_TIME, async () => selfStatus.execute('call-1', {
+      action: 'reasoning_set', level: 'high', scope: 'session',
+    } as never));
+
+    const lane = (await garden.getSnapshot()).lanes.find(candidate => candidate.id === 'reasoning_effort');
+    expect(lane).toMatchObject({
+      observedEventCount: 1,
+      lastOutcome: 'ran',
+      lastReason: 'freeTime:session:baseline->high',
+      counts: { supportedLevels: 4 },
     });
   });
 });

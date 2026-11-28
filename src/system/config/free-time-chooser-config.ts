@@ -47,6 +47,7 @@ export interface FreeTimeChooserSettings {
    * (the free-time lane reasons at medium or more by default). Reasoning
    * tokens precede the short choice, so the answer-sized `chooserDeadlineMs`
    * would time a reasoning call out into degradation (psfn-framework-cdqin).
+   * A reasoning call never gets less than `chooserDeadlineMs`.
    */
   chooserReasoningDeadlineMs: number;
 }

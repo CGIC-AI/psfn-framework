@@ -17,7 +17,10 @@ import {
 import { resolveOwnTimeDeliberationCaps } from './reflection-template-runtime/own-time-deliberation-caps.js';
 import { createReflectionTemplateRuntime } from './reflection-template-runtime.js';
 import { Scheduler } from './scheduler.js';
-import { createDefaultFreeTimeChooserSettings } from '../../system/config/free-time-chooser-config.js';
+import {
+  createDefaultFreeTimeChooserSettings,
+  type FreeTimeChooserSettings,
+} from '../../system/config/free-time-chooser-config.js';
 import { InMemoryRestSilenceStore } from '../../test-support/in-memory-rest-silence-store.js';
 import { FreeTimeChooser } from './free-time-chooser.js';
 import { FreeTimeWorkspaceResolver } from './free-time-workspace-resolver.js';
@@ -260,7 +263,7 @@ describe('free-time chooser at medium reasoning (psfn-framework-cdqin)', () => {
   // A medium-reasoning choice: thousands of reasoning tokens before a short JSON answer.
   const REASONING_CHOICE_MS = 90_000;
 
-  function chooserHarness(withReasoningPort: boolean) {
+  function chooserHarness(withReasoningPort: boolean, settings: Partial<FreeTimeChooserSettings> = {}) {
     vi.useFakeTimers();
     const bodies = captureWire({
       latencyMs: REASONING_CHOICE_MS,
@@ -290,16 +293,26 @@ describe('free-time chooser at medium reasoning (psfn-framework-cdqin)', () => {
       listResumableProjects: () => [],
       companionName: 'Companion',
       resolveIdentityPrompt: () => 'You are Companion. You love tide pools and writing small poems.',
-      settings: { ...createDefaultFreeTimeChooserSettings(), enabled: true },
+      settings: { ...createDefaultFreeTimeChooserSettings(), enabled: true, ...settings },
     });
     return { bodies, chooser };
   }
 
-  async function choose(chooser: FreeTimeChooser) {
+  async function choose(chooser: FreeTimeChooser, elapseMs = REASONING_CHOICE_MS) {
     const pending = chooser.chooseWorkspace({ lane: 'quiet_hours', nowMs: Date.now() });
-    await vi.advanceTimersByTimeAsync(REASONING_CHOICE_MS);
+    await vi.advanceTimersByTimeAsync(elapseMs);
     return pending;
   }
+
+  it('a reasoning choice never gets less than an owner\'s longer chooserDeadlineMs', async () => {
+    const { chooser } = chooserHarness(true, { chooserDeadlineMs: 600_000, chooserReasoningDeadlineMs: 30_000 });
+    const pending = chooser.chooseWorkspace({ lane: 'quiet_hours', nowMs: Date.now() });
+    // Past the 30s reasoning deadline: the owner's 600s still holds.
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(infoLines.some(line => line.component === 'FreeTimeChooser')).toBe(false);
+    await vi.advanceTimersByTimeAsync(REASONING_CHOICE_MS);
+    expect(await pending).toMatchObject({ kind: 'workspace', optionId: 'private_wander' });
+  });
 
   it('the answer-sized 60s deadline times a reasoning choice out into degradation', async () => {
     const { bodies, chooser } = chooserHarness(false);

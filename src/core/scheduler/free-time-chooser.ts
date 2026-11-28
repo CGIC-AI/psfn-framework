@@ -370,9 +370,12 @@ export class FreeTimeChooser {
   ): Promise<string | typeof TIMEOUT_SENTINEL> {
     const correlation = this.buildCorrelation(context);
     // Reasoning tokens precede the short choice: a reasoning call runs under
-    // its own deadline instead of the answer-sized one (psfn-framework-cdqin).
+    // its own deadline when that is the longer one, never under a shorter
+    // deadline than the owner set for the answer (psfn-framework-cdqin).
     const reasons = this.ports.reasoningEffort?.resolveModelHint('background', correlation) !== undefined;
-    const deadlineCap = reasons ? 'chooserReasoningDeadlineMs' : 'chooserDeadlineMs';
+    const deadlineCap = reasons && this.settings.chooserReasoningDeadlineMs > this.settings.chooserDeadlineMs
+      ? 'chooserReasoningDeadlineMs'
+      : 'chooserDeadlineMs';
     const deadlineMs = this.settings[deadlineCap];
     const controller = new AbortController();
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;

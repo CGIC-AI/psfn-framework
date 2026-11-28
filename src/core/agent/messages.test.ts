@@ -213,6 +213,50 @@ describe('convertToLlm', () => {
     expect(continuing.at(-1)?.role).not.toBe('assistant');
   });
 
+  it('keeps the self-directed trigger user-role across the same turn\'s tool loop (3pye5)', () => {
+    const toolStep: AssistantMessage = {
+      ...makeAssistant(''),
+      content: [
+        { type: 'thinking', thinking: 'look it up' },
+        { type: 'toolCall', id: 'call-1', name: 'memory', arguments: { action: 'search' } },
+      ],
+      stopReason: 'toolUse',
+    };
+    const toolResult: ToolResultMessage = {
+      role: 'toolResult',
+      toolCallId: 'call-1',
+      toolName: 'memory',
+      content: [{ type: 'text', text: 'two memories' }],
+      isError: false,
+      timestamp: NOW,
+    };
+    const result = convertToLlm([
+      makeUser('earlier'),
+      makeAssistant('earlier reply'),
+      makeSystemNote('[SYSTEM: reflection] Review the day.'),
+      toolStep,
+      toolResult,
+    ]);
+    expect(result.map(message => message.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'toolResult']);
+    expect((result[2] as UserMessage).content).toBe('[System note] [SYSTEM: reflection] Review the day.');
+    expect((result[2] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.systemNote);
+  });
+
+  it('leaves an answered note assistant-side even when a later turn calls tools', () => {
+    const toolStep: AssistantMessage = {
+      ...makeAssistant(''),
+      content: [{ type: 'toolCall', id: 'call-2', name: 'memory', arguments: {} }],
+      stopReason: 'toolUse',
+    };
+    const result = convertToLlm([
+      makeSystemNote('config changed'),
+      makeAssistant('noted'),
+      makeUser('please look this up'),
+      toolStep,
+    ]);
+    expect(result.map(message => message.role)).toEqual(['assistant', 'assistant', 'user', 'assistant']);
+  });
+
   it('keeps a trailing assistant reply and a mid-conversation note unchanged', () => {
     const result = convertToLlm([makeUser('hello'), makeSystemNote('config changed'), makeAssistant('hi')]);
     expect(result.map(message => message.role)).toEqual(['user', 'assistant', 'assistant']);

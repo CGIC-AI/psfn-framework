@@ -47,6 +47,8 @@ export interface FactAcceptanceStageInput {
   companionAuthorIds: readonly string[];
   /** Group-room routing must prove direct address from structured journal metadata. */
   requireStructuredAddressing?: boolean;
+  /** The source is a private direct conversation (d5e0p.21). */
+  directConversation?: boolean;
   channelId: string;
   /** Stable identity of this extraction run; retries reuse it. */
   attemptRef: string;
@@ -166,6 +168,7 @@ export function buildAcceptedFactCandidates(
           companionNames: input.companionNames,
           companionAuthorIds: input.companionAuthorIds,
           requireStructuredAddressing: input.requireStructuredAddressing,
+          directConversation: input.directConversation,
         },
       );
     }

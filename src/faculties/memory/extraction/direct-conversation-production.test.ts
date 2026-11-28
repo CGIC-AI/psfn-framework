@@ -15,17 +15,26 @@ const alex: Contact = {
 const robin: Contact = { ...alex, id: 'contact-robin', displayName: 'Robin', nickname: undefined, isMachineIntelligence: true };
 const channelId = '123456789012345678';
 
-async function extract(text: string, subject: string, source: string | undefined, ids: number[], contacts = [alex, robin]) {
+async function extract(
+  text: string,
+  subject: string | undefined,
+  source: string | undefined,
+  ids: number[],
+  contacts = [alex, robin],
+  type = 'semantic',
+  channelVisibility = 'private',
+) {
   const entries: SessionEntry[] = [
-    { id: 1, channelId, role: 'user', authorId: 'transport-alex', authorName: 'Alex',
+    { id: 1, channelId, role: 'user', authorId: 'transport-alex', authorName: 'Alex', channelVisibility,
       content: 'Robin studies marine biology at the local university. We went sailing last summer.', timestamp: 1000,
       metadata: buildSessionMetadataWithSpeakerAttribution(undefined, alex.id) },
-    { id: 2, channelId, role: 'assistant', content: 'I promised to join the sailing club this summer.', timestamp: 2000 },
+    { id: 2, channelId, role: 'assistant', content: 'I promised to join the sailing club this summer.', timestamp: 2000,
+      channelVisibility },
   ];
   const llm = { complete: vi.fn().mockResolvedValue({ content: `<response><fact>
-<text>${text}</text><type>semantic</type><importance>0.9</importance><confidence>0.95</confidence>
-<source_message_ids>${ids.join(',')}</source_message_ids>${source ? `<source_speaker_name>${source}</source_speaker_name>` : ''}
-<subject_name>${subject}</subject_name></fact></response>` }) };
+<text>${text}</text><type>${type}</type><importance>0.9</importance><confidence>0.95</confidence>
+${ids.length > 0 ? `<source_message_ids>${ids.join(',')}</source_message_ids>` : ''}${source ? `<source_speaker_name>${source}</source_speaker_name>` : ''}
+${subject ? `<subject_name>${subject}</subject_name>` : ''}</fact></response>` }) };
   const memoryStore = new InMemoryMemoryStore();
   const contactStore = fromPartial<ContactStorePort>({
     listAll: vi.fn(async () => contacts), getById: vi.fn(async id => contacts.find(contact => contact.id === id)),
@@ -81,5 +90,46 @@ describe('direct extraction through the production writer', () => {
     expect(memories[0]?.contactId).toBeUndefined();
     expect(classifyMemorySubject(memories[0]!, { memoryRevision: 1 }).subjectClass).toBe('companion_private');
     expect(JSON.stringify(llm.complete.mock.calls)).toContain('Preserve named third-party facts');
+  });
+
+  // psfn-framework-d5e0p.21: a direct-conversation fact with no subject tag is
+  // about the sole human counterparty, so it must stay recallable in that DM.
+  it('stamps the sole DM human as subject when the model omits every attribution tag', async () => {
+    const { memories } = await extract('Alex enjoys sailing in the summer.', undefined, undefined, []);
+    expect(memories).toHaveLength(1);
+    expect(memories[0]).toMatchObject({ contactId: alex.id, provenance: {
+      routingReason: 'single_speaker_transcript', subjectContactId: alex.id, sourceContactId: alex.id,
+    } });
+    expect(classifyMemorySubject(memories[0]!, { memoryRevision: 1 })).toMatchObject({
+      subjectClass: 'single_contact', subjectContactIds: [alex.id],
+    });
+  });
+
+  it('stamps the cited DM source as subject when the model names no subject', async () => {
+    const { memories } = await extract('Alex went sailing last summer.', undefined, 'Alex', [1]);
+    expect(memories).toHaveLength(1);
+    expect(memories[0]).toMatchObject({ contactId: alex.id, provenance: {
+      routingReason: 'structured_source_metadata', subjectContactId: alex.id, sourceContactId: alex.id,
+    } });
+    expect(classifyMemorySubject(memories[0]!, { memoryRevision: 1 }).subjectClass).toBe('single_contact');
+  });
+
+  it('leaves a sole-speaker room fact unattributed instead of claiming the speaker as subject', async () => {
+    const { memories } = await extract(
+      'The club needs more sailing volunteers.', undefined, undefined, [], [alex, robin], 'semantic', 'invite_only',
+    );
+    expect(memories).toHaveLength(1);
+    expect(memories[0]?.provenance?.subjectContactId).toBeUndefined();
+    expect(classifyMemorySubject(memories[0]!, { memoryRevision: 1 }).subjectClass).toBe('unattributed');
+  });
+
+  it('does not claim a companion peer as the subject of its own direct conversation', async () => {
+    const peer: Contact = { ...robin, id: alex.id, displayName: 'Alex' };
+    const { memories } = await extract(
+      'Alex enjoys sailing in the summer.', undefined, undefined, [], [peer, robin],
+    );
+    expect(memories).toHaveLength(1);
+    expect(memories[0]?.provenance?.subjectContactId).toBeUndefined();
+    expect(classifyMemorySubject(memories[0]!, { memoryRevision: 1 }).subjectClass).toBe('unattributed');
   });
 });

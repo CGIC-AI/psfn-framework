@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
 import { DefaultImageVisionReviewer } from './vision-reviewer.js';
+import { resolveModel } from '../../core/agent/stream-adapter.js';
 import { VISION_IMAGE_MAX_BYTES } from './vision-policy.js';
 import { runWithRequestContext } from '../llm/request-context.js';
 import type { TurnID } from '../../shared/contracts/runtime.js';
@@ -12,7 +13,7 @@ vi.mock('../../core/agent/stream-adapter.js', () => ({
   resolveModel: vi.fn(() => ({
     id: 'vision-model',
     provider: 'openrouter',
-    maxTokens: 1024,
+    maxTokens: 6144,
     input: ['text', 'image'],
   })),
 }));
@@ -62,6 +63,31 @@ describe('DefaultImageVisionReviewer', () => {
     );
     expect(result.summary).toContain('matches the expected look');
     expect(result.model).toBe('vision-model');
+    // The vision slot's resolved budget is sent as-is (no 1024 clamp).
+    expect(completeImpl.mock.calls[0]?.[2]).toMatchObject({ maxTokens: 6144 });
+  });
+
+  it('fails loudly when the vision slot carries no output budget instead of inventing one', async () => {
+    vi.mocked(resolveModel).mockReturnValueOnce(fromAny({
+      id: 'vision-model',
+      provider: 'openrouter',
+      maxTokens: 0,
+      input: ['text', 'image'],
+    }));
+    const completeImpl = vi.fn();
+    const reviewer = new DefaultImageVisionReviewer(
+      fromAny({ primaryProvider: 'openrouter' }),
+      {
+        binaryFetcher: vi.fn(async () => ({ dataBase64: 'AQID', mimeType: 'image/png', sizeBytes: 3 })),
+        completeImpl,
+      },
+    );
+
+    await expect(reviewer.analyze({
+      imageUrls: ['https://images.example.test/review.png'],
+      question: 'What is in this image?',
+    })).rejects.toThrow(/positive output budget/u);
+    expect(completeImpl).not.toHaveBeenCalled();
   });
 
   it('routes configured ComfyUI output URLs through the default lane and still fails closed on gateway denial', async () => {

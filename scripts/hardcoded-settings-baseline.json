@@ -9968,11 +9968,6 @@
       "note": "Code-owned memo threshold for the token-count cache (psfn-framework-z9rkr): below it hashing costs about as much as counting; affects only CPU, never a count."
     },
     {
-      "file": "src/primitives/llm/vision-limits.ts",
-      "name": "VISION_COMPLETION_MAX_TOKENS",
-      "value": "1024"
-    },
-    {
       "file": "src/primitives/voice/connectors/stt/deepgram-stream.ts",
       "name": "DeepgramStreamingSttConnector.startStream.cancel.$call:truncation:slice.arg1#1",
       "value": "120",

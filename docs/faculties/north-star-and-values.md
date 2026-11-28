@@ -440,7 +440,7 @@ handler runs the blinded audit runtime and then values-consistency unless the
 audit gated out on consent. The task is configured by
 `schedulerConfig.introspectionAudit`
 (`src/system/config/scheduler-config/introspection.ts#L22-L33`): disabled by
-default, `intervalMs` 86_400_000, `reflectionMaxTokens` 300 (used for the
+default, `intervalMs` 86_400_000, `reflectionMaxTokens` 4_096 (used for the
 values-consistency evaluator).
 
 ## Configuration and operations

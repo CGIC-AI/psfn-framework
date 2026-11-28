@@ -3695,8 +3695,9 @@ describe('LLMClient correlation metadata', () => {
     const model = mocks.completeSimple.mock.calls[0][0] as { id: string; input: string[] };
     expect(model.id).toBe('vision/model');
     expect(model.input).toContain('image');
+    // The vision slot's own 4096-token budget is sent; no purpose-wide 1024 clamp.
     const requestOptions = mocks.completeSimple.mock.calls[0][2] as { maxTokens: number };
-    expect(requestOptions.maxTokens).toBe(1024);
+    expect(requestOptions.maxTokens).toBe(4096);
   });
 });
 
@@ -5558,7 +5559,7 @@ describe('LLMClient model budget gates and usage metering', () => {
     });
   });
 
-  it('caps vision completion output tokens before routing through injected transport', async () => {
+  it('sends the vision slot operator ceiling, not its provider capability, through injected transport', async () => {
     const config = makeConfig({
       modelRegistry: {
         schemaVersion: 1,
@@ -5589,7 +5590,7 @@ describe('LLMClient model budget gates and usage metering', () => {
               contextWindow: 262_144,
               supportsVision: true,
             },
-            tuning: { maxOutputTokens: 262_142 },
+            tuning: { maxOutputTokens: 8192 },
           },
         ],
       },
@@ -5622,7 +5623,7 @@ describe('LLMClient model budget gates and usage metering', () => {
           model: 'vision/model',
           provider: 'openrouter',
           pin: true,
-          maxTokens: 1024,
+          maxTokens: 8192,
         }),
       }),
       'vision',

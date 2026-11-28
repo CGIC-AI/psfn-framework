@@ -56,7 +56,6 @@ import {
   resolveRuntimeLaneClassForModelCall,
 } from '../../core/agent/worker-lanes.js';
 import { ModelCallGate, ModelCallPreemptedError, type ModelCallGateCapacity } from './model-call-gate.js';
-import { clampVisionCompletionMaxTokens } from './vision-limits.js';
 import type {
   IcpConversationCostAccountingPort,
   IcpConversationCostBreakerEvent,
@@ -255,19 +254,6 @@ export class LLMClient {
     modelHint: LLMCompletionModelHint | undefined,
   ): RoutingCandidate[] {
     return resolveModelHintCandidates(this.config, purpose, modelHint);
-  }
-
-  private applyPurposeOutputLimits(
-    purpose: RoutingPurpose,
-    candidate: RoutingCandidate,
-  ): RoutingCandidate {
-    if (purpose !== 'vision') return candidate;
-    const maxTokens = clampVisionCompletionMaxTokens(candidate.maxTokens);
-    if (maxTokens === candidate.maxTokens) return candidate;
-    return {
-      ...candidate,
-      maxTokens,
-    };
   }
 
   private estimateBudgetInputTokens(context: PiContext): number {
@@ -1622,7 +1608,7 @@ export class LLMClient {
       throwIfFallbackAborted(options.signal);
       try {
         const effectiveCandidate = this.applyWorkSpecOutputCap(
-          this.applyPurposeOutputLimits(purpose, candidate),
+          candidate,
           options.outputTokenCap,
         );
         options.onCandidateSelected?.(effectiveCandidate);

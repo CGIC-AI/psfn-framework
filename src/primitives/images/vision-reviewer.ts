@@ -17,7 +17,7 @@ import {
 } from '../llm/correlation.js';
 import { sanitizeCoreSubstrateConfig, type SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { extractTextContent } from '../llm/conversion.js';
-import { clampVisionCompletionMaxTokens } from '../llm/vision-limits.js';
+import { requireVisionCompletionMaxTokens } from '../llm/vision-limits.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { CorrelationMetadata, LLMContext } from '../../shared/contracts/runtime.js';
@@ -327,7 +327,7 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
       context as unknown as PiContext,
       {
         apiKey: resolveApiKey(model, this.runtime, this.config.primaryProvider),
-        maxTokens: clampVisionCompletionMaxTokens(model.maxTokens),
+        maxTokens: requireVisionCompletionMaxTokens(model.maxTokens),
       },
     );
     const summary = extractVisionResponseSummary(response);

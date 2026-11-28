@@ -88,7 +88,14 @@ describe('model price book (lomm1)', () => {
       rates: { inputPer1MUsd: 1.4, outputPer1MUsd: 4.4, cacheReadPer1MUsd: 0.26, cacheWritePer1MUsd: 1.4, currency: 'USD' },
       catalog: { catalogModel: 'acme/model-7', upstreamProvider: 'acme', endpointTag: 'acme/fp8', fetchedAtMs: 1_000_000 },
     });
-    expect(book.status()[0]).toMatchObject({ slotKey: 'glm', source: 'catalog', endpointTag: 'acme/fp8', fetchedAtMs: 1_000_000 });
+    expect(book.status()[0]).toMatchObject({
+      slotKey: 'glm',
+      source: 'catalog',
+      endpointTag: 'acme/fp8',
+      fetchedAtMs: 1_000_000,
+      // The owner price disagrees with the vendor's: the vendor's is booked, and the status says so.
+      ownerPriceDiffers: { owner: { inputPer1MUsd: 3, outputPer1MUsd: 15 } },
+    });
 
     // Past maxAgeMinutes the quote is not used: back to the owner price, flagged stale.
     nowMs += 121 * MINUTE_MS;

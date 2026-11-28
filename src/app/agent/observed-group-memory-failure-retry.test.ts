@@ -24,7 +24,7 @@ import { ObservedGroupMemoryLane, registerGroupMemoryFailureRetrySweep } from '.
 // only the transcript reader and the LLM-backed extractor are stand-ins.
 
 const CHANNEL = 'discord-room';
-const START_MS = Date.parse('2026-09-03T19:00:00.000Z');
+const START_MS = Date.parse('2026-05-04T08:00:00.000Z');
 const MINUTE_MS = 60_000;
 
 function entry(id: number): SessionEntry {
@@ -211,14 +211,14 @@ describe('observed group-memory failure retry (psfn-framework-d5e0p.15)', () => 
           status: 'failed',
           processedSpanCount: 0,
           skippedSpanCount: 0,
-          failureCount: 35,
+          failureCount: 12,
           lastFailure: {
             startMessageId: 1,
             endMessageId: 3,
             entryCount: 3,
             recordedAt: START_MS - 30 * 24 * 60 * MINUTE_MS,
             error: 'Extraction orchestration failed',
-            retryCount: 35,
+            retryCount: 12,
           },
         },
       },
@@ -227,7 +227,7 @@ describe('observed group-memory failure retry (psfn-framework-d5e0p.15)', () => 
     await h.sweep();
 
     expect(h.calls).toHaveLength(1);
-    expect(h.reload()).toMatchObject({ status: 'processed', coveredUpToMessageId: 4, failureCount: 35 });
+    expect(h.reload()).toMatchObject({ status: 'processed', coveredUpToMessageId: 4, failureCount: 12 });
   });
 
   it('stops timed retries after the attempt cap with one terminal event, durably', async () => {

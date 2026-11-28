@@ -118,6 +118,11 @@ export interface EpisodicSynthesisOptions {
 export interface EpisodicSynthesisRunInput {
   sessionId: string;
   sourceMessageId?: string;
+  /**
+   * The session has gone idle (d5e0p.2): no continuation will arrive, so an
+   * open trailing topic is episodized instead of held back for the next pass.
+   */
+  finalPass?: boolean;
 }
 
 export interface EpisodicSynthesisRunResult {
@@ -920,6 +925,7 @@ export class EpisodicSynthesizer {
         if (!segment) continue;
         const segmentEntries = group.entries.slice(segment.startIndex, segment.endIndex + 1);
         const isTrailingOpenTopic = isFinalGroup
+          && !input.finalPass
           && segmentIndex === segments.length - 1
           && segment.status === 'open';
         if (isTrailingOpenTopic) {

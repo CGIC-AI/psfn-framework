@@ -742,6 +742,7 @@ export class EpisodeSynthesisLane {
     const synthesis = await this.synthesizer.run({
       sessionId,
       sourceMessageId: action.sourceMessageId,
+      ...(finalPass ? { finalPass: true } : {}),
     });
     const attribution = await resolveSessionMemoryAttribution({
       sessionId,
@@ -785,7 +786,10 @@ export class EpisodeSynthesisLane {
       heldBackEntries: synthesis.heldBackEntryCount,
       segmentationFailedChunks: synthesis.segmentationFailedChunkCount,
     });
-    return 'checkpoint';
+    // An open trailing topic was held back unclaimed: keep the session
+    // eligible so those turns are revisited (and given the idle final pass
+    // if the conversation does not continue) instead of being orphaned.
+    return synthesis.heldBackEntryCount > 0 ? 'hold' : 'checkpoint';
   }
 
   private buildActionCandidate(

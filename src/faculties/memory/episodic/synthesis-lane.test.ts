@@ -732,8 +732,28 @@ describe('EpisodeSynthesisLane', () => {
     clock.now = WATERMARK_END_MS + 4 * 60_000 + 180 * 60_000;
     await harness.lane.execute(timerAction());
     expect(harness.synthesizer.run).toHaveBeenCalledOnce();
+    expect(harness.synthesizer.run).toHaveBeenCalledWith(expect.objectContaining({ finalPass: true }));
     expect(harness.workset.checkpoint).toHaveBeenCalledOnce();
     expect(harness.gateEvents.at(-1)).toMatchObject({ outcome: 'processed', relevantTurnCount: 4 });
+  });
+
+  it('keeps a session eligible when synthesis held back an open trailing topic (d5e0p.2)', async () => {
+    const harness = makeHarness({ entries: mentionEntries(12) });
+    harness.synthesizer.run.mockResolvedValueOnce({
+      consideredEntries: 12,
+      candidateEpisodeCount: 1,
+      createdEpisodes: [],
+      skippedEpisodeIds: [],
+      linkedArcs: [],
+      heldBackEntryCount: 2,
+      segmentationFailedChunkCount: 0,
+    });
+
+    await harness.lane.execute(timerAction());
+
+    expect(harness.synthesizer.run).toHaveBeenCalledWith({ sessionId: 'discord:room-1', sourceMessageId: 'timer-1' });
+    expect(harness.workset.releaseClaim).toHaveBeenCalledOnce();
+    expect(harness.workset.checkpoint).not.toHaveBeenCalled();
   });
 
   it('async group traffic around the companion produces no episode', async () => {

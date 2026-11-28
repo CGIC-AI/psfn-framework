@@ -349,7 +349,7 @@ describe('EpisodeSynthesisLane failure handling (real Postgres)', () => {
     await withDatabase(async ({ pool, adapters, transcript }) => {
       await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
       const stuck = 'api:episode-segmentation-stuck';
-      const startMs = Date.parse('2026-09-03T18:00:00.000Z');
+      const startMs = Date.parse('2026-05-04T06:00:00.000Z');
       const turns = [
         'Please debug the atlas project scheduler tests.',
         'I found the atlas scheduler failure and will patch the retry loop.',
@@ -497,6 +497,59 @@ describe('EpisodeSynthesisLane failure handling (real Postgres)', () => {
       expect(claims).toHaveLength(totalTurns);
       expect(new Set(claims.map(claim => claim.claimKey.split(':').slice(1, -1).join(':'))))
         .toEqual(new Set(sessions));
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('episodizes an idle short session whose last topic the segmenter marks open (d5e0p.2)', async () => {
+    await withDatabase(async ({ pool, adapters, transcript }) => {
+      await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
+      const sessionId = 'api:hermes:5c4b3a29f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a3928170615243';
+      const startMs = Date.parse('2026-05-04T07:00:00.000Z');
+      const turnCount = 4;
+      for (let turn = 0; turn < turnCount; turn += 1) {
+        const role = turn % 2 === 0 ? 'user' : 'assistant';
+        await transcript.append(sessionId, `which trail should we hike this weekend, option ${turn}?`, {
+          role,
+          timestamp: startMs + turn * MINUTE_MS,
+          metadata: JSON.stringify({ turn: { schemaVersion: 1, turnId: `turn:open-${turn}`, role } }),
+        });
+      }
+      const lastTurnMs = startMs + (turnCount - 1) * MINUTE_MS;
+      // The conversation simply stopped, so the model calls its only topic open.
+      const provider = {
+        complete: vi.fn(async () => ({
+          content: JSON.stringify({
+            segments: [{ start_index: 0, end_index: turnCount - 1, topic: 'weekend hike planning', status: 'open' }],
+          }),
+          toolCalls: [],
+          model: 'test-model',
+          inputTokens: 0,
+          outputTokens: 0,
+          stopReason: 'stop',
+        })),
+      };
+      const store = new PostgresEpisodicStore(pool, { now: () => new Date(lastTurnMs) });
+      const synthesizer = new EpisodicSynthesizer(store, transcript.sessionManager(), {
+        maxEntriesPerEpisode: 14,
+        topicSegmentation: { enabled: true, llmProvider: provider },
+      });
+      const workset = adapters.conversationalActivityWorkset;
+      const lane = new EpisodeSynthesisLane({
+        sessionManager: transcript.sessionManager(),
+        synthesizer,
+        watermarkStore: store,
+        workset,
+        config: { ...gateConfig(), minRelevantTurns: 10 },
+        scopeClassifier: { classifyChannelMemoryScope: async () => 'direct' as const },
+        now: () => lastTurnMs + 181 * MINUTE_MS,
+      });
+
+      await lane.execute(timerAction());
+
+      expect(provider.complete).toHaveBeenCalledOnce();
+      const claims = await store.listEpisodeMessageClaims({ status: 'active' });
+      expect(claims).toHaveLength(turnCount);
+      await expect(workset.enumerate('episodic_synthesis')).resolves.toEqual([]);
     });
   }, INTEGRATION_TIMEOUT_MS);
 });

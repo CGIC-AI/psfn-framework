@@ -234,7 +234,7 @@ describe('system action=restart', () => {
     exitSpy.mockRestore();
   });
 
-  it('allows a later command-strategy restart after two durable preparation failures', async () => {
+  it('exits with a failure status instead of a later retry once bounded durable preparation fails', async () => {
     const logger: ShutdownLogger = {
       info: vi.fn(),
       warn: vi.fn(),
@@ -267,18 +267,18 @@ describe('system action=restart', () => {
     await tool.execute('call-release-fail', { action: 'restart', reason: 'first attempt' });
     await new Promise(resolve => setTimeout(resolve, 0));
 
+    // psfn-framework-69l9c: both bounded attempts ran inside the preparation
+    // step; the supervisor is now latched, so the process exits visibly
+    // rather than lingering to answer turns with delivery failures.
     expect(releaseAttempts).toBe(2);
     expect(runRestartCommand).not.toHaveBeenCalled();
     expect(mockStopFn).not.toHaveBeenCalled();
-    expect(exitSpy).not.toHaveBeenCalled();
-
-    await tool.execute('call-release-retry', { action: 'restart', reason: 'retry attempt' });
-    await new Promise(resolve => setTimeout(resolve, 0));
-
-    expect(releaseAttempts).toBe(3);
-    expect(runRestartCommand).toHaveBeenCalledOnce();
-    expect(mockStopFn).toHaveBeenCalledOnce();
     expect(exitSpy).toHaveBeenCalledOnce();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(logger.warn).toHaveBeenCalledWith('Shutdown step failed; retrying', expect.objectContaining({
+      step: 'release background claims',
+      attempt: 1,
+    }));
 
     globalThis.setImmediate = origSetImmediate;
     exitSpy.mockRestore();
@@ -340,7 +340,7 @@ describe('system action=restart', () => {
     exitSpy.mockRestore();
   });
 
-  it('does not launch a restart command, stop transports, or exit when durable preparation fails', async () => {
+  it('does not launch a restart command or stop transports, and exits with a failure status, when durable preparation fails', async () => {
     prepareRestartCommand.mockRejectedValueOnce(new Error('durable release failed'));
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
     const origSetImmediate = globalThis.setImmediate;
@@ -355,7 +355,8 @@ describe('system action=restart', () => {
 
     expect(runRestartCommand).not.toHaveBeenCalled();
     expect(mockStopFn).not.toHaveBeenCalled();
-    expect(exitSpy).not.toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledOnce();
+    expect(exitSpy).toHaveBeenCalledWith(1);
     expect(mockNotifier.notifyShutdown).toHaveBeenCalledWith(
       expect.stringContaining('restart blocked: durable release failed'),
     );
@@ -566,7 +567,7 @@ describe('system action=rebuild', () => {
     exitSpy.mockRestore();
   });
 
-  it('does not launch the rebuild restart command or close transports when durable preparation fails', async () => {
+  it('does not launch the rebuild restart command or close transports, and exits with a failure status, when durable preparation fails', async () => {
     prepareRestartCommand.mockRejectedValueOnce(new Error('durable release failed'));
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
     const origSetImmediate = globalThis.setImmediate;
@@ -582,7 +583,8 @@ describe('system action=rebuild', () => {
     expect(runBuildCommand).toHaveBeenCalledOnce();
     expect(runRestartCommand).not.toHaveBeenCalled();
     expect(mockStopFn).not.toHaveBeenCalled();
-    expect(exitSpy).not.toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledOnce();
+    expect(exitSpy).toHaveBeenCalledWith(1);
     expect(mockNotifier.notifyShutdown).toHaveBeenCalledWith(
       expect.stringContaining('rebuild restart blocked: durable release failed'),
     );
@@ -1089,7 +1091,7 @@ describe('deferred lifecycle execution', () => {
     exitSpy.mockRestore();
   });
 
-  it('does not run or exit a deferred restart when durable preparation fails', async () => {
+  it('does not run a deferred restart, and exits with a failure status, when durable preparation fails', async () => {
     prepareRestartCommand.mockRejectedValueOnce(new Error('durable release failed'));
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
     const registerHandler = vi.fn((_kind, _handler) => () => undefined);
@@ -1110,7 +1112,8 @@ describe('deferred lifecycle execution', () => {
     });
     expect(runRestartCommand).not.toHaveBeenCalled();
     expect(mockStopFn).not.toHaveBeenCalled();
-    expect(exitSpy).not.toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledOnce();
+    expect(exitSpy).toHaveBeenCalledWith(1);
     exitSpy.mockRestore();
   });
 
@@ -1196,7 +1199,7 @@ describe('deferred lifecycle execution', () => {
     exitSpy.mockRestore();
   });
 
-  it('does not run or exit a deferred rebuild when durable preparation fails', async () => {
+  it('does not run a deferred rebuild restart, and exits with a failure status, when durable preparation fails', async () => {
     prepareRestartCommand.mockRejectedValueOnce(new Error('durable release failed'));
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
     const registerHandler = vi.fn((_kind, _handler) => () => undefined);
@@ -1218,7 +1221,8 @@ describe('deferred lifecycle execution', () => {
     expect(runBuildCommand).toHaveBeenCalledOnce();
     expect(runRestartCommand).not.toHaveBeenCalled();
     expect(mockStopFn).not.toHaveBeenCalled();
-    expect(exitSpy).not.toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledOnce();
+    expect(exitSpy).toHaveBeenCalledWith(1);
     exitSpy.mockRestore();
   });
 

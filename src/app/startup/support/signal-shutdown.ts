@@ -155,12 +155,21 @@ export function createSignalShutdownHandler(
     try {
       await attempt;
     } catch (error) {
-      clearForceExitTimer();
-      options.logger.error('Graceful shutdown failed; leaving process running for retry', {
+      // psfn-framework-69l9c: a rejected graceful shutdown is terminal. The
+      // shutdown sequence has already stopped some subsystems (scheduler,
+      // background work supervisor), so a process left running is inert yet
+      // still accepts turns and answers each with a delivery failure. Durable
+      // state lives in Postgres and unreleased claims fall to lease-expiry
+      // recovery, so a visible non-zero exit for the process supervisor to
+      // restart is always the correct outcome. The force-exit timer stays
+      // armed until exit is requested, and the attempt is never cleared, so a
+      // later signal cannot start a second shutdown over a half-stopped one.
+      options.logger.error('Graceful shutdown failed; exiting with failure status', {
         signal,
         error: String(error),
       });
-      if (shutdownPromise === attempt) shutdownPromise = null;
+      options.exit(1);
+      clearForceExitTimer();
     }
   };
 }

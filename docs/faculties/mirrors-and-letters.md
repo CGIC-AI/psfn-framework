@@ -7,7 +7,7 @@ verified:
   - by: openwiki/0.4.3
     at: 2026-08-28T13:30:04.287Z
 sources:
-  - id: openwiki-source-a85cdb2461363682b6a2b4db
+  - id: openwiki-source-9884e1f228b9419287dea775
     resource: repo://docs/PSFN_PROJECT_CHARTER.md
   - id: openwiki-source-feb0b60a83c447e8057bc85b
     resource: repo://src/app/agent/core-runtime.ts
@@ -21,17 +21,17 @@ sources:
     resource: repo://src/core/scheduler/reflection-introspection-policy.ts
   - id: openwiki-source-948fe452970569525291da46
     resource: repo://src/core/scheduler/reflection-template-runtime.ts
-  - id: openwiki-source-110f4b8d83bf342e54506b78
+  - id: openwiki-source-d271b8f60a926c46a129bb82
     resource: repo://src/core/doing-mirror/contracts.ts
-  - id: openwiki-source-2befb971670a4d5635af729b
+  - id: openwiki-source-1c2e428eab2551dccac89965
     resource: repo://src/core/doing-mirror/service.ts
-  - id: openwiki-source-8575bfcc2b888d38f7f728e3
+  - id: openwiki-source-56ff63535dc4e2bc51b52a41
     resource: repo://src/core/doing-mirror/sources.ts
-  - id: openwiki-source-eda80e5c256a0d59238ca284
+  - id: openwiki-source-ecca82a52bf18961595647fa
     resource: repo://src/core/letters/contracts.ts
-  - id: openwiki-source-06146f21ce0b462f30c17ed3
+  - id: openwiki-source-78b709c1e4ad3c325aa5ccd2
     resource: repo://src/core/letters/memory-extraction.ts
-  - id: openwiki-source-e452a796418f12c8d1354458
+  - id: openwiki-source-690fdd340967c3c48003b506
     resource: repo://src/core/letters/service.ts
   - id: openwiki-source-74d154d7cba5ca100baf6d51
     resource: repo://src/faculties/context-feedback/evaluator.ts

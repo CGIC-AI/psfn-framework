@@ -91,7 +91,7 @@ async function run(options: CliOptions): Promise<void> {
   const schema = options.schema?.trim() || config.postgresSchema?.trim() || undefined;
   const role = options.role?.trim() || config.postgresRole?.trim() || undefined;
   const pool = createPostgresPool(postgresUrl, {
-    applicationName: 'psfn-episode-thread-recompute',
+    applicationName: 'episode-thread-recompute',
     allowExitOnIdle: true,
     schema,
     role,

@@ -256,7 +256,7 @@ describe('EpisodeArcWeaver', () => {
     const events: ThreadAssignmentEvent[] = [];
     const complete = vi.fn(async () => arcResponse([{
       episode_ids: ['ep-book-1', 'ep-book-2'],
-      kind: 'same_theme',
+      kind: 'continuation',
       label: 'the ongoing left hand of darkness discussion',
       confidence: 0.9,
       reason: 'the same book discussion resumes two days later',
@@ -534,7 +534,7 @@ describe('EpisodeArcWeaver', () => {
     await store.writeEpisodeArc({
       sourceEpisodeId: 'day1',
       targetEpisodeId: 'day2',
-      arcKind: 'same_theme',
+      arcKind: 'continuation',
       salience: 0.6,
       confidence: 0.9,
       themes: ['postgres'],
@@ -576,7 +576,7 @@ describe('EpisodeArcWeaver', () => {
       id: 'arc-1',
       sourceEpisodeId: 'a',
       targetEpisodeId: 'b',
-      arcKind: 'same_theme',
+      arcKind: 'continuation',
       salience: 0.6,
       confidence: 0.9,
       themes: ['postgres'],

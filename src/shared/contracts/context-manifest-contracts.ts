@@ -38,6 +38,12 @@ export interface ContextManifestMemorySeed {
   budgetCappedCount?: number;
   selectedTypes?: Record<string, number>;
   compositionalMode?: ContextManifestCompositionalMode;
+  /**
+   * s889d: provenance of the retrieval that produced this seed. A turn that
+   * renders an active-memory snapshot reports exactly these refs, not the
+   * refs of a refresh that lands after the prompt was assembled.
+   */
+  provenanceRefs?: string[];
 }
 
 export type ContextManifestSection =

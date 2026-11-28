@@ -1536,6 +1536,29 @@ describe('temporal wake fan-out across channels (2x37.3)', () => {
     expect(appended.map(a => a.channelId)).toEqual([DISCORD]);
   });
 
+  it('morning lane fan-out excludes an active external bridge conversation (mgsaf)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(DAY2_MORNING));
+    // The external session is recent, non-internal and not public, so only its
+    // channel wake policy keeps it out: no wake delivery reaches a bridge.
+    const EXTERNAL = 'external:sms-bridge:conversation-1';
+    const { port, appended } = makeFanoutPort([
+      { sessionId: DISCORD, channelType: 'discord', entries: [entry({ channelId: DISCORD, role: 'user', timestamp: DAY1_EVENING - 30 * 60_000 })] },
+      { sessionId: EXTERNAL, channelType: 'external', entries: [entry({ channelId: EXTERNAL, role: 'user', timestamp: DAY1_EVENING })] },
+    ]);
+    const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: port,
+      config: makeWakeConfig({ refresher: { enabled: false } }),
+      invokeWakeTurn: async () => null,
+    });
+
+    await runMorningHandler(scheduler);
+
+    expect(appended.map(a => a.channelId)).toEqual([DISCORD]);
+  });
+
   it('morning outward delivery targets only the single most-recent-partner channel', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(DAY2_MORNING));

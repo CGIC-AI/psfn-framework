@@ -250,6 +250,33 @@ describe('schedule tool', () => {
     expect(pendingFollowUpStore.enqueue).not.toHaveBeenCalled();
   });
 
+  // psfn-framework-mgsaf: an external bridge conversation is not a continuity
+  // destination. A long-horizon follow-up becomes a scheduled prompt whose
+  // reply is sent through the Discord gateway sender, so admitting external
+  // here would deliver that conversation's continuity out of its channel.
+  it.each(['create_follow_up', 'create_reminder'])(
+    'refuses an external bridge conversation as a %s destination',
+    async (action) => {
+      const pendingFollowUpStore = createPendingFollowUpStore();
+      const create = vi.fn();
+      const { tool } = createTool({ pendingFollowUpStore, careReminderStore: fromPartial({ create }) });
+
+      const result = await executeScheduleCall(tool, {
+        action,
+        title: 'Check in',
+        content: 'Ask how the move went.',
+        due_at: '2026-12-01T12:00:00Z',
+        channel_id: 'external:sms-bridge:conversation-1',
+        channel_type: 'external',
+      });
+
+      expect(result.isError).toBe(true);
+      expect(resultText(result)).toContain('channel_type');
+      expect(pendingFollowUpStore.enqueue).not.toHaveBeenCalled();
+      expect(create).not.toHaveBeenCalled();
+    },
+  );
+
   it('fails closed before enqueueing a non-canonical channel type', async () => {
     const pendingFollowUpStore = createPendingFollowUpStore();
     const { tool } = createTool({ pendingFollowUpStore });

@@ -15,7 +15,13 @@ import {
 import type { RuntimeChannelsConfig } from '../../channels/backplane/config.js';
 import { createBuiltinChannelPluginRegistry } from '../../channels/plugins/builtin.js';
 import { parseChannelPluginSections } from '../../channels/plugins/load-sections.js';
-import { EXTERNAL_CHANNEL_TEST_LIMITS } from '../../test-support/external-channel-conformance.js';
+import { createServer, type Server } from 'node:http';
+import { EXTERNAL_CHANNEL_TEST_LIMITS, closeServer } from '../../test-support/external-channel-conformance.js';
+import { ExternalChannelAdapter } from '../../channels/external/adapter.js';
+import { ExternalChannelMcpRoute, externalChannelEndpointPath } from '../../channels/external/mcp-route.js';
+import { ReferenceExternalChannelBridge } from '../../channels/external/reference-bridge.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
+import { createGatewayRoomReplyOutbound, resolveRoomReplyOutboundTargets } from './room-reply-outbound.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { deriveCompanionAuthToken } from './companion-auth.js';
@@ -4117,6 +4123,90 @@ describe('GatewayServer per-companion capability tier (an52.3)', () => {
       expect(bShard.error.code).toBe(GatewayErrors.POLICY_DENIED);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// psfn-framework-mgsaf: a companion-initiated send with no inbound trigger
+// reaches an external bridge only through the gateway's `channel.sendRoomReply`
+// method (param decoding and connection-bound companion attribution) onto the
+// owning adapter's queue, which the bridge drains over its MCP endpoint with
+// channel_pull_outbound. Another companion's bridge and unknown channels refuse.
+describe('GatewayServer agent-initiated external channel delivery (mgsaf)', () => {
+  const COMPANION_A = '11111111-1111-4111-8111-111111111111';
+  const COMPANION_B = '22222222-2222-4222-8222-222222222222';
+
+  function externalAdapter(instanceId: string, companionId: string, token: string): ExternalChannelAdapter {
+    const adapter = new ExternalChannelAdapter({
+      observer: { authorId: `external-companion:${instanceId}`, displayName: 'Test Companion' },
+      config: {
+        instanceId, label: instanceId, companionId: createCompanionId(companionId),
+        limits: EXTERNAL_CHANNEL_TEST_LIMITS,
+      },
+      token,
+      intakeScreening: null,
+      log: { warn: () => undefined, error: () => undefined },
+      reportRuntimeFailure: () => undefined,
+    });
+    adapter.onMessage(async () => { throw new Error('This proactive send has no inbound turn'); });
+    return adapter;
+  }
+
+  async function serveBridgeEndpoint(route: ExternalChannelMcpRoute): Promise<{ server: Server; port: number }> {
+    const server = createServer((req, res) => { void route.handle(req, res); });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected a TCP address');
+    return { server, port: address.port };
+  }
+
+  it('delivers a proactive send to the owning bridge and refuses every other target', async () => {
+    const sms = externalAdapter('sms', COMPANION_A, 'sms-bridge-token');
+    const pager = externalAdapter('pager', COMPANION_B, 'pager-bridge-token');
+    const route = new ExternalChannelMcpRoute([sms, pager], []);
+    await sms.start();
+    await pager.start();
+    const { server: endpoint, port } = await serveBridgeEndpoint(route);
+    const bridge = new ReferenceExternalChannelBridge({
+      endpoint: new URL(`http://127.0.0.1:${port}${externalChannelEndpointPath('sms')}`),
+      token: 'sms-bridge-token',
+      name: 'sms-bridge',
+      version: '1.0.0',
+      callTimeoutMs: 5_000,
+    });
+    const roomReplyOutbound = createGatewayRoomReplyOutbound({
+      multiCompanion: true,
+      targets: resolveRoomReplyOutboundTargets({ multiCompanion: true, externalAdapters: [sms, pager] }),
+    });
+    const { connectClient } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({}, {}, { external: { sms: COMPANION_A, pager: COMPANION_B } }),
+      roomReplyOutbound,
+    });
+    try {
+      await bridge.connect();
+      const client = await connectClient(COMPANION_A);
+
+      // No inbound turn has ever arrived on this conversation.
+      await client.channelSendRoomReply('external', 'external:sms:conversation-new', 'Thinking of you today.');
+      expect(await bridge.pullOutbound()).toEqual([
+        expect.objectContaining({ conversationId: 'conversation-new', text: 'Thinking of you today.' }),
+      ]);
+      expect(await bridge.pullOutbound()).toEqual([]);
+
+      await expect(client.channelSendRoomReply('external', 'external:pager:conversation-b', 'not yours'))
+        .rejects.toThrow(/channel_not_owned_by_companion/u);
+      await expect(client.channelSendRoomReply('external', 'external:unregistered:conversation-c', 'nowhere'))
+        .rejects.toThrow(/unknown_channel/u);
+      await expect(client.channelSendRoomReply('external', 'external:sms:', 'no conversation'))
+        .rejects.toThrow(/unknown_channel/u);
+      expect(pager.pullOutbound({ protocolVersion: 1 }).messages).toEqual([]);
+      expect(await bridge.pullOutbound()).toEqual([]);
+    } finally {
+      await bridge.close();
+      await closeServer(endpoint);
+      await sms.stop();
+      await pager.stop();
     }
   });
 });

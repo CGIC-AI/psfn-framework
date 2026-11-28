@@ -39,7 +39,13 @@ const CHANNEL_BEHAVIOR: Readonly<Record<ChannelType, ChannelPolicy>> = Object.fr
   'psfn-amica': { scheduledContinuity: true, liveWakeup: true, groupCapable: false },
   companion: { scheduledContinuity: false, liveWakeup: false, groupCapable: false },
   'companion-ui': { scheduledContinuity: false, liveWakeup: true, groupCapable: false },
-  // No agent-initiated delivery path reaches an external bridge yet.
+  // psfn-framework-mgsaf decision: an external bridge receives agent-initiated
+  // text only as an appraised, egress-leased room reply (channel.sendRoomReply
+  // onto the adapter queue the bridge drains with channel_pull_outbound).
+  // Wake notes go through the approved-primary-channel Discord sender, and a
+  // long-horizon follow-up becomes a scheduled prompt delivered by that same
+  // sender, so neither lane may target a bridge conversation until it has its
+  // own channel-routed, per-contact-authorized delivery (psfn-framework-bjlvo).
   external: { scheduledContinuity: false, liveWakeup: false, groupCapable: true },
 });
 

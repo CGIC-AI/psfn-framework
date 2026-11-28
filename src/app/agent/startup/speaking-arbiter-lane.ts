@@ -249,10 +249,9 @@ export function wireSpeakingArbiterLane(deps: SpeakingArbiterLaneDeps): Speaking
   // Speaking-arbiter egress-lease phase (bible §8.5/§12.2, §18, §20.1,
   // jp36.5.1.3): phase 2, the exclusive send-once binding at delivery. Promoting
   // a retained candidate to a REAL autonomous room reply is operator-controlled
-  // through the explicit off/shadow/on owner posture. The fresh-install seed is
-  // on (psfn-framework-ik47b.1); off constructs nothing; shadow evaluates and
-  // records admission without drawing or sending; on uses the qgqw.3-hardened
-  // sender. The room-episode pressure gate reads the
+  // through the explicit off/shadow/on owner posture. The seed and code default
+  // are on (eoj3s.6); off constructs nothing; shadow evaluates and records
+  // admission without drawing or sending; on uses the qgqw.3-hardened sender. The room-episode pressure gate reads the
   // ONE reconciled ledger-derived source (jp36.5.4 seam) — never the arbiter
   // store's raw pressure scalar, which stays a write-only projection.
   // Mode and tunables are owned by scheduler.json socialAutonomy.egressLease.

@@ -450,8 +450,11 @@ Autonomous send is operator-configured by the owner setting
   observe would-send decisions safely.
 - **`on`** — a fully admitted candidate draws from the social pot, takes the
   exclusive fenced lease, and is delivered by the hardened sender below. This
-  is the fresh-install seed value (`config/scheduler.seed.json`); an existing
-  owner file keeps whatever mode it already has.
+  is the fresh-install seed value (`config/scheduler.seed.json`) and also the
+  code default (`createDefaultEgressLeaseTunables` in
+  `src/system/config/participation-config.ts`), so an owner file that omits
+  `socialAutonomy.egressLease` or its `mode` resolves to `on`. Only an explicit
+  `off` or `shadow` in the owner file withholds autonomous send.
 
 The mode is only one gate. The phase is constructed only in a companion fleet
 (`multiCompanion: true`) with the gateway-owned speaking-arbiter and social-pot

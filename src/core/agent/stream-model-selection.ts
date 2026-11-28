@@ -6,6 +6,7 @@ import {
   resolveModelSelectionSlotForPurpose,
 } from '../../primitives/llm/model-hint-routing.js';
 import {
+  resolveCandidateRequestTemperature,
   resolveRoutingCandidates,
   type RoutingCandidate,
   type RoutingPurpose,
@@ -55,6 +56,7 @@ export function buildStreamTransportModelHint(
   transportSlotKey: string | undefined,
 ): LLMModelHint {
   const reasoning = requestOptions.reasoning;
+  const temperature = resolveCandidateRequestTemperature(candidate);
   return {
     model: candidate.model,
     provider: candidate.provider,
@@ -62,7 +64,7 @@ export function buildStreamTransportModelHint(
     pin: true,
     maxTokens: candidate.maxTokens,
     ...(candidate.contextWindow !== undefined ? { contextWindow: candidate.contextWindow } : {}),
-    ...(candidate.temperature !== undefined ? { temperature: candidate.temperature } : {}),
+    ...(temperature !== undefined ? { temperature } : {}),
     ...(candidate.topP !== undefined ? { topP: candidate.topP } : {}),
     ...(candidate.topK !== undefined ? { topK: candidate.topK } : {}),
     ...(candidate.frequencyPenalty !== undefined ? { frequencyPenalty: candidate.frequencyPenalty } : {}),

@@ -316,6 +316,14 @@ function resolveModelHintCandidate(
   const supportsReasoning = typeof registryEntry?.capabilities?.supportsReasoning === 'boolean'
     ? registryEntry.capabilities.supportsReasoning
     : baseCandidate.supportsReasoning;
+  // psfn-framework-glst7: the sampling constraint belongs to the hinted model's
+  // own card. The base lane's flag describes a different model unless the hint
+  // names no other identity.
+  const rejectsTemperature = typeof registryEntry?.capabilities?.rejectsTemperature === 'boolean'
+    ? registryEntry.capabilities.rejectsTemperature
+    : hasExplicitIdentityHint
+      ? undefined
+      : baseCandidate.rejectsTemperature;
 
   if (!provider || !model) return null;
   provider = provider.trim().toLowerCase();
@@ -340,6 +348,7 @@ function resolveModelHintCandidate(
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(supportsVision !== undefined ? { supportsVision } : {}),
     ...(supportsReasoning !== undefined ? { supportsReasoning } : {}),
+    ...(rejectsTemperature !== undefined ? { rejectsTemperature } : {}),
     ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),
     ...(thinkingEffort !== undefined ? { thinkingEffort } : {}),
     ...(temperature !== undefined ? { temperature } : {}),

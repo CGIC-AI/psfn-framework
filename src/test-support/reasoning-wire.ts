@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { vi } from 'vitest';
 import type { CanonicalModelRegistry } from '../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
-import { createEnvCredentialVault, envCredential } from '../boundary/custody/credential-vault.js';
 import fixture from './fixtures/reasoning-wire.json' with { type: 'json' };
 
 /**
@@ -31,13 +30,18 @@ export function reasoningWireRegistry(
   };
 }
 
+/** The OpenRouter credential the wire config sends; built by the test (host custody stays out of core). */
+export type ReasoningWireCredentials = Pick<SubstrateConfig, 'openRouterApiKeyRef' | 'credentialVault'>;
+
 /** A substrate config over the wire registry; the caller removes `dataDir` (returned in the config). */
-export function makeReasoningWireConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
-  const dataDir = mkdtempSync(join(tmpdir(), 'psfn-reasoning-wire-'));
+export function makeReasoningWireConfig(
+  credentials: ReasoningWireCredentials,
+  overrides: Partial<SubstrateConfig> = {},
+): SubstrateConfig {
+  const dataDir = mkdtempSync(join(tmpdir(), 'reasoning-wire-'));
   return {
     ...fixture.config,
-    openRouterApiKeyRef: envCredential('OPENROUTER_API_KEY'),
-    credentialVault: createEnvCredentialVault({ OPENROUTER_API_KEY: 'test-openrouter-key' }),
+    ...credentials,
     dataDir,
     databasePath: join(dataDir, 'test.db'),
     modelRegistry: reasoningWireRegistry(),

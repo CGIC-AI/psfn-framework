@@ -14,6 +14,7 @@ import {
   makeReasoningWireConfig,
   reasoningWireRegistry,
 } from '../../../test-support/reasoning-wire.js';
+import { createEnvCredentialVault, envCredential } from '../../../boundary/custody/credential-vault.js';
 import { buildLLMWorkSpec, completeWithWorkSpec } from '../../../primitives/llm/work-spec.js';
 import { resolveRoutingCandidates } from '../../../primitives/llm/routing.js';
 import { resolveCandidates as resolveHintedCandidates } from '../../../primitives/llm/model-hint-routing.js';
@@ -26,6 +27,11 @@ import { ReasoningEffortRuntime, type ReasoningEffortChange } from './runtime.js
 
 const tempDirs: string[] = [];
 
+const WIRE_CREDENTIALS = {
+  openRouterApiKeyRef: envCredential('OPENROUTER_API_KEY'),
+  credentialVault: createEnvCredentialVault({ OPENROUTER_API_KEY: 'test-openrouter-key' }),
+};
+
 afterEach(() => {
   vi.unstubAllGlobals();
   while (tempDirs.length > 0) rmSync(tempDirs.pop()!, { recursive: true, force: true });
@@ -34,7 +40,7 @@ afterEach(() => {
 const registry = reasoningWireRegistry;
 
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
-  const config = makeReasoningWireConfig(overrides);
+  const config = makeReasoningWireConfig(WIRE_CREDENTIALS, overrides);
   tempDirs.push(config.dataDir);
   return config;
 }

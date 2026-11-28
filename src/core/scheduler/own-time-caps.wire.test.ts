@@ -7,6 +7,7 @@ import { resolveRoutingCandidates } from '../../primitives/llm/routing.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { resolveReflectionMetacognitionJournalPath, resolveReflectionPolicyPath } from '../../persistence/layout.js';
 import { captureWire, makeReasoningWireConfig, reasoningWireRegistry } from '../../test-support/reasoning-wire.js';
+import { createEnvCredentialVault, envCredential } from '../../boundary/custody/credential-vault.js';
 import { withLaneReasoningEffort } from '../agent/reasoning-effort/provider.js';
 import { ReasoningEffortRuntime } from '../agent/reasoning-effort/runtime.js';
 import { ReflectionPolicyStore } from './reflection-policy.js';
@@ -56,6 +57,11 @@ const REASONING_TOKENS = 8_000;
 
 const tempDirs: string[] = [];
 
+const WIRE_CREDENTIALS = {
+  openRouterApiKeyRef: envCredential('OPENROUTER_API_KEY'),
+  credentialVault: createEnvCredentialVault({ OPENROUTER_API_KEY: 'test-openrouter-key' }),
+};
+
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -87,7 +93,7 @@ function harness(callMs: number) {
   });
   // The aggregator and the analytical voice run on the reasoning purpose.
   const registry = reasoningWireRegistry();
-  const config = makeReasoningWireConfig({
+  const config = makeReasoningWireConfig(WIRE_CREDENTIALS, {
     modelRegistry: {
       ...registry,
       models: registry.models.map(model => (model.id === 'primary'
@@ -274,7 +280,7 @@ describe('free-time chooser at medium reasoning (psfn-framework-cdqin)', () => {
         reasoningTokens: 2_900,
       }),
     });
-    const config = makeReasoningWireConfig();
+    const config = makeReasoningWireConfig(WIRE_CREDENTIALS);
     tempDirs.push(config.dataDir);
     const runtime = new PiProviderRuntime(undefined, config);
     const client = new LLMClient(config, { runtime, usageRecorder: { recordUsageEvent: async () => undefined } });

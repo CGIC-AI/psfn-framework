@@ -32,7 +32,7 @@ describe('fresh-install autonomy seed defaults', () => {
     expect(scheduler.socialAutonomy.egressLease.mode).toBe('on');
     expect(scheduler.socialAutonomy.roomParticipationLease.enabled).toBe(true);
     expect(scheduler.socialAutonomy.roomSignal.enabled).toBe(true);
-    expect(scheduler.weightedThoughtOutreach?.enabled).toBe(true);
+    expect(scheduler.weightedThoughtOutreach.enabled).toBe(true);
     expect(scheduler.blindReviewer?.enabled).toBe(true);
 
     // Not default-on until their prerequisites exist on a fresh install: the

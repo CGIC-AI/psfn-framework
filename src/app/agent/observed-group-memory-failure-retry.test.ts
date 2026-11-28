@@ -304,14 +304,18 @@ describe('observed group-memory retry under a model-budget block (psfn-framework
     const h = harness({ maxAttempts: 2, failWith: () => (refusing ? budgetRefusal() : null) });
 
     await h.lane.enqueue(observed('m-1'));
+    // Traffic inside the un-escalated probe hold does not re-run the range.
+    h.clock.now = START_MS + MINUTE_MS;
+    await h.lane.enqueue(observed('m-2'));
+    expect(h.calls).toHaveLength(1);
     for (let minute = 5; minute <= 120; minute += 5) {
       h.clock.now = START_MS + minute * MINUTE_MS;
       await h.sweep();
     }
 
-    // The sweep keeps re-probing the deferred range, and none of those refusals
-    // was recorded as a failure.
-    expect(h.calls.length).toBeGreaterThan(2);
+    // The sweep re-probes the deferred range once per baseDelayMinutes (15),
+    // never escalating, and none of those refusals was recorded as a failure.
+    expect(h.calls).toHaveLength(1 + 120 / 15);
     expect(h.failures).toEqual([]);
     const deferred = h.reload();
     expect(deferred.status).not.toBe('failed');
@@ -319,7 +323,7 @@ describe('observed group-memory retry under a model-budget block (psfn-framework
     expect(deferred.coveredUpToMessageId).toBe(0);
 
     refusing = false;
-    h.clock.now += 5 * MINUTE_MS;
+    h.clock.now += 15 * MINUTE_MS;
     await h.sweep();
 
     expect(h.reload()).toMatchObject({ status: 'processed', coveredUpToMessageId: 4 });

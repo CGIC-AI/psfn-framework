@@ -29,6 +29,7 @@ import { retrieveReflectionMemoryBlock } from '../../core/scheduler/reflection-t
 import { classifyMemorySubject } from './subject-classification.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { keysetActiveMemoryPages, recentlyAccessedMemories } from '../../test-support/active-memory-pages.js';
+import { externalMemorySessionId } from '../../shared/contracts/external-memory.js';
 
 // ── Helpers ──
 
@@ -4095,6 +4096,117 @@ describe('MemoryRetriever room-scoped visibility', () => {
     });
     expect(telemetry.reason).toBe('ok');
     expect(telemetry.returnedCount).toBe(1);
+  });
+
+  describe('Hermes external sessions are one logical room per bound contact (d5e0p.22)', () => {
+    const binding = { companionId: 'companion-hermes', bodyId: 'hermes-body' };
+    const hermesRoom = (contactId: string, sessionId: string) =>
+      externalMemorySessionId({ ...binding, contactId }, sessionId);
+
+    async function hermesFixture() {
+      const { contactStore, morganId } = await makeRoomVisibilityContactStore();
+      const robin = await contactStore.upsert({
+        displayName: 'Robin',
+        discordUserId: 'robin-discord',
+        trustLevel: 'trusted',
+        relationshipType: 'friend',
+      });
+      return { contactStore, morganId, robinId: robin.id };
+    }
+
+    async function recall(
+      contactStore: ContactStorePort,
+      memories: Array<PurrMemory & { similarity: number }>,
+      channelId: string,
+      contactId: string,
+      scope: 'dm' | 'group',
+    ): Promise<{ result: string; telemetry: Record<string, unknown> }> {
+      const eventBus = makeMockEventBus();
+      const result = await new MemoryRetriever(
+        makeMockStore(memories),
+        makeMockEmbedding(),
+        { retrievalLimit: 20 },
+        eventBus,
+        contactStore,
+      ).retrieve(
+        'favourite tea and travel plans',
+        channelId,
+        'trusted',
+        { isDirectMessage: scope === 'dm', privacyLevel: 'private' },
+        contactId,
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        scope === 'dm'
+          ? createDmConversationScope({ channelId, contact: { contactId } })
+          : createGroupConversationScope({ channelId }),
+      );
+      return { result, telemetry: latestRetrievalTelemetry(eventBus) };
+    }
+
+    function hermesMemory(id: string, text: string, sourceRoom: string, contactId?: string) {
+      return makeMemory({
+        id,
+        text,
+        sensitivity: 'personal',
+        ...(contactId ? { contactId } : {}),
+        provenance: {
+          channelId: sourceRoom,
+          ...(contactId ? { subjectContactId: contactId, sourceContactId: contactId } : {}),
+        },
+        similarity: 0.97,
+      });
+    }
+
+    it('recalls a contact memory from Hermes session A in Hermes session B', async () => {
+      const { contactStore, morganId } = await hermesFixture();
+      const sessionA = hermesRoom(morganId, 'session-a');
+      const sessionB = hermesRoom(morganId, 'session-b');
+      expect(sessionA).not.toBe(sessionB);
+
+      const { result, telemetry } = await recall(contactStore, [
+        hermesMemory('hermes-a', 'Morgan prefers jasmine tea before long drives.', sessionA, morganId),
+      ], sessionB, morganId, 'dm');
+
+      expect(result).toContain('Morgan prefers jasmine tea before long drives.');
+      expect(telemetry.roomVisibilityRejectedCount).toBe(0);
+      expect(telemetry.returnedCount).toBe(1);
+    });
+
+    it('keeps another contact, unattributed memories and lookalike channels out of a Hermes session', async () => {
+      const { contactStore, morganId, robinId } = await hermesFixture();
+      const lookalikeRoom = `api:other:${'a'.repeat(64)}`;
+      const { result, telemetry } = await recall(contactStore, [
+        hermesMemory('robin-hermes', 'Robin is planning a surprise trip to Lisbon.', hermesRoom(robinId, 'robin-1'), robinId),
+        hermesMemory('unattributed-hermes', 'Someone mentioned the travel budget is tight.', hermesRoom(morganId, 'session-a')),
+        hermesMemory('lookalike', 'Lookalike channel says the tea order shipped.', lookalikeRoom, morganId),
+        hermesMemory('discord-dm', 'Morgan said in Discord the drive starts at dawn.', MORGAN_DM, morganId),
+      ], hermesRoom(morganId, 'session-b'), morganId, 'dm');
+
+      expect(result).not.toContain('Lisbon');
+      expect(result).not.toContain('travel budget');
+      expect(result).not.toContain('tea order shipped');
+      // Morgan's own Discord DM room is a canonical contact room, as before.
+      expect(result).toContain('Morgan said in Discord the drive starts at dawn.');
+      expect(telemetry.roomVisibilityRejectedCount).toBe(3);
+      expect(telemetry.withheldReasonCounts).toMatchObject({ 'room_visibility.blocked': 3 });
+    });
+
+    it('does not carry a Hermes session memory into a non-Hermes room', async () => {
+      const { contactStore, morganId } = await hermesFixture();
+      await contactStore.recordChannelActivity(morganId, 'discord', GROUP_ROOM_X, 'invite_only');
+      const sessionA = hermesRoom(morganId, 'session-a');
+
+      const group = await recall(contactStore, [
+        hermesMemory('hermes-a', 'Morgan prefers jasmine tea before long drives.', sessionA, morganId),
+      ], GROUP_ROOM_X, morganId, 'group');
+      expect(group.result).not.toContain('jasmine tea');
+      expect(group.telemetry.roomVisibilityRejectedCount).toBe(1);
+
+      const hermesMemoryInDiscordDm = await recall(contactStore, [
+        hermesMemory('hermes-a', 'Morgan prefers jasmine tea before long drives.', sessionA, morganId),
+      ], MORGAN_DM, morganId, 'dm');
+      expect(hermesMemoryInDiscordDm.result).not.toContain('jasmine tea');
+      expect(hermesMemoryInDiscordDm.telemetry.roomVisibilityRejectedCount).toBe(1);
+    });
   });
 
   it('withholds same-room memories from retired logical sessions while allowing fresh-route memories', async () => {

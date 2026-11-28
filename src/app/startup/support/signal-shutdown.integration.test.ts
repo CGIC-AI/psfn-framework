@@ -52,7 +52,7 @@ const CHILD_SOURCE = `
     shutdownTimeoutMs: 1000,
     terminalRetentionMs: 604800000,
     cleanupIntervalMs: 3600000,
-    welfare: { deferThreshold: 100, ageThresholdMs: 60000, reserveSlots: 0 },
+    welfare: { deferThreshold: 100, ageThresholdMs: 60000, reserveSlots: 0, maxDefers: 200 },
     store,
     eventBus: new EventBus(),
     leaseOwner: 'signal-shutdown-child',

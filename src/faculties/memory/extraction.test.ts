@@ -900,6 +900,76 @@ describe('MemoryExtractor telemetry payloads', () => {
     expect((llmClient.complete as ReturnType<typeof vi.fn>).mock.calls[0][1]).toBe('extraction');
   });
 
+  it('writes every gate-passing fact of a dense window under the shipped write cap (d5e0p.14)', async () => {
+    const shippedSettings = JSON.parse(
+      readFileSync(join(process.cwd(), 'config/settings.seed.json'), 'utf8'),
+    ) as { memoryExtractionMaxWrites: number };
+    const factTexts = [
+      "User's sister is named Robin",
+      'User is training for a marathon in April',
+      'User works night shifts at a hospital',
+      'User is allergic to shellfish',
+      'User is learning to play the cello',
+    ];
+    const llmClient = fromAny({
+      complete: vi.fn().mockResolvedValue({
+        content: `<response>${factTexts.map((text, index) => `
+<fact>
+<text>${text}</text>
+<type>semantic</type>
+<importance>${(0.7 + index * 0.05).toFixed(2)}</importance>
+<emotional_valence>0.0</emotional_valence>
+<confidence>0.9</confidence>
+</fact>`).join('')}
+</response>`,
+      }),
+    });
+    const eventBus = fromAny({ emit: vi.fn().mockResolvedValue(undefined) });
+    const extractor = new MemoryExtractor(
+      llmClient,
+      fromAny({
+        getRecentMessages: vi.fn().mockReturnValue([
+          { role: 'user', content: 'Conversation content', authorName: 'user' },
+        ]),
+      }),
+      fromAny({ getMemoriesByChannel: vi.fn().mockReturnValue([]) }),
+      fromAny({ embed: vi.fn().mockResolvedValue(new Float32Array(8)), embedBatch: vi.fn(), dims: 8 }),
+      eventBus,
+      fromAny({
+        primaryModel: 'test-model',
+        primaryProvider: 'test-provider',
+        extractionModel: 'test-model',
+        extractionProvider: 'test-provider',
+        primaryMaxTokens: 4096,
+        extractionMaxTokens: 4096,
+        dataDir: '',
+        extractionInterval: 5,
+        defaultContextWindow: 16_000,
+        memoryExtractionMinImportance: 0.45,
+        memoryExtractionMinConfidence: 0.6,
+        memoryExtractionMinNovelty: 0.35,
+        memoryExtractionMaxWrites: shippedSettings.memoryExtractionMaxWrites,
+        memoryExtractionTelemetryEnabled: true,
+        modelRoster: {
+          chat: { model: 'test-model', provider: 'test-provider', maxTokens: 4096, contextWindow: 16_000 },
+        },
+      }),
+    );
+    const processFact = vi.fn(async (fact: { text: string }) => ({
+      action: 'created',
+      memory: { id: `memory:${fact.text}` },
+    }));
+    (fromAny(extractor)).processFact = processFact;
+
+    await extractor.extract('api:dense-window');
+
+    expect(processFact.mock.calls.map(call => call[0].text).sort()).toEqual([...factTexts].sort());
+    const endCall = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls
+      .find(([name]) => name === 'memory.extraction.end');
+    expect(endCall?.[1]?.writeCount).toBe(factTexts.length);
+    expect(endCall?.[1]?.rejectionBreakdown?.write_cap).toBe(0);
+  });
+
   it('caps writes by ranked value and reports write_cap rejections', async () => {
     const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({

@@ -47,7 +47,7 @@
   "memoryExtractionMinImportance": 0.45,
   "memoryExtractionMinConfidence": 0.6,
   "memoryExtractionMinNovelty": 0.35,
-  "memoryExtractionMaxWrites": 2,
+  "memoryExtractionMaxWrites": 12,
   "memoryExtractionTelemetryEnabled": true,
   "memoryRetrievalTelemetryEnabled": true,
   "memoryDeletionPolicy": {

@@ -45,14 +45,17 @@ export function selectExtractionWriteCandidates(
         : {}),
     });
     const writeCapSkips = selection.telemetry.skips;
-    if (selection.telemetry.skippedCount > 0 && input.telemetryEnabled) {
-      log.debug('Skipped extracted facts due to group write caps', {
+    if (selection.telemetry.skippedCount > 0) {
+      // d5e0p.14: a cap drop discards gate-passing facts for good, so it is
+      // reported at INFO whether or not detailed extraction telemetry is on.
+      log.info('Extraction write cap dropped gate-passing facts', {
         channelId: input.channelId,
-        skippedByCap: selection.telemetry.skippedCount,
+        extractionLane: 'group',
+        droppedByWriteCap: selection.telemetry.skippedCount,
+        selectedForWrite: selection.telemetry.selectedCount,
         acceptedBeforeCap: selection.telemetry.candidateCount,
-        selectedAfterCap: selection.telemetry.selectedCount,
         effectiveMaxWrites: selection.telemetry.effectiveMaxWrites,
-        writeCapSkips,
+        ...(input.telemetryEnabled ? { writeCapSkips } : {}),
       });
     }
     return {
@@ -67,12 +70,14 @@ export function selectExtractionWriteCandidates(
     .sort(compareAcceptedFactCandidates);
   const selectedCandidates = rankedCandidates.slice(0, input.maxWrites);
   const skippedByCap = rankedCandidates.length - selectedCandidates.length;
-  if (skippedByCap > 0 && input.telemetryEnabled) {
-    log.debug('Skipped extracted facts due to write cap', {
+  if (skippedByCap > 0) {
+    log.info('Extraction write cap dropped gate-passing facts', {
       channelId: input.channelId,
-      maxWrites: input.maxWrites,
-      skippedByCap,
+      extractionLane: 'direct',
+      droppedByWriteCap: skippedByCap,
+      selectedForWrite: selectedCandidates.length,
       acceptedBeforeCap: rankedCandidates.length,
+      maxWrites: input.maxWrites,
     });
   }
   return {

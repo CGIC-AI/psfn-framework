@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExtractedFact } from '../types.js';
 import { createDefaultGroupMemorySettings } from '../../../system/config/group-memory-config.js';
 import {
@@ -6,6 +6,17 @@ import {
   type WriteCandidateSelectionInput,
 } from './write-selection.js';
 import type { RoutedAcceptedFactCandidate } from './fact-acceptance.js';
+
+const mocks = vi.hoisted(() => ({ logInfo: vi.fn(), logDebug: vi.fn() }));
+
+vi.mock('../../../shared/logger.js', () => ({
+  createComponentLogger: () => ({
+    debug: mocks.logDebug,
+    error: vi.fn(),
+    info: mocks.logInfo,
+    warn: vi.fn(),
+  }),
+}));
 
 function candidate(
   index: number,
@@ -49,6 +60,11 @@ function buildInput(
 }
 
 describe('selectExtractionWriteCandidates', () => {
+  beforeEach(() => {
+    mocks.logInfo.mockReset();
+    mocks.logDebug.mockReset();
+  });
+
   describe('direct path (no group caps)', () => {
     it('ranks candidates by value score and keeps the top maxWrites', () => {
       const low = candidate(0, 0.2);
@@ -86,6 +102,27 @@ describe('selectExtractionWriteCandidates', () => {
       }));
       expect(result.selectedCandidates).toHaveLength(1);
       expect(result.writeCapSkippedCount).toBe(0);
+      expect(mocks.logInfo).not.toHaveBeenCalled();
+    });
+
+    it('reports dropped versus selected facts at INFO even with extraction telemetry off', () => {
+      selectExtractionWriteCandidates(buildInput({
+        acceptedCandidates: [candidate(0, 0.2), candidate(1, 0.9), candidate(2, 0.5)],
+        maxWrites: 2,
+        telemetryEnabled: false,
+      }));
+      expect(mocks.logInfo).toHaveBeenCalledTimes(1);
+      expect(mocks.logInfo).toHaveBeenCalledWith(
+        'Extraction write cap dropped gate-passing facts',
+        expect.objectContaining({
+          extractionLane: 'direct',
+          droppedByWriteCap: 1,
+          selectedForWrite: 2,
+          acceptedBeforeCap: 3,
+          maxWrites: 2,
+        }),
+      );
+      expect(mocks.logDebug).not.toHaveBeenCalled();
     });
   });
 
@@ -103,6 +140,10 @@ describe('selectExtractionWriteCandidates', () => {
       expect(result.selectedCandidates).toHaveLength(1);
       expect(result.writeCapSkippedCount).toBe(1);
       expect(result.writeCapSkips.map(skip => skip.reason)).toContain('run_cap');
+      expect(mocks.logInfo).toHaveBeenCalledWith(
+        'Extraction write cap dropped gate-passing facts',
+        expect.objectContaining({ extractionLane: 'group', droppedByWriteCap: 1, selectedForWrite: 1 }),
+      );
     });
 
     it('ignores the direct maxWrites cap when group caps are active', () => {

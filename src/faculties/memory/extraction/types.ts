@@ -178,7 +178,7 @@ export interface ProfileSourceMemory {
 export const DEFAULT_MIN_IMPORTANCE = 0.45;
 export const DEFAULT_MIN_CONFIDENCE = 0.6;
 export const DEFAULT_MIN_NOVELTY = 0.35;
-export const DEFAULT_MAX_WRITES = 2;
+export const DEFAULT_MAX_WRITES = 12;
 export const DEFAULT_EMOTIONAL_INTENSITY_IMPORTANCE_WEIGHT = 0.2;
 
 export const DEFAULT_PROFILE_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;

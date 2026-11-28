@@ -30,7 +30,7 @@ import { RECOVERY_CONTEXT_MESSAGE_LIMIT, type ExtractionPreLlmGateReason } from 
  * Direct coverage is tracked under its own watermark key, so a direct replay
  * never moves (or is skipped by) a channel's group-memory watermark.
  */
-export const DIRECT_BACKFILL_POLICY_VERSION = 'direct-backfill:v1';
+export const DIRECT_BACKFILL_WATERMARK_VERSION = 'direct-backfill:v1';
 
 export interface DirectBackfillExtractorPort {
   extractDirectBackfillRange(

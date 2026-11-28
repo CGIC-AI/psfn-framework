@@ -33,7 +33,7 @@ import {
 } from './group-salience.js';
 import {
   capDirectBackfillChunkSize,
-  DIRECT_BACKFILL_POLICY_VERSION,
+  DIRECT_BACKFILL_WATERMARK_VERSION,
   resolveBackfillChannelTopology,
   resolveDirectBackfillCounterparty,
   selectDirectBackfillEntries,
@@ -219,7 +219,7 @@ export class GroupMemoryBackfillRunner {
       ? 'direct'
       : 'group';
     const settings = resolveEffectiveBackfillPolicy(resolved.settings, input, lane).settings;
-    const policyVersion = lane === 'direct' ? DIRECT_BACKFILL_POLICY_VERSION : GROUP_MEMORY_POLICY_VERSION;
+    const policyVersion = lane === 'direct' ? DIRECT_BACKFILL_WATERMARK_VERSION : GROUP_MEMORY_POLICY_VERSION;
     const watermarkBefore = this.watermarkStore.get(channelId, policyVersion);
     const effectiveWatermark = resolveEffectiveWatermark({
       channelId,

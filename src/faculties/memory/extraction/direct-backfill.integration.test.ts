@@ -18,7 +18,7 @@ import { MemoryExtractor, __test as extractionTestUtils } from '../extraction.js
 import type { MemoryStorePort } from '../memory-store-port.js';
 import { createPostgresMemoryStoreFromPool } from '../postgres-store.js';
 import { inspectMemorySubjectClassificationCoverage } from '../postgres-store/subject-coverage.js';
-import { DIRECT_BACKFILL_POLICY_VERSION } from './direct-backfill-lane.js';
+import { DIRECT_BACKFILL_WATERMARK_VERSION } from './direct-backfill-lane.js';
 import { GroupMemoryBackfillRunner } from './group-backfill.js';
 import { GROUP_MEMORY_POLICY_VERSION, JsonGroupMemoryWatermarkStore } from './group-ranges.js';
 
@@ -321,7 +321,7 @@ describe('direct-session memory backfill (psfn-framework-d5e0p.17)', () => {
     // The direct replay never touched the channel's group-memory watermark.
     const watermarks = new JsonGroupMemoryWatermarkStore(runtime.watermarkPath);
     expect(watermarks.get(DM_CHANNEL_ID, GROUP_MEMORY_POLICY_VERSION).coveredUpToMessageId).toBe(0);
-    expect(watermarks.get(DM_CHANNEL_ID, DIRECT_BACKFILL_POLICY_VERSION).coveredUpToMessageId)
+    expect(watermarks.get(DM_CHANNEL_ID, DIRECT_BACKFILL_WATERMARK_VERSION).coveredUpToMessageId)
       .toBe(conversationalIds.at(-1));
     expect(await inspectMemorySubjectClassificationCoverage(runtime.pool))
       .toMatchObject({ missingCurrentClassificationCount: 0 });

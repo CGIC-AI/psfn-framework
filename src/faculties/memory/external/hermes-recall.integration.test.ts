@@ -11,6 +11,7 @@ import {
   createGroupConversationScope,
 } from '../../../core/session/conversation-scope.js';
 import { createPostgresPool } from '../../../persistence/postgres.js';
+import { repairHermesRememberAttribution } from '../../../persistence/repair/hermes-remember-attribution.js';
 import { SessionStore } from '../../../persistence/sessions/store.js';
 import type { InferredPostTurnAction } from '../../../shared/contracts/runtime.js';
 import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
@@ -326,5 +327,68 @@ describe('Hermes remember notes across sessions of the bound contact (1meuc)', (
     // attributed rows are theirs, but an unattributed row never is.
     expect(await h.search(h.morganId, 'session-b', 'bike pump boiler'))
       .not.toContain('Legacy note: the bike pump is behind the boiler.');
+  });
+});
+
+describe('Hermes remember note attribution repair (1meuc)', () => {
+  function legacyNote(sessionRoom: string, contactId: string, id: string, text: string,
+    extra: Partial<PurrMemory> = {}, provenance: Record<string, unknown> = {}): Partial<PurrMemory> & Pick<PurrMemory, 'id' | 'text'> {
+    return {
+      id, text, sourceType: 'tool_write', sourceRef: `external:hermes:${id}`,
+      confidence: 0.8,
+      provenance: { channelId: sessionRoom, sessionId: sessionRoom, actor: 'companion',
+        toolName: 'psfn_memory_remember', toolCallId: `event-${id}`, triggerContactId: contactId, ...provenance },
+      ...extra,
+    };
+  }
+
+  it('is dry-run first, attributes only unattributed Hermes notes of live contacts, and restores recall', async () => {
+    const h = await stack();
+    const archived = await h.contactStore.upsert({
+      displayName: 'Former', discordUserId: 'former-discord', trustLevel: 'trusted', relationshipType: 'friend',
+    });
+    const morganA = externalMemorySessionId(h.bindingFor(h.morganId), 'session-a');
+    await insertDirect(h.memoryStore, legacyNote(morganA, h.morganId, 'legacy-morgan',
+      'Legacy note: the bike pump is behind the boiler.'));
+    await insertDirect(h.memoryStore, legacyNote(
+      externalMemorySessionId(h.bindingFor(archived.id), 'old'), archived.id, 'legacy-archived',
+      'Legacy note: the bike rack key is in the drawer.'));
+    expect(await h.contactStore.archiveContact(archived.id)).toBe(true);
+    // Lookalike shapes that must never be attributed by the repair.
+    await insertDirect(h.memoryStore, legacyNote(`api:other:${'b'.repeat(64)}`, h.morganId, 'lookalike-room',
+      'Lookalike: the bike bell is in the shed.'));
+    await insertDirect(h.memoryStore, legacyNote(morganA, h.morganId, 'named-subject',
+      'Named: the bike belongs to Sam.', {}, { subjectName: 'Sam' }));
+    await insertDirect(h.memoryStore, legacyNote(morganA, h.morganId, 'other-tool',
+      'Other tool: the bike chain needs oil.', {}, { toolName: 'memory' }));
+    await insertDirect(h.memoryStore, { id: 'plain-unattributed', text: 'Plain: someone left a bike outside.' });
+
+    const dryRun = await repairHermesRememberAttribution(h.pool, { dryRun: true, embeddingDims: 4 });
+    expect(dryRun).toEqual({
+      dryRun: true, planned: [{ memoryId: 'legacy-morgan', contactId: h.morganId }],
+      skippedUnavailableContact: 1, updatedMemories: 0,
+    });
+    expect(await h.memoryStore.getMemorySubjectClassification('legacy-morgan'))
+      .toMatchObject({ subjectClass: 'unattributed' });
+    expect(await h.context(h.morganId, 'session-b')).not.toContain('boiler');
+
+    const applied = await repairHermesRememberAttribution(h.pool, { dryRun: false, embeddingDims: 4 });
+    expect(applied).toMatchObject({ dryRun: false, updatedMemories: 1, skippedUnavailableContact: 1 });
+    expect(await h.memoryStore.getMemorySubjectClassification('legacy-morgan')).toMatchObject({
+      subjectClass: 'single_contact', subjectContactIds: [h.morganId],
+    });
+    const patches = await h.pool.query<{ reason: string }>(
+      'SELECT reason FROM l2_memory_patch_events WHERE memory_id = $1', ['legacy-morgan'],
+    );
+    expect(patches.rows).toEqual([{ reason: 'hermes_remember_attribution' }]);
+    expect(await h.context(h.morganId, 'session-b')).toContain('boiler');
+    expect(await h.context(h.robinId, 'robin-b')).not.toContain('boiler');
+
+    for (const id of ['legacy-archived', 'lookalike-room', 'named-subject', 'other-tool', 'plain-unattributed']) {
+      const classification = await h.memoryStore.getMemorySubjectClassification(id);
+      expect(classification?.subjectContactIds, id).toEqual([]);
+    }
+    expect(await repairHermesRememberAttribution(h.pool, { dryRun: true }))
+      .toMatchObject({ planned: [], skippedUnavailableContact: 1 });
   });
 });

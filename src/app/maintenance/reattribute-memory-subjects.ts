@@ -16,6 +16,10 @@ import {
   type MemorySubjectReattributionReport,
 } from '../../persistence/repair/memory-subject-reattribution.js';
 import {
+  repairHermesRememberAttribution,
+  type HermesRememberAttributionReport,
+} from '../../persistence/repair/hermes-remember-attribution.js';
+import {
   bootstrapMaintenanceRuntime,
   isMaintenanceCliEntrypoint,
   parseCommonMaintenanceArgs,
@@ -24,6 +28,7 @@ import {
 
 interface CliOptions {
   apply: boolean;
+  hermesRememberNotes: boolean;
   json: boolean;
   mappings: MemorySubjectContactMapping[];
   showHelp: boolean;
@@ -35,12 +40,16 @@ interface CliOptions {
 
 function printUsage(): void {
   console.log('Usage: npm run memory:repair:subject-attribution -- --map <old-id>=<current-id> [OPTIONS]');
+  console.log('       npm run memory:repair:subject-attribution -- --hermes-remember-notes [OPTIONS]');
   console.log('');
   console.log('Re-attributes historical memory/episode contact IDs, then resets and drains');
   console.log('the subject-classification checkpoint. Dry-run is the default.');
+  console.log('With --hermes-remember-notes it instead attributes unattributed Hermes');
+  console.log('remember notes to their bound (trigger) contact and reclassifies only those rows.');
   console.log('');
   console.log('Options:');
   console.log('  --map <old>=<current>     Contact-ID mapping; repeat for multiple old IDs.');
+  console.log('  --hermes-remember-notes   Attribute unattributed Hermes remember notes (1meuc).');
   console.log('  --apply                   Apply updates and re-run all subject classifications.');
   console.log('  --postgres-url <url>      Override configured PostgreSQL URL.');
   console.log('  --schema <schema>         Override the configured companion schema.');
@@ -70,9 +79,10 @@ function parsePositiveInteger(value: string, flag: string): number {
 }
 
 export function parseArgs(argv: readonly string[]): CliOptions {
-  return parseCommonMaintenanceArgs<CliOptions>(argv, {
+  const options = parseCommonMaintenanceArgs<CliOptions>(argv, {
     initial: {
       apply: false,
+      hermesRememberNotes: false,
       json: false,
       mappings: [],
       showHelp: false,
@@ -80,6 +90,9 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     extraFlags: {
       '--apply': ({ options }) => {
         options.apply = true;
+      },
+      '--hermes-remember-notes': ({ options }) => {
+        options.hermesRememberNotes = true;
       },
       '--json': ({ options }) => {
         options.json = true;
@@ -101,6 +114,10 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       },
     },
   });
+  if (options.hermesRememberNotes && options.mappings.length > 0) {
+    throw new Error('--hermes-remember-notes cannot be combined with --map');
+  }
+  return options;
 }
 
 function printReport(report: MemorySubjectReattributionReport, schema: string | undefined): void {
@@ -120,8 +137,17 @@ function printReport(report: MemorySubjectReattributionReport, schema: string | 
   }
 }
 
+function printHermesReport(report: HermesRememberAttributionReport, schema: string | undefined): void {
+  console.log(`Mode: ${report.dryRun ? 'dry-run' : 'apply'}`);
+  console.log(`Schema: ${schema ?? 'public'}`);
+  console.log(`Hermes remember notes: planned=${report.planned.length} applied=${report.updatedMemories}`);
+  console.log(`Skipped (trigger contact archived or missing): ${report.skippedUnavailableContact}`);
+}
+
 async function run(options: CliOptions): Promise<void> {
-  const mappings = normalizeMemorySubjectContactMappings(options.mappings);
+  const mappings = options.hermesRememberNotes
+    ? []
+    : normalizeMemorySubjectContactMappings(options.mappings);
   const { config } = await bootstrapMaintenanceRuntime({ hydrateSecrets: false });
   const postgresUrl = options.postgresUrl?.trim() || config.postgresDatabaseUrl?.trim();
   if (!postgresUrl) {
@@ -141,6 +167,15 @@ async function run(options: CliOptions): Promise<void> {
       ...POSTGRES_CONTACT_MIGRATIONS,
       ...POSTGRES_MEMORY_MIGRATIONS,
     ]);
+    if (options.hermesRememberNotes) {
+      const report = await repairHermesRememberAttribution(pool, { dryRun: !options.apply, embeddingDims });
+      if (options.json) {
+        console.log(JSON.stringify({ ...report, schema: schema ?? 'public' }, null, 2));
+        return;
+      }
+      printHermesReport(report, schema);
+      return;
+    }
     const report = await reattributePostgresMemorySubjects(pool, {
       mappings,
       dryRun: !options.apply,

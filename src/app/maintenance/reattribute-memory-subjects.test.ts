@@ -8,6 +8,7 @@ import {
   normalizeMemorySubjectContactMappings,
   reattributePostgresMemorySubjects,
 } from '../../persistence/repair/memory-subject-reattribution.js';
+import { repairHermesRememberAttribution } from '../../persistence/repair/hermes-remember-attribution.js';
 
 describe('memory subject re-attribution maintenance CLI', () => {
   it('is dry-run by default and accepts repeated exact contact mappings', () => {
@@ -44,6 +45,16 @@ describe('memory subject re-attribution maintenance CLI', () => {
       '--embedding-dims', '1536junk',
     ])).toThrow(/positive integer/u);
     expect(() => parseArgs(['--unexpected'])).toThrow(/Unknown argument/u);
+  });
+
+  it('selects the Hermes remember-note repair as its own dry-run-first mode (1meuc)', async () => {
+    expect(parseArgs(['--hermes-remember-notes'])).toMatchObject({
+      apply: false, hermesRememberNotes: true, mappings: [],
+    });
+    expect(() => parseArgs(['--hermes-remember-notes', '--map', 'old=current']))
+      .toThrow(/cannot be combined/u);
+    await expect(repairHermesRememberAttribution({} as Pool, { dryRun: undefined as never }))
+      .rejects.toThrow(/dryRun must be explicitly true or false/u);
   });
 
   it('requires callers to choose dry-run or apply explicitly', async () => {

@@ -17,6 +17,8 @@ import {
 } from '../../../core/session/intake-screening-metadata.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import {
+  EXTERNAL_MEMORY_REMEMBER_TOOL,
+  externalMemoryNoteSourceRef,
   externalMemorySessionId,
   parseExternalMemoryExecuteParams,
   type ExternalCompanionToolCallResult,
@@ -422,10 +424,10 @@ export class ExternalMemoryService {
         // contact's memory.
         const subjectContactId = record.binding.contactId;
         await this.options.writer.write({ text: entry.content, type: 'semantic',
-          sourceRef: `external:hermes:${receiptId}`, sourceType: 'tool_write',
+          sourceRef: externalMemoryNoteSourceRef(receiptId), sourceType: 'tool_write',
           contactId: subjectContactId,
           provenance: { channelId, sessionId: channelId, companionId: record.binding.companionId,
-            actor: 'companion', toolName: 'psfn_memory_remember', toolCallId: record.eventId,
+            actor: 'companion', toolName: EXTERNAL_MEMORY_REMEMBER_TOOL, toolCallId: record.eventId,
             triggerContactId: subjectContactId, subjectContactId, sourceConversationAt: entry.timestamp },
           intakeEnvelopes: screening.envelopes });
       }

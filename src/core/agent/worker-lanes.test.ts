@@ -107,6 +107,29 @@ describe('worker lanes', () => {
     );
   });
 
+  it('keeps a scheduled heartbeat or reflection turn in maintenance for its chat-purpose model calls (22ovy)', () => {
+    // The round's preemptor: a scheduled daily-review turn runs the chat loop,
+    // so its calls carry purpose 'chat'; they must not outrank background work.
+    for (const input of [
+      { purpose: 'chat', callType: 'scheduled', channelId: 'internal:reflection:daily-review' },
+      { purpose: 'chat', callType: 'tool', channelId: 'internal:reflection:weekly-review' },
+      { purpose: 'chat', callType: 'chat', channelId: 'internal:heartbeat' },
+      { purpose: 'chat', callType: 'chat', channelId: 'internal:heartbeat:morning' },
+    ] as const) {
+      expect(resolveRuntimeLaneClassForModelCall({ ...input, originStage: 'agent.turn.prompt' }))
+        .toBe(MAINTENANCE_REFLECTION_RUNTIME_CLASS);
+      expect(resolveRuntimeLaneClassForModelCall(input))
+        .toBe(resolveRuntimeLaneClassForTurn({ callType: input.callType, channelId: input.channelId }));
+    }
+    // A conversational turn keeps chat priority.
+    expect(resolveRuntimeLaneClassForModelCall({
+      purpose: 'chat',
+      callType: 'chat',
+      channelId: 'api:testing-harness',
+      originStage: 'agent.turn.prompt',
+    })).toBe(FOREGROUND_CHAT_RUNTIME_CLASS);
+  });
+
   it('maps model-bound work into explicit runtime classes for contention control', () => {
     expect(resolveRuntimeLaneClassForModelCall({
       purpose: 'chat',

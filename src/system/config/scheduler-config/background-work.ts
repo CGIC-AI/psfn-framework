@@ -36,12 +36,19 @@ export interface BackgroundWorkWelfareConfig {
   deferThreshold: number;
   ageThresholdMs: number;
   reserveSlots: number;
+  /**
+   * Preemption defers after which a yield stops being free (22ovy): further
+   * preemptions consume attempts and raise `background_work_preemption_bounded`.
+   * Must exceed `deferThreshold`, so welfare admission is tried first.
+   */
+  maxDefers: number;
 }
 
 export const DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG: BackgroundWorkWelfareConfig = {
   deferThreshold: 8,
   ageThresholdMs: 300_000,
   reserveSlots: 1,
+  maxDefers: 16,
 };
 
 function toBackgroundWorkPositiveInteger(value: unknown, field: string): number {
@@ -167,16 +174,29 @@ export function validateBackgroundWorkWelfareConfig(
   );
   // reserveSlots: 0 disables welfare; the aging thresholds are then irrelevant
   // but still validated for shape so a later enable cannot ship a bad value.
+  const deferThreshold = toPositiveInteger(
+    value.deferThreshold ?? DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG.deferThreshold,
+    'backgroundWorkWelfare.deferThreshold',
+    1,
+  );
+  const maxDefers = toPositiveInteger(
+    value.maxDefers ?? DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG.maxDefers,
+    'backgroundWorkWelfare.maxDefers',
+    1,
+  );
+  if (maxDefers <= deferThreshold) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: backgroundWorkWelfare.maxDefers `
+      + 'must be greater than backgroundWorkWelfare.deferThreshold',
+    );
+  }
   return {
-    deferThreshold: toPositiveInteger(
-      value.deferThreshold ?? DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG.deferThreshold,
-      'backgroundWorkWelfare.deferThreshold',
-      1,
-    ),
+    deferThreshold,
     ageThresholdMs: toNonNegativeInteger(
       value.ageThresholdMs ?? DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG.ageThresholdMs,
       'backgroundWorkWelfare.ageThresholdMs',
     ),
     reserveSlots,
+    maxDefers,
   };
 }

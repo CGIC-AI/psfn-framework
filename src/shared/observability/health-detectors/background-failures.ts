@@ -46,6 +46,9 @@ import { sameHealthEventOwner } from './owner.js';
 /** The failure observations this detector counts. */
 const COUNTED_FAILURE_CODES: readonly HealthEventCode[] = [
   'background_work_job_failed',
+  // psfn-framework-22ovy: grouped by a digest of the job KIND, so a lane that
+  // keeps hitting its preemption bound becomes one episode.
+  'background_work_preemption_bounded',
   'memory_refresh_failed',
   'custody_snapshot_write_failed',
   // psfn-framework-mlhn3: a screener provider that refuses the request

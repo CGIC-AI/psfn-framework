@@ -219,7 +219,7 @@ import {
 } from './background-work/supervisor.js';
 import type {
   BackgroundWorkStorePort,
-  BackgroundWorkWelfarePolicy,
+  BackgroundWorkSupervisorWelfarePolicy,
 } from './background-work/store-port.js';
 import type { BackgroundWorkGovernedClassRunner } from './background-work/types.js';
 import { executePostTurnBackgroundWork } from './background-work/post-turn-runtime.js';
@@ -300,7 +300,7 @@ export interface SubstrateAgentOptions {
    */
   allowCapabilityDeniedTransport?: import('../../system/capabilities/gate.js').CapabilityDeniedTransportPolicy;
   /** Anti-starvation welfare policy (mmo9.7.4), owner-file backed (scheduler.json). */
-  backgroundWorkWelfare?: Partial<BackgroundWorkWelfarePolicy>;
+  backgroundWorkWelfare?: Partial<BackgroundWorkSupervisorWelfarePolicy>;
   /** Canonical lifecycle binding for eligible durable background automata. */
   backgroundWorkAutomataLifecycle?: BackgroundWorkAutomataLifecyclePort;
   /** Governed Automata Bus lifecycle for the intention post-turn hooks class. */
@@ -330,17 +330,19 @@ function requireBackgroundWorkTuning(
 }
 
 function requireBackgroundWorkWelfare(
-  welfare: Partial<BackgroundWorkWelfarePolicy> | undefined,
-): BackgroundWorkWelfarePolicy {
+  welfare: Partial<BackgroundWorkSupervisorWelfarePolicy> | undefined,
+): BackgroundWorkSupervisorWelfarePolicy {
   if (welfare?.deferThreshold === undefined
     || welfare.ageThresholdMs === undefined
-    || welfare.reserveSlots === undefined) {
+    || welfare.reserveSlots === undefined
+    || welfare.maxDefers === undefined) {
     throw new Error('SubstrateAgent requires scheduler-owned durable background work welfare policy');
   }
   return {
     deferThreshold: welfare.deferThreshold,
     ageThresholdMs: welfare.ageThresholdMs,
     reserveSlots: welfare.reserveSlots,
+    maxDefers: welfare.maxDefers,
   };
 }
 

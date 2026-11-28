@@ -76,6 +76,7 @@ const TEST_BACKGROUND_WORK_WELFARE_POLICY: BackgroundWorkSupervisorOptions['welf
   deferThreshold: 8,
   ageThresholdMs: 300_000,
   reserveSlots: 1,
+  maxDefers: 16,
 };
 
 type TestBackgroundWorkSupervisorOptions =

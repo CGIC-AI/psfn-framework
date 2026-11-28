@@ -230,17 +230,28 @@ export function resolveRuntimeLaneClassForModelCall(input: {
   originStage?: string;
 }): RuntimeLaneClass {
   const originStage = input.originStage?.trim() ?? '';
-  if (input.purpose === 'chat' || input.callType === 'chat' || input.callType === 'tool'
-    || isSocialOutreachChannelId(input.channelId)) {
+  if (isSocialOutreachChannelId(input.channelId)) {
     return FOREGROUND_CHAT_RUNTIME_CLASS;
   }
+  // 22ovy: a scheduled heartbeat or reflection turn runs the chat loop, so its
+  // model calls carry purpose 'chat'. They are still maintenance work, exactly
+  // as resolveRuntimeLaneClassForTurn and the charge lane classify the turn.
+  // Resolving them as foreground let every scheduled reflection preempt the
+  // fleet's background calls at the shared gateway gate.
   if (
     input.callType === 'scheduled'
-    || input.purpose === 'memory'
-    || input.purpose === 'extraction'
     || input.channelId === 'internal:heartbeat'
     || input.channelId?.startsWith('internal:heartbeat:')
     || input.channelId?.startsWith('internal:reflection:')
+  ) {
+    return MAINTENANCE_REFLECTION_RUNTIME_CLASS;
+  }
+  if (input.purpose === 'chat' || input.callType === 'chat' || input.callType === 'tool') {
+    return FOREGROUND_CHAT_RUNTIME_CLASS;
+  }
+  if (
+    input.purpose === 'memory'
+    || input.purpose === 'extraction'
     || MAINTENANCE_REFLECTION_ORIGIN_STAGE_PREFIXES.some(prefix => originStage.startsWith(prefix))
     || originStage === 'heartbeat.run_template'
     || originStage === 'memory.sleeptime.run'

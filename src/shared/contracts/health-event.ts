@@ -98,6 +98,14 @@ const HEALTH_EVENT_CODES = [
   'operator_alert_sinks_unconfigured',
   /** A background-work job reached its terminal failed state. */
   'background_work_job_failed',
+  /**
+   * A background-work job kept losing its model call to foreground work past
+   * its owner-file preemption bound (psfn-framework-22ovy): each further
+   * preemption now consumes an attempt instead of re-dispatching for free.
+   * Grouped by a digest of the job KIND, so a lane in a preemption loop becomes
+   * one episode in the background-failure detector.
+   */
+  'background_work_preemption_bounded', // psfn-framework-22ovy
   /** A registered scheduler task threw out of its handler. */
   'scheduler_task_failed',
   /**
@@ -320,6 +328,7 @@ const HEALTH_EVENT_EVIDENCE_KEYS = [
   'activeConnections',
   'attemptCount',
   'configuredSinkCount',
+  'deferCount', // psfn-framework-22ovy
   'durationMs',
   'elapsedMs',
   'failureCount',

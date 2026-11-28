@@ -210,7 +210,11 @@ export function toolIconForName(toolName: string): ToolDomain {
   return domain ? TOOL_DOMAIN_ICON[domain] : DEFAULT_TOOL_ICON;
 }
 
-/** Map a tool.activity phase to a sprite tool phase (`progress` reuses `started`). */
+/**
+ * Map a tool.activity phase to a sprite tool phase (`progress` reuses
+ * `started`). A rejected call did not do its work and shows the failed
+ * one-shot; a skipped call never ran and shows the benign terminal one-shot.
+ */
 export function toolPhaseForActivity(
   phase: ToolActivityStreamEntry['phase'],
 ): ToolPhase {
@@ -219,8 +223,10 @@ export function toolPhaseForActivity(
     case 'progress':
       return 'started';
     case 'completed':
+    case 'skipped':
       return 'completed';
     case 'failed':
+    case 'rejected':
       return 'failed';
   }
 }

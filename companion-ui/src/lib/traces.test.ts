@@ -128,6 +128,28 @@ describe('operational traces', () => {
     expect(traces.every((trace) => trace.operationClass === 'tool_activity')).toBe(true);
   });
 
+  it('keeps rejected and skipped tool activity distinct from success (ik47b.15)', () => {
+    let state = createInitialHubStreamState('2026-06-17T00:00:00.000Z');
+    for (const [index, phase] of (['rejected', 'skipped'] as const).entries()) {
+      state = reduceHubStreamState(state, {
+        type: 'hub.inbound',
+        at: `2026-06-17T00:00:0${index + 1}.000Z`,
+        event: {
+          message: {
+            type: 'tool.activity',
+            data: { id: `tool-${phase}`, tool: 'renderer', phase, timestamp: `ts-${index}` },
+          },
+        },
+      });
+    }
+
+    const traces = deriveOperationalTraces(state);
+    expect(traces.map((trace) => [trace.status, trace.metadata.phase])).toEqual([
+      ['failed', 'rejected'],
+      ['info', 'skipped'],
+    ]);
+  });
+
   it('summarizes approval lifecycle events without leaking redacted context', () => {
     const redacted = 'REDACTED-CONTEXT-STRING';
     let state = reduceHubStreamState(createInitialHubStreamState('2026-06-17T00:00:00.000Z'), {

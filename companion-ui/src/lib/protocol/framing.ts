@@ -4,6 +4,7 @@ import {
   isObjectRecord as isRecord,
 } from '../../../../src/shared/utils/types.js';
 import { ACAC_AXES } from '../../../../src/shared/contracts/emotion-contracts.js';
+import { COMPANION_TOOL_ACTIVITY_PHASES } from '../../../../src/shared/contracts/companion-relay.js';
 /**
  * Wire framing for the Companion Cockpit <-> PSFN-Satellite-Hub transport.
  *
@@ -380,7 +381,7 @@ const STRICT_HUB_VALIDATORS: Record<HubToClientMessage['type'], (payload: unknow
   'tool.activity': payload => {
     const data = dataRecord(payload, ['id', 'tool', 'phase', 'timestamp'], ['detail']);
     return data !== null && boundedString(data.id, 256) && boundedString(data.tool, 256)
-      && oneOf(data.phase, ['started', 'progress', 'completed', 'failed'])
+      && oneOf(data.phase, COMPANION_TOOL_ACTIVITY_PHASES)
       && optionalBoundedString(data.detail, 4096) && isoTimestamp(data.timestamp);
   },
   'emotion.snapshot': payload => {

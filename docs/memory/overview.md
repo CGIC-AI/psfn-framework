@@ -397,11 +397,14 @@ flowchart TD
 
 *The extraction seam: deterministic trigger and gate decide before any LLM spend; accepted facts flow through the shared writer pipeline into L2.*
 
-Extraction also runs in crash-recovery, pre-compaction, observed-group, group
-backfill, and final-reflection paths (`queueRetroactiveExtraction`,
-`queueCompactionExtraction`, `extractObservedGroupRange`,
-`extractGroupBackfillRange`, `extractFinalReflection`), and side effects refresh
-per-contact emotional state and the recent-contact-shape synthesis.
+Extraction also runs in pre-compaction, observed-group, operator backfill, and
+final-reflection paths (`queueCompactionExtraction`,
+`extractObservedGroupRange`, `extractGroupBackfillRange`,
+`extractDirectBackfillRange`, `extractFinalReflection`), and side effects
+refresh per-contact emotional state and the recent-contact-shape synthesis.
+Direct backfill is a historical replay: it skips those side effects, concern
+candidates and formation mood, which describe the present, not the replayed
+messages.
 
 ## Background lanes
 
@@ -480,6 +483,36 @@ stateDiagram-v2
 - Backups: encrypted `pg_dump` restores are the canonical restore primitive
   for L0.1/L2; the memory mutation log participates in backup verification as
   the L0 line-count check.
+
+### Operator memory repair
+
+Both tools are bounded and dry-run first; take a backup before an apply.
+
+- **Transcript replay** — `POST /api/admin/group-memory/:channelId/backfill`
+  (Garden admin) replays an existing session range through extraction.
+  `mode: "dry_run"` reports the planned chunks and the exact message ids each
+  will send; `mode: "live"` runs them. Group rooms take the salience-selected
+  group lane. A 1:1 DM (a transcript recorded with private visibility) or a
+  companion-DM (`companion-dm:<a>:<b>`) takes the direct lane: chunks are at
+  most the 50-entry extraction recovery window, facts route to the single
+  resolved counterparty with `reason: operator_backfill`, and an unresolvable
+  counterparty is reported as `direct_counterparty_unresolved`, never guessed.
+  `maxChunksPerRun`/`maxLlmCallsPerRun` bound a run; the direct lane keeps its
+  own watermark (`direct-backfill:v1`), so reruns resume where coverage
+  stopped and never move the group-memory watermark. `resume: false` replays a
+  range again; the writer's dedupe stores nothing it already has. The per-run
+  write cap still applies to each chunk; `writeCapSkippedCount` reports the
+  facts it dropped.
+- **Missing embeddings** — `npm run memory:repair:embeddings` reports the
+  active L2 rows whose embedding is NULL (invisible to semantic recall) in the
+  configured or `--schema` tenant schema. `--apply` embeds exactly those rows
+  with the configured provider, `--limit <n>` bounds a run and `--after-id`
+  continues from the reported `nextAfterId`. Rows already embedded are never
+  rewritten, the run refuses a provider whose dimension differs from the
+  stored vectors, and each row's subject classification is re-projected in
+  the same transaction, so a repaired row is exactly as visible as before.
+  `npm run migrate:embeddings` remains the full re-embed after a model
+  change, with the same re-projection.
 
 ## Focused tests
 

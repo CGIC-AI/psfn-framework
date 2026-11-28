@@ -31,7 +31,8 @@ import { evaluateCompositionalPolicyForChannelId } from '../../system/capabiliti
 import type { MemoryStorePort } from './memory-store-port.js';
 import type { ExtractedFact, MemoryFormationVAD } from './types.js';
 import { MEMORY_CONFIG } from './types.js';
-import { RECOVERY_CONTEXT_MESSAGE_LIMIT } from './extraction/types.js';
+import { RECOVERY_CONTEXT_MESSAGE_LIMIT, type ExtractionEndTelemetry } from './extraction/types.js';
+import { isNonConversationalSessionEntry } from '../../core/session/manager-primitives.js';
 import { MemoryWriter, type WriteResult } from './writer.js';
 import { createCompanionRoomMembershipAuthority } from './companion-provenance.js';
 import {
@@ -190,12 +191,32 @@ export interface GroupBackfillExtractionOptions {
   groupWriteCaps: GroupMemoryWriteCapSettings;
 }
 
+export interface DirectBackfillExtractionOptions {
+  channelId: string;
+  /** One bounded chunk of conversational entries from an existing transcript. */
+  recoveredEntries: SessionEntry[];
+  canonicalContactId?: string;
+}
+
+export interface DirectBackfillExtractionResult {
+  outputs: MemoryExtractionOutputs;
+  telemetry: ExtractionEndTelemetry;
+}
+
 type MemoryExtractorRunOptions =
   Pick<ExtractionRunOptions, 'groupWriteCaps' | 'groupWriteCapContext'>
   & {
     forceSinglePassExtraction?: boolean;
     reflectionSource?: FinalReflectionExtractionInput;
     externalConversation?: true;
+    /**
+     * Operator replay of an old transcript range. Facts go through the normal
+     * routing and write path, but present-tense side effects (current formation
+     * mood, concern candidates, contact emotional state, Recent Contact Shape)
+     * are not derived from historical messages.
+     */
+    historicalReplay?: true;
+    onExtractionEnd?: (telemetry: ExtractionEndTelemetry) => void;
   };
 
 export class MemoryExtractor {
@@ -302,23 +323,70 @@ export class MemoryExtractor {
     this.decisions = formationOptions?.decisions;
   }
 
-  async queueRetroactiveExtraction(
-    channelId: string,
-    recoveredEntries: SessionEntry[],
-    canonicalContactId?: string,
-  ): Promise<void> {
-    if (recoveredEntries.length === 0) return;
-    if (!this.acceptingExtractions) {
-      log.debug('Skipping crash recovery extraction while extractor is draining', { channelId });
-      return;
+  /**
+   * Re-extract one bounded chunk of an existing direct or companion-DM
+   * transcript for the operator backfill (psfn-framework-d5e0p.17). The chunk
+   * is serialized behind live work on the same session (never coalesced into
+   * it), and resolves only when the run actually completed: a drain, a
+   * retired/quarantined session or a session route change rejects, so the
+   * caller never records an unprocessed range as covered.
+   */
+  async extractDirectBackfillRange(
+    options: DirectBackfillExtractionOptions,
+  ): Promise<DirectBackfillExtractionResult> {
+    const channelId = options.channelId.trim();
+    if (!channelId || isTestingSessionId(channelId)) {
+      throw new Error('Direct backfill extraction requires a non-testing session');
     }
-
-    const orderedEntries = [...recoveredEntries].sort((left, right) => left.id - right.id);
-    const reusedInFlight = this.hasInFlightExtraction(channelId);
-    await this.trackExtraction(channelId, 'crash_recovery', canonicalContactId, orderedEntries);
-    if (!reusedInFlight) {
-      this.advanceIntervalWatermarkAfterCoverage(channelId, 'crash_recovery', orderedEntries);
+    const entries = options.recoveredEntries
+      .filter(entry => !isNonConversationalSessionEntry(entry))
+      .map(entry => ({ ...entry }))
+      .sort((left, right) => left.id - right.id);
+    if (
+      entries.length === 0
+      || entries.length > RECOVERY_CONTEXT_MESSAGE_LIMIT
+      || new Set(entries.map(entry => entry.id)).size !== entries.length
+    ) {
+      throw new Error(
+        `Direct backfill extraction requires 1-${RECOVERY_CONTEXT_MESSAGE_LIMIT} unique conversational entries`,
+      );
     }
+    assertMemorySourceIsNotTestingHarness(entries);
+    const logicalSessionId = this.resolveExtractionLogicalSessionId(channelId);
+    const assertEligible = async (): Promise<void> => {
+      if (!this.acceptingExtractions) {
+        throw new ExtractionDrainRequeueError(channelId, 'operator_backfill');
+      }
+      if (!this.isExtractionSessionCurrent(channelId, logicalSessionId)) {
+        throw new Error('Direct backfill source session is retired, quarantined or rerouted');
+      }
+    };
+    await assertEligible();
+    const completed: { telemetry?: ExtractionEndTelemetry } = {};
+    const outputs = await this.trackExtraction(
+      channelId,
+      'operator_backfill',
+      options.canonicalContactId,
+      entries,
+      undefined,
+      {
+        forceSinglePassExtraction: true,
+        historicalReplay: true,
+        onExtractionEnd: (value) => { completed.telemetry = value; },
+      },
+      undefined,
+      undefined,
+      assertEligible,
+      'serialize',
+      assertEligible,
+    );
+    // A completed run either passed the pre-LLM gate decision or recorded the
+    // coverage of the range; the stale-route skip emits neither.
+    const telemetry = completed.telemetry;
+    if (!telemetry || (telemetry.preLlmGateSkipped !== true && telemetry.coveredUpToMessageId === undefined)) {
+      throw new Error('Direct backfill extraction did not complete for its range');
+    }
+    return { outputs, telemetry };
   }
 
   async queueCompactionExtraction(
@@ -807,7 +875,10 @@ export class MemoryExtractor {
     }
     let cachedFormationVAD: MemoryFormationVAD | undefined;
     let didResolveFormationVAD = false;
+    const historicalReplay = groupOptions?.historicalReplay === true;
     const resolveFormationVAD = (): MemoryFormationVAD | undefined => {
+      // The companion's current mood is not the mood these old messages formed in.
+      if (historicalReplay) return undefined;
       if (!didResolveFormationVAD) {
         cachedFormationVAD = this.getFormationVAD?.();
         didResolveFormationVAD = true;
@@ -910,9 +981,10 @@ export class MemoryExtractor {
       emitExtractionStart: (extractionChannelId, reason, extractionTurnId) => (
         emitExtractionStartEvent(this.costTelemetry, this.isTelemetryEnabled(), extractionChannelId, reason, extractionTurnId)
       ),
-      emitExtractionEnd: telemetry => (
-        emitExtractionEndEvent(this.costTelemetry, this.isTelemetryEnabled(), telemetry)
-      ),
+      emitExtractionEnd: (telemetry) => {
+        groupOptions?.onExtractionEnd?.(telemetry);
+        return emitExtractionEndEvent(this.costTelemetry, this.isTelemetryEnabled(), telemetry);
+      },
       resolveCoveredUpToMessageId: (extractionChannelId, entries) => (
         resolveCoveredMarker(this.sessionManager, extractionChannelId, entries)
       ),
@@ -922,26 +994,32 @@ export class MemoryExtractor {
           : persistExtractionMarker(this.sessionStore, logicalSessionId, coveredUpToMessageId)
       ),
       maybePersistEmotionalState: (contactId, acceptedFacts, recentEntries) => (
-        this.maybePersistEmotionalState(
-          logicalSessionId,
-          contactId,
-          acceptedFacts,
-          recentEntries,
-        )
+        historicalReplay
+          ? Promise.resolve(undefined)
+          : this.maybePersistEmotionalState(
+            logicalSessionId,
+            contactId,
+            acceptedFacts,
+            recentEntries,
+          )
       ),
       maybeRefreshRecentContactShape: (
         extractionChannelId,
         reason,
         contactId,
         acceptedWrites,
-      ) => this.maybeRefreshRecentContactShape(
-        logicalSessionId,
-        extractionChannelId,
-        reason,
-        contactId,
-        acceptedWrites,
+      ) => (
+        historicalReplay
+          ? Promise.resolve()
+          : this.maybeRefreshRecentContactShape(
+            logicalSessionId,
+            extractionChannelId,
+            reason,
+            contactId,
+            acceptedWrites,
+          )
       ),
-      ...(this.emitConcernCandidates
+      ...(this.emitConcernCandidates && !historicalReplay
         ? { emitConcernCandidates: this.emitConcernCandidates }
         : {}),
       ...(assertEffectAllowed ? { assertEffectAllowed } : {}),

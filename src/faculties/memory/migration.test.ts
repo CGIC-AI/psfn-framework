@@ -47,6 +47,34 @@ vi.mock('../../persistence/postgres.js', () => ({
   withPostgresClient: postgresMocks.withPostgresClient,
 }));
 
+// Row persistence (embedding + subject re-projection) is proven against real
+// Postgres in migration-missing-embeddings.integration.test.ts; here it only
+// records what the batching and concurrency logic hands it.
+vi.mock('./postgres-store/memory-embedding-write.js', () => ({
+  persistMemoryEmbedding: vi.fn(async (
+    client: PoolClient,
+    memoryId: string,
+    embedding: Float32Array,
+  ) => {
+    await client.query('persist-embedding', [memoryId, `[${Array.from(embedding).join(',')}]`]);
+    return 'updated';
+  }),
+}));
+
+function mockMemoryTextRows(rows: Array<{ id: string; text: string }>): void {
+  postgresMocks.queryRows.mockImplementation(async (_pool: unknown, sql: string) => {
+    if (sql.includes('to_regclass')) return [{ schema: 'public', memory_table: 'l2_memories' }];
+    if (sql.includes('SELECT id, text')) return rows;
+    return [{ active_count: String(rows.length), active_missing_count: '0' }];
+  });
+}
+
+function memoryTextQuery(): string | undefined {
+  return postgresMocks.queryRows.mock.calls
+    .map(call => call[1] as string)
+    .find(sql => sql.includes('SELECT id, text'));
+}
+
 const TEST_DIMS = 2;
 
 interface CountingEmbeddingServiceOptions {
@@ -137,7 +165,7 @@ beforeEach(() => {
 
 describe('migratePostgresMemoryEmbeddings', () => {
   it('re-embeds all Postgres rows in configured batch sizes', async () => {
-    postgresMocks.queryRows.mockResolvedValue([
+    mockMemoryTextRows([
       { id: 'm-1', text: 'cat purr memory' },
       { id: 'm-2', text: 'rocket telemetry memory' },
       { id: 'm-3', text: 'bread recipe memory' },
@@ -159,7 +187,8 @@ describe('migratePostgresMemoryEmbeddings', () => {
       postgresMocks.pool as unknown as Pool,
       expect.any(Array),
     );
-    expect(postgresMocks.queryRows.mock.calls[0]?.[1]).toContain('WHERE deleted_at IS NULL');
+    expect(memoryTextQuery()).toContain('WHERE deleted_at IS NULL');
+    expect(memoryTextQuery()).not.toContain('embedding IS NULL');
     expect(result).toMatchObject({
       total: 5,
       processed: 5,
@@ -199,7 +228,7 @@ describe('migratePostgresMemoryEmbeddings', () => {
   });
 
   it('caps worker concurrency to configured parallelism', async () => {
-    postgresMocks.queryRows.mockResolvedValue([
+    mockMemoryTextRows([
       { id: 'm-a', text: 'cat memory one' },
       { id: 'm-b', text: 'cat memory two' },
       { id: 'm-c', text: 'cat memory three' },

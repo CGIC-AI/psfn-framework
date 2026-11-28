@@ -88,7 +88,9 @@ function runCli(): Promise<unknown> {
       console.log(`Embedding provider: ${embeddingProvider.kind} (dims=${embeddingProvider.dims})`);
       console.log('');
 
+      const schema = config.postgresSchema?.trim();
       const result = await migratePostgresMemoryEmbeddings(databaseUrl, embeddingProvider, {
+        ...(schema ? { schema } : {}),
         batchSize: options.batchSize,
         parallelism: options.parallelism,
         includeDeleted: options.includeDeleted,

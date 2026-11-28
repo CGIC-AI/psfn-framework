@@ -1,4 +1,4 @@
-import type { Pool, PoolClient } from 'pg';
+import type { Pool } from 'pg';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import {
   createPostgresPool,
@@ -10,6 +10,7 @@ import { POSTGRES_MEMORY_MIGRATIONS } from '../../persistence/postgres/migration
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { chunk } from '../../shared/utils/arrays.js';
 import { createMaintenanceEmbeddingUsageProvenance } from '../../core/agent/embedding-usage-provenance.js';
+import { persistMemoryEmbedding } from './postgres-store/memory-embedding-write.js';
 
 interface RetrievalRow {
   memory_id: string;
@@ -73,15 +74,31 @@ export interface EmbeddingMigrationValidationResult {
   post: RetrievalValidationReport;
 }
 
+/** Active L2 rows (not deleted, not superseded); NULL-embedding rows are invisible to semantic recall. */
+export interface MemoryEmbeddingCoverage {
+  activeMemoryCount: number;
+  activeMissingEmbeddingCount: number;
+}
+
 export interface EmbeddingMigrationResult {
+  dryRun: boolean;
+  missingOnly: boolean;
   total: number;
   processed: number;
   updated: number;
+  /** Missing-only rows another writer embedded first; left untouched. */
+  alreadyEmbedded: number;
   failed: number;
   batchSize: number;
   parallelism: number;
   durationMs: number;
   failures: ReembedFailure[];
+  coverageBefore: MemoryEmbeddingCoverage;
+  coverageAfter: MemoryEmbeddingCoverage;
+  /** Missing-only runs: the exact rows selected, in id order. */
+  selectedMemoryIds?: string[];
+  /** Set when `limit` left matching rows behind; pass it as `afterId` to continue. */
+  nextAfterId?: string;
   validation?: EmbeddingMigrationValidationResult;
 }
 
@@ -93,6 +110,19 @@ export interface EmbeddingMigrationOptions {
   validationQueries?: RetrievalValidationQuery[];
   validationTopK?: number;
   onProgress?: (progress: ReembedMigrationProgress) => void;
+  /** Companion tenant schema; absent selects the connection's default schema. */
+  schema?: string;
+  /**
+   * Embed only active rows whose embedding is NULL (psfn-framework-d5e0p.23).
+   * `includeDeleted` widens the selection to deleted and superseded rows.
+   */
+  missingOnly?: boolean;
+  /** Select at most this many rows, in id order. */
+  limit?: number;
+  /** Continuation cursor: select only rows whose id sorts after this one. */
+  afterId?: string;
+  /** Report the selection and coverage without embedding or writing. */
+  dryRun?: boolean;
 }
 
 const DEFAULT_BATCH_SIZE = 64;
@@ -115,39 +145,114 @@ function toEmbeddingBuffer(embedding: Float32Array): Buffer {
   return Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength);
 }
 
-function toPostgresEmbeddingLiteral(embedding: Float32Array): string {
-  return `[${Array.from(embedding, value => Number(value)).join(',')}]`;
+interface MigrationRowSelection {
+  includeDeleted: boolean;
+  missingOnly: boolean;
+  afterId?: string;
+  limit?: number;
 }
 
 async function loadPostgresRowsForMigration(
   pool: Pool,
-  includeDeleted: boolean,
+  selection: MigrationRowSelection,
 ): Promise<PostgresMemoryTextRow[]> {
-  const whereClause = includeDeleted ? '' : 'WHERE deleted_at IS NULL';
+  const conditions = [
+    ...(selection.includeDeleted ? [] : ['deleted_at IS NULL']),
+    ...(selection.missingOnly && !selection.includeDeleted ? ['superseded_by IS NULL'] : []),
+    ...(selection.missingOnly ? ['embedding IS NULL'] : []),
+    ...(selection.afterId !== undefined ? ['id > $1'] : []),
+  ];
+  const values: unknown[] = selection.afterId !== undefined ? [selection.afterId] : [];
+  // One row past the bound tells a bounded run whether matching rows remain.
+  const limitClause = selection.limit !== undefined ? `LIMIT ${selection.limit + 1}` : '';
   return await queryRows<PostgresMemoryTextRow>(pool, `
     SELECT id, text
     FROM l2_memories
-    ${whereClause}
+    ${conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''}
     ORDER BY id ASC
-  `);
+    ${limitClause}
+  `, values);
 }
 
+export async function inspectMemoryEmbeddingCoverage(pool: Pool): Promise<MemoryEmbeddingCoverage> {
+  const rows = await queryRows<{ active_count: string; active_missing_count: string }>(pool, `
+    SELECT
+      COUNT(*) AS active_count,
+      COUNT(*) FILTER (WHERE embedding IS NULL) AS active_missing_count
+    FROM l2_memories
+    WHERE deleted_at IS NULL AND superseded_by IS NULL
+  `);
+  return {
+    activeMemoryCount: Number(rows[0]?.active_count ?? 0),
+    activeMissingEmbeddingCount: Number(rows[0]?.active_missing_count ?? 0),
+  };
+}
+
+/**
+ * Maintenance runs against an existing companion corpus. A mistyped or absent
+ * schema would otherwise fall through the pinned search path, create the memory
+ * tables in whichever schema resolves first, and report an empty, clean corpus.
+ */
+async function assertMemoryCorpusExists(pool: Pool): Promise<void> {
+  const rows = await queryRows<{ schema: string | null; memory_table: string | null }>(pool, `
+    SELECT current_schema() AS schema,
+      to_regclass(format('%I.l2_memories', current_schema()))::text AS memory_table
+  `);
+  if (!rows[0]?.memory_table) {
+    throw new Error(
+      `PostgreSQL embedding migration found no l2_memories table in schema ${rows[0]?.schema ?? '<none>'}; `
+      + 'check the companion schema',
+    );
+  }
+}
+
+/**
+ * A missing-only backfill embeds rows beside the existing ones, so it must
+ * produce vectors in their space; a provider whose dimension differs needs
+ * the full re-embed instead.
+ */
+async function assertProviderMatchesStoredDimensions(pool: Pool, dims: number): Promise<void> {
+  const rows = await queryRows<{ dims: number }>(pool, `
+    SELECT DISTINCT vector_dims(embedding) AS dims
+    FROM l2_memories
+    WHERE embedding IS NOT NULL
+  `);
+  const stored = rows.map(row => Number(row.dims)).filter(value => value !== dims);
+  if (stored.length > 0) {
+    throw new Error(
+      `Missing-embedding backfill refused: stored embeddings have dimension ${stored.join(', ')} `
+      + `but the embedding provider produces ${dims}; run the full re-embed instead`,
+    );
+  }
+}
+
+/** Each row commits on its own, so one bad row never discards its batch's work. */
 async function writePostgresReembeddedBatch(
-  client: PoolClient,
+  pool: Pool,
   rows: readonly PostgresMemoryTextRow[],
   embeddings: readonly Float32Array[],
-): Promise<void> {
+  onlyIfMissing: boolean,
+): Promise<{ updated: number; alreadyEmbedded: number; failures: ReembedFailure[] }> {
+  let updated = 0;
+  let alreadyEmbedded = 0;
+  const failures: ReembedFailure[] = [];
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index];
     const embedding = embeddings[index];
     if (row === undefined || embedding === undefined) {
       throw new Error(`Unexpected missing row or embedding at index ${index}`);
     }
-    await client.query(
-      'UPDATE l2_memories SET embedding = $2::vector WHERE id = $1',
-      [row.id, toPostgresEmbeddingLiteral(embedding)],
-    );
+    try {
+      const outcome = await withPostgresClient(pool, async client => (
+        await persistMemoryEmbedding(client, row.id, embedding, { onlyIfMissing })
+      ));
+      if (outcome === 'updated') updated += 1;
+      else alreadyEmbedded += 1;
+    } catch (error) {
+      failures.push({ memoryId: row.id, error: toErrorMessage(error) });
+    }
   }
+  return { updated, alreadyEmbedded, failures };
 }
 
 function summarizeValidation(
@@ -298,25 +403,45 @@ export async function migratePostgresMemoryEmbeddings(
     'parallelism',
   );
 
+  const limit = options.limit === undefined
+    ? undefined
+    : normalizePositiveInt(options.limit, options.limit, 'limit');
+  const afterId = options.afterId?.trim() || undefined;
   const includeDeleted = options.includeDeleted ?? false;
+  const missingOnly = options.missingOnly ?? false;
+  const dryRun = options.dryRun ?? false;
   const continueOnError = options.continueOnError ?? true;
   const startTime = Date.now();
   const pool = createPostgresPool(normalizedDatabaseUrl, {
     applicationName: 'psfn-memory-embedding-migration',
     allowExitOnIdle: true,
+    ...(options.schema ? { schema: options.schema } : {}),
   });
 
   try {
+    await assertMemoryCorpusExists(pool);
     await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
-    const rows = await loadPostgresRowsForMigration(pool, includeDeleted);
-    const batches = chunk(rows, batchSize);
+    const coverageBefore = await inspectMemoryEmbeddingCoverage(pool);
+    if (missingOnly && !dryRun) {
+      await assertProviderMatchesStoredDimensions(pool, embeddingService.dims);
+    }
+    const loaded = await loadPostgresRowsForMigration(pool, {
+      includeDeleted,
+      missingOnly,
+      ...(afterId !== undefined ? { afterId } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+    });
+    const rows = limit !== undefined ? loaded.slice(0, limit) : loaded;
+    const nextAfterId = loaded.length > rows.length ? rows.at(-1)?.id : undefined;
+    const batches = dryRun ? [] : chunk(rows, batchSize);
 
     let processed = 0;
     let updated = 0;
+    let alreadyEmbedded = 0;
     let failed = 0;
     const failures: ReembedFailure[] = [];
 
-    if (rows.length > 0) {
+    if (batches.length > 0) {
       let nextBatch = 0;
       const workerCount = Math.min(parallelism, batches.length);
 
@@ -330,6 +455,7 @@ export async function migratePostgresMemoryEmbeddings(
             return;
           }
 
+          let written: Awaited<ReturnType<typeof writePostgresReembeddedBatch>>;
           try {
             const embeddings = await embeddingService.embedBatch(batch.map(row => row.text), {
               usageProvenance: createMaintenanceEmbeddingUsageProvenance({
@@ -356,41 +482,31 @@ export async function migratePostgresMemoryEmbeddings(
               }
             }
 
-            await withPostgresClient(pool, async (client) => {
-              await writePostgresReembeddedBatch(client, batch, embeddings);
-            });
-            processed += batch.length;
-            updated += batch.length;
-            options.onProgress?.({
-              total: rows.length,
-              processed,
-              updated,
-              failed,
-              batchIndex: batchIndex + 1,
-              batchCount: batches.length,
-            });
+            written = await writePostgresReembeddedBatch(pool, batch, embeddings, missingOnly);
           } catch (error) {
             const message = toErrorMessage(error);
-            processed += batch.length;
-            failed += batch.length;
-            for (const row of batch) {
-              failures.push({
-                memoryId: row.id,
-                error: message,
-              });
-            }
-            options.onProgress?.({
-              total: rows.length,
-              processed,
-              updated,
-              failed,
-              batchIndex: batchIndex + 1,
-              batchCount: batches.length,
-            });
-
-            if (!continueOnError) {
-              throw new Error(`Failed PostgreSQL embedding migration batch ${batchIndex + 1}: ${message}`);
-            }
+            written = {
+              updated: 0,
+              alreadyEmbedded: 0,
+              failures: batch.map(row => ({ memoryId: row.id, error: message })),
+            };
+          }
+          processed += batch.length;
+          updated += written.updated;
+          alreadyEmbedded += written.alreadyEmbedded;
+          failed += written.failures.length;
+          failures.push(...written.failures);
+          options.onProgress?.({
+            total: rows.length,
+            processed,
+            updated,
+            failed,
+            batchIndex: batchIndex + 1,
+            batchCount: batches.length,
+          });
+          const firstFailure = written.failures[0];
+          if (firstFailure && !continueOnError) {
+            throw new Error(`Failed PostgreSQL embedding migration batch ${batchIndex + 1}: ${firstFailure.error}`);
           }
         }
       };
@@ -403,14 +519,21 @@ export async function migratePostgresMemoryEmbeddings(
     }
 
     return {
+      dryRun,
+      missingOnly,
       total: rows.length,
       processed,
       updated,
+      alreadyEmbedded,
       failed,
       batchSize,
       parallelism,
       durationMs: Date.now() - startTime,
       failures,
+      coverageBefore,
+      coverageAfter: dryRun ? coverageBefore : await inspectMemoryEmbeddingCoverage(pool),
+      ...(missingOnly ? { selectedMemoryIds: rows.map(row => row.id) } : {}),
+      ...(nextAfterId !== undefined ? { nextAfterId } : {}),
     };
   } finally {
     await pool.end();

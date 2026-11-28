@@ -30,8 +30,7 @@ export type ExtractionTriggerReason =
   | 'high_salience'
   | 'backlog_lag'
   | 'operator_backfill'
-  | 'pre_compaction'
-  | 'crash_recovery';
+  | 'pre_compaction';
 
 export type ExtractionRejectionReason =
   | 'low_importance'

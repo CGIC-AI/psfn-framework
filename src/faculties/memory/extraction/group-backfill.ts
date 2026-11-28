@@ -4,6 +4,11 @@ import type { SessionEntry } from '../../../core/session/types.js';
 import { formatErrorCauseChain } from '../../../shared/utils/errors.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import {
+  COMPANION_CHANNEL_TYPE,
+  parseCompanionChannelId,
+} from '../../../shared/contracts/companion-channels.js';
+import type { SessionCounterpartyContactStore } from '../session-counterparty-resolution.js';
+import {
   type ChannelGroupMemoryConfig,
   type GroupMemorySettings,
 } from '../../../system/config/group-memory-config.js';
@@ -11,6 +16,7 @@ import type { ObservedGroupExtractionOptions } from '../extraction.js';
 import {
   buildGroupMemoryRangePlan,
   createEmptyWatermark,
+  GROUP_MEMORY_POLICY_VERSION,
   type GroupMemoryRangeChunk,
   type GroupMemoryRangeSessionReader,
   type GroupMemoryWatermarkRecord,
@@ -26,9 +32,26 @@ import {
   selectGroupMemorySalienceCandidates,
   type GroupMemorySalienceTelemetry,
 } from './group-salience.js';
+import {
+  capDirectBackfillChunkSize,
+  DIRECT_BACKFILL_WATERMARK_VERSION,
+  resolveBackfillChannelTopology,
+  resolveDirectBackfillCounterparty,
+  selectDirectBackfillEntries,
+  summarizeDirectBackfillExtraction,
+  type DirectBackfillExtractionView,
+  type DirectBackfillExtractorPort,
+} from './direct-backfill-lane.js';
 
 export type GroupMemoryBackfillMode = 'dry_run' | 'live';
 export type GroupMemoryBackfillStatus = 'planned' | 'completed' | 'skipped' | 'failed';
+/** `direct` replays a 1:1 or companion-DM transcript through direct extraction. */
+export type GroupMemoryBackfillLane = 'group' | 'direct';
+export type GroupMemoryBackfillSkipReason =
+  | 'group_memory_disabled'
+  | 'no_unprocessed_entries'
+  | 'extraction_in_flight'
+  | 'direct_counterparty_unresolved';
 
 export interface GroupMemoryBackfillInput {
   mode?: GroupMemoryBackfillMode;
@@ -48,6 +71,7 @@ export interface GroupMemoryBackfillExtractorPort {
     ObservedGroupExtractionOptions,
     'triggerReason' | 'backfill'
   >): Promise<boolean>;
+  extractDirectBackfillRange?: DirectBackfillExtractorPort['extractDirectBackfillRange'];
   getPendingExtractionPromise?(channelId: string): Promise<void> | null;
 }
 
@@ -57,7 +81,9 @@ export interface GroupMemoryBackfillRunnerOptions {
   sessionReader: GroupMemoryRangeSessionReader & GroupMemorySessionReader;
   watermarkStore: GroupMemoryWatermarkStorePort;
   memoryExtractor?: GroupMemoryBackfillExtractorPort | null;
-  contactStore?: Pick<ContactStorePort, 'getByChannelIdentity'>;
+  contactStore?: Pick<ContactStorePort, 'getByChannelIdentity'> & SessionCounterpartyContactStore;
+  /** This companion's id, so a companion-DM resolves its peer as the counterparty. */
+  localCompanionId?: string;
   companionNames?: readonly string[];
   companionAuthorIds?: readonly string[];
   nowMs?: () => number;
@@ -67,6 +93,7 @@ export interface GroupMemoryBackfillRunnerOptions {
 export interface GroupMemoryBackfillTargetView {
   channelId: string;
   channelType: ChannelType;
+  lane: GroupMemoryBackfillLane;
   mode: GroupMemoryBackfillMode;
   resume: boolean;
   startMessageId: number;
@@ -90,13 +117,19 @@ export interface GroupMemoryBackfillChunkView {
   action: 'planned' | 'processed' | 'skipped' | 'failed';
   skipReason?: string;
   error?: string;
-  salienceTelemetry: GroupMemorySalienceTelemetry;
+  /** Group lane only: the direct lane extracts every conversational entry. */
+  salienceTelemetry?: GroupMemorySalienceTelemetry;
+  /** Direct lane, live chunks: what the normal extraction pipeline did. */
+  extraction?: DirectBackfillExtractionView;
 }
 
 export interface GroupMemoryBackfillResult {
   status: GroupMemoryBackfillStatus;
+  skipReason?: GroupMemoryBackfillSkipReason;
   channelId: string;
   target: GroupMemoryBackfillTargetView;
+  /** Direct lane: the single contact the replayed facts are attributed from. */
+  counterpartyContactId?: string;
   resolvedConfig: GroupMemorySettings;
   classification: GroupMemoryClassification;
   watermarkBefore: GroupMemoryWatermarkRecord;
@@ -130,7 +163,8 @@ export class GroupMemoryBackfillRunner {
   private readonly sessionReader: GroupMemoryRangeSessionReader & GroupMemorySessionReader;
   private readonly watermarkStore: GroupMemoryWatermarkStorePort;
   private readonly memoryExtractor?: GroupMemoryBackfillExtractorPort | null;
-  private readonly contactStore?: Pick<ContactStorePort, 'getByChannelIdentity'>;
+  private readonly contactStore?: GroupMemoryBackfillRunnerOptions['contactStore'];
+  private readonly localCompanionId?: string;
   private readonly companionNames: readonly string[];
   private readonly companionAuthorIds: readonly string[];
   private readonly nowMs: () => number;
@@ -143,6 +177,7 @@ export class GroupMemoryBackfillRunner {
     this.watermarkStore = options.watermarkStore;
     this.memoryExtractor = options.memoryExtractor;
     this.contactStore = options.contactStore;
+    this.localCompanionId = options.localCompanionId;
     this.companionNames = options.companionNames ?? [];
     this.companionAuthorIds = options.companionAuthorIds ?? [];
     this.nowMs = options.nowMs ?? (() => Date.now());
@@ -157,8 +192,6 @@ export class GroupMemoryBackfillRunner {
       channelConfig: this.channelGroupMemory,
       channelId,
     });
-    const policy = resolveEffectiveBackfillPolicy(resolved.settings, input);
-    const settings = policy.settings;
     const resume = input.resume ?? true;
     const target = resolveTarget({
       channelId,
@@ -167,36 +200,48 @@ export class GroupMemoryBackfillRunner {
       sessionReader: this.sessionReader,
     });
     const targetReader = createTargetRangeReader(this.sessionReader, target);
-    const watermarkBefore = this.watermarkStore.get(channelId);
-    const effectiveWatermark = resolveEffectiveWatermark({
-      channelId,
-      watermark: watermarkBefore,
-      target,
-      resume,
-    });
     const recentEntries = await this.sessionReader.getRecent(
       channelId,
-      settings.autoDetection.recentParticipantWindowMessages,
+      resolved.settings.autoDetection.recentParticipantWindowMessages,
     );
+    const channelTopology = resolveBackfillChannelTopology(channelId, recentEntries);
     const classification = await classifyGroupMemoryChannel({
       channelId,
       channelType,
-      groupMemory: settings,
+      groupMemory: resolved.settings,
       recentEntries,
       contactStore: this.contactStore,
       companionAuthorIds: this.companionAuthorIds,
+      ...(channelTopology ? { channelTopology } : {}),
+    });
+    // A disabled group-memory setting classifies every channel as direct; that
+    // is a refusal of the group lane, not topology evidence for the direct one.
+    const lane: GroupMemoryBackfillLane = classification.mode === 'direct' && classification.reason !== 'disabled'
+      ? 'direct'
+      : 'group';
+    const settings = resolveEffectiveBackfillPolicy(resolved.settings, input, lane).settings;
+    const policyVersion = lane === 'direct' ? DIRECT_BACKFILL_WATERMARK_VERSION : GROUP_MEMORY_POLICY_VERSION;
+    const watermarkBefore = this.watermarkStore.get(channelId, policyVersion);
+    const effectiveWatermark = resolveEffectiveWatermark({
+      channelId,
+      policyVersion,
+      watermark: watermarkBefore,
+      target,
+      resume,
     });
     const plan = buildGroupMemoryRangePlan({
       channelId,
       sessionReader: targetReader,
       watermark: effectiveWatermark,
       settings,
+      policyVersion,
       ...(this.estimateEntryTokens ? { estimateEntryTokens: this.estimateEntryTokens } : {}),
     });
 
     const targetView: GroupMemoryBackfillTargetView = {
       channelId,
       channelType,
+      lane,
       mode,
       resume,
       startMessageId: target.startMessageId,
@@ -204,160 +249,202 @@ export class GroupMemoryBackfillRunner {
       ...(target.startTimestamp !== undefined ? { startTimestamp: target.startTimestamp } : {}),
       ...(target.endTimestamp !== undefined ? { endTimestamp: target.endTimestamp } : {}),
     };
-
-    if (!settings.enabled || classification.mode === 'direct' || plan.chunks.length === 0) {
-      return buildBackfillResult({
+    const resultBase = {
+      channelId,
+      target: targetView,
+      settings,
+      classification,
+      watermarkBefore,
+      headMessageId: plan.headMessageId,
+      watermarkLagMessageIds: plan.watermarkLagMessageIds,
+      hasDeferredBacklog: plan.hasDeferredBacklog,
+      deferredAfterMessageId: plan.deferredAfterMessageId,
+    };
+    const skipped = (skipReason: GroupMemoryBackfillSkipReason, counterpartyContactId?: string) => (
+      buildBackfillResult({
+        ...resultBase,
         status: 'skipped',
-        channelId,
-        target: targetView,
-        settings,
-        classification,
-        watermarkBefore,
+        skipReason,
+        ...(counterpartyContactId ? { counterpartyContactId } : {}),
         watermarkAfter: watermarkBefore,
-        headMessageId: plan.headMessageId,
-        watermarkLagMessageIds: plan.watermarkLagMessageIds,
-        hasDeferredBacklog: plan.hasDeferredBacklog,
-        deferredAfterMessageId: plan.deferredAfterMessageId,
         chunks: [],
-      });
-    }
+      })
+    );
 
+    if (!settings.enabled) return skipped('group_memory_disabled');
+    if (plan.chunks.length === 0) return skipped('no_unprocessed_entries');
     if (mode === 'live' && this.memoryExtractor?.getPendingExtractionPromise?.(channelId)) {
-      return buildBackfillResult({
-        status: 'skipped',
-        channelId,
-        target: targetView,
-        settings,
-        classification,
-        watermarkBefore,
-        watermarkAfter: watermarkBefore,
-        headMessageId: plan.headMessageId,
-        watermarkLagMessageIds: plan.watermarkLagMessageIds,
-        hasDeferredBacklog: plan.hasDeferredBacklog,
-        deferredAfterMessageId: plan.deferredAfterMessageId,
-        chunks: [],
-      });
+      return skipped('extraction_in_flight');
     }
-
-    const chunkViews: GroupMemoryBackfillChunkView[] = [];
-    let watermarkAfter = watermarkBefore;
-    let failed = false;
-    for (const chunk of plan.chunks) {
-      const salience = selectGroupMemorySalienceCandidates({
-        chunk,
-        settings,
-        companionNames: this.companionNames,
+    if (lane === 'direct') {
+      const counterpartyContactId = await resolveDirectBackfillCounterparty({
+        channelId,
+        entries: plan.chunks.flatMap(chunk => chunk.newEntries),
+        contactStore: this.contactStore,
+        ...(this.localCompanionId ? { localCompanionId: this.localCompanionId } : {}),
         companionAuthorIds: this.companionAuthorIds,
       });
-      const extractionEntries = selectExtractionEntries(chunk.entries, salience.candidateSpans);
-      const baseView = buildChunkView({
-        chunk,
-        salienceTelemetry: salience.telemetry,
-        candidateSourceMessageIds: salience.candidateSpans.flatMap(span => span.sourceMessageIds),
-        candidateSpanCount: salience.candidateSpans.length,
-        extractionEntryCount: extractionEntries.length,
-        estimatedLlmCalls: extractionEntries.length > 0 ? 1 : 0,
+      if (!counterpartyContactId) return skipped('direct_counterparty_unresolved');
+      return this.runChunks({
+        ...resultBase,
+        mode,
+        policyVersion,
+        plan,
+        counterpartyContactId,
       });
+    }
+    return this.runChunks({ ...resultBase, mode, policyVersion, plan });
+  }
+
+  private async runChunks(params: {
+    channelId: string;
+    target: GroupMemoryBackfillTargetView;
+    settings: GroupMemorySettings;
+    classification: GroupMemoryClassification;
+    watermarkBefore: GroupMemoryWatermarkRecord;
+    headMessageId: number | null;
+    watermarkLagMessageIds: number;
+    hasDeferredBacklog: boolean;
+    deferredAfterMessageId?: number;
+    mode: GroupMemoryBackfillMode;
+    policyVersion: string;
+    plan: ReturnType<typeof buildGroupMemoryRangePlan>;
+    counterpartyContactId?: string;
+  }): Promise<GroupMemoryBackfillResult> {
+    const { channelId, settings, mode, policyVersion } = params;
+    const chunkViews: GroupMemoryBackfillChunkView[] = [];
+    let watermarkAfter = params.watermarkBefore;
+    let failed = false;
+    for (const chunk of params.plan.chunks) {
+      const prepared = this.prepareChunk(chunk, settings, params.target.lane);
+      const span = {
+        channelId,
+        policyVersion,
+        startMessageId: chunk.spanStartMessageId,
+        endMessageId: chunk.spanEndMessageId,
+        entryCount: chunk.newEntryCount,
+      };
+      const emptyReason = params.target.lane === 'direct' ? 'no_conversational_entries' : 'no_salient_candidates';
 
       if (mode === 'dry_run') {
         chunkViews.push({
-          ...baseView,
-          action: extractionEntries.length > 0 ? 'planned' : 'skipped',
-          ...(extractionEntries.length === 0 ? { skipReason: 'no_salient_candidates' } : {}),
+          ...prepared.view,
+          action: prepared.entries.length > 0 ? 'planned' : 'skipped',
+          ...(prepared.entries.length === 0 ? { skipReason: emptyReason } : {}),
         });
         continue;
       }
 
-      if (extractionEntries.length === 0) {
+      if (prepared.entries.length === 0) {
         watermarkAfter = this.watermarkStore.markSkipped({
-          channelId,
-          startMessageId: chunk.spanStartMessageId,
-          endMessageId: chunk.spanEndMessageId,
-          entryCount: chunk.newEntryCount,
+          ...span,
           recordedAt: this.nowMs(),
-          reason: 'no_salient_candidates',
+          reason: emptyReason,
         });
-        chunkViews.push({
-          ...baseView,
-          action: 'skipped',
-          skipReason: 'no_salient_candidates',
-        });
+        chunkViews.push({ ...prepared.view, action: 'skipped', skipReason: emptyReason });
         continue;
       }
 
       if (!this.memoryExtractor) {
-        throw new Error('Group memory live backfill requires a memory extractor');
+        throw new Error('Memory live backfill requires a memory extractor');
       }
 
       try {
-        const accepted = await this.memoryExtractor.extractGroupBackfillRange({
-          channelId,
-          recoveredEntries: extractionEntries,
-          groupWriteCaps: settings.writeCaps,
-        });
-        if (!accepted) {
-          watermarkAfter = this.watermarkStore.markFailed({
-            channelId,
-            startMessageId: chunk.spanStartMessageId,
-            endMessageId: chunk.spanEndMessageId,
-            entryCount: chunk.newEntryCount,
-            recordedAt: this.nowMs(),
-            error: 'memory extractor rejected backfill range',
-          });
-          chunkViews.push({
-            ...baseView,
-            action: 'failed',
-            error: 'memory extractor rejected backfill range',
-          });
+        const outcome = await this.extractChunk(channelId, prepared.entries, settings, params.counterpartyContactId);
+        if (!outcome.accepted) {
+          const error = 'memory extractor rejected backfill range';
+          watermarkAfter = this.watermarkStore.markFailed({ ...span, recordedAt: this.nowMs(), error });
+          chunkViews.push({ ...prepared.view, action: 'failed', error });
           failed = true;
           break;
         }
-        watermarkAfter = this.watermarkStore.markProcessed({
-          channelId,
-          startMessageId: chunk.spanStartMessageId,
-          endMessageId: chunk.spanEndMessageId,
-          entryCount: chunk.newEntryCount,
-          recordedAt: this.nowMs(),
-        });
+        watermarkAfter = this.watermarkStore.markProcessed({ ...span, recordedAt: this.nowMs() });
         chunkViews.push({
-          ...baseView,
+          ...prepared.view,
           action: 'processed',
+          ...(outcome.extraction ? { extraction: outcome.extraction } : {}),
         });
       } catch (error) {
         // Keep the wrapped root cause (ExtractionIntegrityError.cause), d5e0p.15.
         const message = formatErrorCauseChain(error);
-        watermarkAfter = this.watermarkStore.markFailed({
-          channelId,
-          startMessageId: chunk.spanStartMessageId,
-          endMessageId: chunk.spanEndMessageId,
-          entryCount: chunk.newEntryCount,
-          recordedAt: this.nowMs(),
-          error: message,
-        });
-        chunkViews.push({
-          ...baseView,
-          action: 'failed',
-          error: message,
-        });
+        watermarkAfter = this.watermarkStore.markFailed({ ...span, recordedAt: this.nowMs(), error: message });
+        chunkViews.push({ ...prepared.view, action: 'failed', error: message });
         failed = true;
         break;
       }
     }
 
     return buildBackfillResult({
+      ...params,
       status: mode === 'dry_run' ? 'planned' : (failed ? 'failed' : 'completed'),
-      channelId,
-      target: targetView,
-      settings,
-      classification,
-      watermarkBefore,
       watermarkAfter,
-      headMessageId: plan.headMessageId,
-      watermarkLagMessageIds: plan.watermarkLagMessageIds,
-      hasDeferredBacklog: plan.hasDeferredBacklog,
-      deferredAfterMessageId: plan.deferredAfterMessageId,
       chunks: chunkViews,
     });
+  }
+
+  private prepareChunk(
+    chunk: GroupMemoryRangeChunk,
+    settings: GroupMemorySettings,
+    lane: GroupMemoryBackfillLane,
+  ): { entries: SessionEntry[]; view: Omit<GroupMemoryBackfillChunkView, 'action' | 'skipReason' | 'error'> } {
+    if (lane === 'direct') {
+      const entries = selectDirectBackfillEntries(chunk.newEntries);
+      return {
+        entries,
+        view: buildChunkView({
+          chunk,
+          candidateSourceMessageIds: entries.map(entry => entry.id),
+          candidateSpanCount: entries.length > 0 ? 1 : 0,
+          extractionEntryCount: entries.length,
+          estimatedLlmCalls: entries.length > 0 ? 1 : 0,
+        }),
+      };
+    }
+    const salience = selectGroupMemorySalienceCandidates({
+      chunk,
+      settings,
+      companionNames: this.companionNames,
+      companionAuthorIds: this.companionAuthorIds,
+    });
+    const entries = selectExtractionEntries(chunk.entries, salience.candidateSpans);
+    return {
+      entries,
+      view: buildChunkView({
+        chunk,
+        salienceTelemetry: salience.telemetry,
+        candidateSourceMessageIds: salience.candidateSpans.flatMap(span => span.sourceMessageIds),
+        candidateSpanCount: salience.candidateSpans.length,
+        extractionEntryCount: entries.length,
+        estimatedLlmCalls: entries.length > 0 ? 1 : 0,
+      }),
+    };
+  }
+
+  private async extractChunk(
+    channelId: string,
+    entries: SessionEntry[],
+    settings: GroupMemorySettings,
+    counterpartyContactId: string | undefined,
+  ): Promise<{ accepted: boolean; extraction?: DirectBackfillExtractionView }> {
+    const extractor = this.memoryExtractor!;
+    if (counterpartyContactId === undefined) {
+      return {
+        accepted: await extractor.extractGroupBackfillRange({
+          channelId,
+          recoveredEntries: entries,
+          groupWriteCaps: settings.writeCaps,
+        }),
+      };
+    }
+    if (!extractor.extractDirectBackfillRange) {
+      throw new Error('Direct memory backfill requires a direct-capable memory extractor');
+    }
+    const result = await extractor.extractDirectBackfillRange({
+      channelId,
+      recoveredEntries: entries,
+      canonicalContactId: counterpartyContactId,
+    });
+    return { accepted: true, extraction: summarizeDirectBackfillExtraction(result) };
   }
 }
 
@@ -367,6 +454,7 @@ function resolveBackfillMode(input: GroupMemoryBackfillInput): GroupMemoryBackfi
 }
 
 function resolveBackfillChannelType(channelId: string): ChannelType {
+  if (parseCompanionChannelId(channelId)?.kind === 'dm') return COMPANION_CHANNEL_TYPE;
   const inferred = inferSessionChannelType(channelId);
   if (!inferred || inferred === 'subagent') {
     throw new Error(`Cannot infer group-memory backfill channel type for ${channelId}`);
@@ -377,6 +465,7 @@ function resolveBackfillChannelType(channelId: string): ChannelType {
 function resolveEffectiveBackfillPolicy(
   settings: GroupMemorySettings,
   input: GroupMemoryBackfillInput,
+  lane: GroupMemoryBackfillLane,
 ): EffectiveBackfillPolicy {
   const maxMessagesPerRun = normalizePolicyBound({
     name: 'maxMessagesPerRun',
@@ -393,10 +482,13 @@ function resolveEffectiveBackfillPolicy(
     requested: input.maxLlmCallsPerRun,
     ceiling: settings.backfill.maxLlmCallsPerRun,
   });
-  const chunkSize = Math.min(
+  const configuredChunkSize = Math.min(
     settings.onlineExtraction.maxMessagesPerChunk,
     maxMessagesPerRun,
   );
+  const chunkSize = lane === 'direct'
+    ? capDirectBackfillChunkSize(configuredChunkSize)
+    : configuredChunkSize;
   const chunksByMessageBudget = Math.max(1, Math.floor(maxMessagesPerRun / chunkSize));
   const effectiveChunkCount = Math.max(
     1,
@@ -540,11 +632,12 @@ function readTargetEntries(
 
 function resolveEffectiveWatermark(params: {
   channelId: string;
+  policyVersion: string;
   watermark: GroupMemoryWatermarkRecord;
   target: BackfillTarget;
   resume: boolean;
 }): GroupMemoryWatermarkRecord {
-  const rangeStartWatermark = createEmptyWatermark(params.channelId);
+  const rangeStartWatermark = createEmptyWatermark(params.channelId, params.policyVersion);
   const coveredUpToMessageId = params.target.startMessageId - 1;
   return {
     ...(params.resume ? params.watermark : rangeStartWatermark),
@@ -567,7 +660,7 @@ function selectExtractionEntries(
 
 function buildChunkView(params: {
   chunk: GroupMemoryRangeChunk;
-  salienceTelemetry: GroupMemorySalienceTelemetry;
+  salienceTelemetry?: GroupMemorySalienceTelemetry;
   candidateSpanCount: number;
   candidateSourceMessageIds: number[];
   extractionEntryCount: number;
@@ -585,12 +678,14 @@ function buildChunkView(params: {
     candidateSourceMessageIds: [...new Set(params.candidateSourceMessageIds)].sort((left, right) => left - right),
     extractionEntryCount: params.extractionEntryCount,
     estimatedLlmCalls: params.estimatedLlmCalls,
-    salienceTelemetry: params.salienceTelemetry,
+    ...(params.salienceTelemetry ? { salienceTelemetry: params.salienceTelemetry } : {}),
   };
 }
 
 function buildBackfillResult(params: {
   status: GroupMemoryBackfillStatus;
+  skipReason?: GroupMemoryBackfillSkipReason;
+  counterpartyContactId?: string;
   channelId: string;
   target: GroupMemoryBackfillTargetView;
   settings: GroupMemorySettings;
@@ -605,8 +700,10 @@ function buildBackfillResult(params: {
 }): GroupMemoryBackfillResult {
   return {
     status: params.status,
+    ...(params.skipReason ? { skipReason: params.skipReason } : {}),
     channelId: params.channelId,
     target: params.target,
+    ...(params.counterpartyContactId ? { counterpartyContactId: params.counterpartyContactId } : {}),
     resolvedConfig: params.settings,
     classification: params.classification,
     watermarkBefore: params.watermarkBefore,

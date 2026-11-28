@@ -2951,77 +2951,6 @@ describe('MemoryExtractor crash recovery markers', () => {
     expect(lastEntry.coveredUpTo).toBe(2);
   });
 
-  it('queues retroactive extraction using recovered un-extracted entries', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'psfn-extraction-recovery-'));
-    tempDirs.push(dir);
-    const sessionStore = new SessionStore(dir);
-    const channelId = 'api:crash-recovery';
-
-    sessionStore.append({
-      channelId,
-      role: 'user',
-      content: 'Message 1',
-      timestamp: 1_000,
-    });
-    sessionStore.insertExtractionMarker(channelId, 1, 1_500);
-    sessionStore.append({
-      channelId,
-      role: 'user',
-      content: 'Message 2',
-      timestamp: 2_000,
-    });
-    sessionStore.append({
-      channelId,
-      role: 'assistant',
-      content: 'Message 3',
-      timestamp: 3_000,
-    });
-
-    const candidates = sessionStore.getCrashRecoveryExtractionCandidates();
-    expect(candidates).toHaveLength(1);
-    expect(candidates[0].unextractedEntries.map(entry => entry.content)).toEqual(['Message 2', 'Message 3']);
-
-    const llmClient = fromAny({
-      complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
-    });
-    const sessionManager = fromAny({
-      getRecentMessages: vi.fn().mockImplementation((id: string, limit = 10) => sessionStore.getRecent(id, limit)),
-      getMessageCount: vi.fn().mockImplementation((id: string) => sessionStore.count(id)),
-    });
-    const memoryStore = fromAny({
-      getMemoriesByChannel: vi.fn().mockReturnValue([]),
-    });
-    const embeddingService = fromAny({
-      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
-      embedBatch: vi.fn(),
-      dims: 8,
-    });
-    const eventBus = fromAny({
-      emit: vi.fn().mockResolvedValue(undefined),
-    });
-
-    const extractor = new MemoryExtractor(
-      llmClient,
-      sessionManager,
-      memoryStore,
-      embeddingService,
-      eventBus,
-      { extractionInterval: 5 },
-      null,
-      sessionStore,
-    );
-
-    await extractor.queueRetroactiveExtraction(channelId, candidates[0].unextractedEntries);
-
-    expect(llmClient.complete).toHaveBeenCalledTimes(1);
-    const prompt = (llmClient.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].systemPrompt as string;
-    expect(prompt).toContain('Message 2');
-    expect(prompt).toContain('Message 3');
-
-    const afterRecovery = sessionStore.getCrashRecoveryExtractionCandidates();
-    expect(afterRecovery).toHaveLength(0);
-  });
-
   it('prefers contact nickname in extraction naming guidance', async () => {
     const llmClient = fromAny({
       complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
@@ -3192,24 +3121,6 @@ describe('MemoryExtractor interval watermark coverage', () => {
     // The failed batch is still covered by the next interval trigger.
     await extractor.maybeExtract(channelId);
     expect(llmClient.complete).toHaveBeenCalledTimes(2);
-  });
-
-  it('advances the watermark after crash-recovery extraction covers the backlog', async () => {
-    const channelId = 'api:watermark-recovery';
-    const { extractor, entries, llmClient, eventBus } = buildWatermarkHarness(channelId);
-
-    // Crash recovery re-extracts the whole unextracted backlog.
-    await extractor.queueRetroactiveExtraction(channelId, entries);
-    expect(llmClient.complete).toHaveBeenCalledTimes(1);
-
-    const startReasons = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls
-      .filter(([name]) => name === 'memory.extraction.start')
-      .map(([, payload]) => payload?.triggerReason);
-    expect(startReasons).toEqual(['crash_recovery']);
-
-    // The recovered range is covered; the interval trigger does not re-send it.
-    await extractor.maybeExtract(channelId);
-    expect(llmClient.complete).toHaveBeenCalledTimes(1);
   });
 
   it('evaluates and advances delayed bounded snapshots without consuming live-through-J coverage', async () => {

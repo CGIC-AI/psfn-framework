@@ -958,6 +958,7 @@ export function createInProcessGardenAdminContract(
       watermarkStore: new JsonGroupMemoryWatermarkStore(join(companionDataDir, 'group-memory-watermarks.json')),
       ...(options.memoryExtractor ? { memoryExtractor: options.memoryExtractor } : {}),
       eventBus: options.eventBus,
+      ...(options.config.companionId ? { localCompanionId: options.config.companionId } : {}),
       companionNames: [resolveCompanionNameFromConfig(options.config)],
       companionAuthorIds: options.companionAuthorIds ?? [],
     }),

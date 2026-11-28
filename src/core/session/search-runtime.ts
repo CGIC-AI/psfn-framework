@@ -5,6 +5,7 @@ import { classifyChannelDisclosure, getAllowedSensitivities } from '../../system
 import type { SensitivityLevel, TrustLevel } from '../../system/trust/types.js';
 import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import { decodeStoredChannelVisibility } from '../../system/trust/types.js';
+import { COMPANION_DM_CHANNEL_PREFIX } from '../../shared/contracts/companion-channels.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
 import { isCogSecTombstoneSessionEntry } from '../cogsec/tombstones.js';
 import { SESSION_SEARCH_SUMMARY_PROMPT_KEY } from '../identity/prompt-registry.js';
@@ -84,10 +85,21 @@ export function resolveSessionSearchViewerTrustLevel(input?: TrustLevel): TrustL
   }
 }
 
+function isCompanionDmChannel(channelId: string | undefined): boolean {
+  return channelId?.startsWith(COMPANION_DM_CHANNEL_PREFIX) === true;
+}
+
 export function resolveSessionSearchHitVisibility(
   input: string | undefined,
   channelId: string,
 ): ChannelPrivacy {
+  // A companion DM (ICP) has one privacy, its channel classification (label,
+  // trust-policy override, else the default), whatever an individual entry
+  // was stamped with: list, resume and search then agree on every ICP entry
+  // (psfn-framework-pnktt).
+  if (isCompanionDmChannel(channelId)) {
+    return classifyChannelDisclosure(channelId).channelPrivacy;
+  }
   // Search hits come from persisted projections that may predate the E3.1
   // rename / E3.3 broadcast split; the shared decoder maps the retired
   // vocabulary onto ChannelPrivacy.
@@ -132,6 +144,16 @@ export function canViewerAccessSessionHit(
     getAllowedSensitivities(trustLevel, { channelPrivacy: viewerVisibility, broadcast: false }),
   );
   const hitVisibility = resolveSessionSearchHitVisibility(hit.channelVisibility, hit.channelId);
+  // Private content of another conversation (human DMs, owner consoles) never
+  // flows into a companion DM, whatever trust the sibling holds
+  // (psfn-framework-pnktt).
+  if (
+    hitVisibility === 'private'
+    && isCompanionDmChannel(viewer?.channelId)
+    && hit.channelId !== viewer?.channelId
+  ) {
+    return false;
+  }
   return allowedSensitivities.has(visibilityToSensitivity(hitVisibility));
 }
 

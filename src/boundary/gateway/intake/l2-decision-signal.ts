@@ -74,7 +74,7 @@ export interface RemoteL2Verdict {
  * `shadow`: the local screener stays the verdict; `settle` reports its
  * escalation choice for the content-free comparison record.
  */
-export type L2DecisionCall =
+type L2DecisionCall =
   | { kind: 'verdict'; verdict: Promise<RemoteL2Verdict | null> }
   | { kind: 'shadow'; settle(l2Escalated: boolean): void };
 
